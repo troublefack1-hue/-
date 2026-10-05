@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
     private static volatile MainActivity live;
     private SharedPreferences prefs;
     private TextView status, stats;
+    private LinearLayout modeRow;
     private Button big;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -120,6 +121,8 @@ public class MainActivity extends Activity {
         status = text("", 16, TEXT); status.setGravity(Gravity.CENTER); status.setPadding(0, dp(24), 0, dp(4)); root.addView(status);
         stats = text("", 13, MUTED); stats.setGravity(Gravity.CENTER); stats.setPadding(0, 0, 0, dp(28)); root.addView(stats);
 
+        modeRow = row(" ", " ", v -> { prefs.edit().putBoolean("dns_only", !PcVpnService.dnsOnly(this)).apply(); renderMode(); PcVpnService.restartIfActive(this); });
+        root.addView(modeRow); renderMode();
         root.addView(row("Приложения напрямую", "эти приложения минуют ПК", v -> pickApps()));
         root.addView(row("Плитка в шторке", "«Через ПК» среди быстрых настроек: ✎ Изменить → перетащите", null));
         root.addView(row("Отвязать от ПК", "", v -> { PcVpnService.stop(this); prefs.edit().clear().apply(); showSetup(null); }));
@@ -127,6 +130,14 @@ public class MainActivity extends Activity {
         sv.addView(root, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(sv);
         render();
+    }
+
+    private void renderMode() {
+        if (modeRow == null) return;
+        boolean dnsOnly = PcVpnService.dnsOnly(this);
+        ((TextView) modeRow.getChildAt(0)).setText(dnsOnly ? "Режим: только DNS через ПК" : "Режим: весь интернет через ПК");
+        ((TextView) modeRow.getChildAt(1)).setText(dnsOnly ? "реклама режется на ПК, данные идут напрямую — быстрее; нажмите, чтобы пускать весь трафик через ПК и его VPN"
+                : "весь трафик и VPN ПК; нажмите, чтобы оставить только DNS (быстрее, без двойного пути)");
     }
 
     private void render() {
@@ -138,7 +149,7 @@ public class MainActivity extends Activity {
         big.setText("on".equals(st) ? "ВКЛ" : "connecting".equals(st) ? "…" : "waiting".equals(st) ? "ЖДУ ПК" : "ВЫКЛ");
         status.setText("on".equals(st) ? "Подключено к ПК" : "connecting".equals(st) ? "Подключаюсь к ПК…" : "waiting".equals(st) ? "ПК недоступен — интернет напрямую, пробую снова" : "Выключено — интернет напрямую");
         String det = PcVpnService.detail;
-        stats.setText(("on".equals(st) ? "DNS-запросов " + PcVpnService.dnsQueries + " · заблокировано рекламы " + PcVpnService.blockedAds + "\n" : "") + (det == null ? "" : det));
+        stats.setText(("on".equals(st) ? "DNS-запросов " + PcVpnService.dnsQueries + " · из кэша ПК " + PcVpnService.dnsCached + " · заблокировано рекламы " + PcVpnService.blockedAds + "\n" : "") + (det == null ? "" : det));
         if (!active) ui.removeCallbacksAndMessages(null); else ui.postDelayed(this::render, 3000);
     }
 

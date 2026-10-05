@@ -36,7 +36,7 @@ public class PcVpnService extends VpnService {
     public static volatile PcVpnService instance;
     public static volatile String state = "off";      // off | connecting | on | waiting
     public static volatile String detail = "";
-    public static volatile long blockedAds = 0, dnsQueries = 0;
+    public static volatile long blockedAds = 0, dnsQueries = 0, dnsCached = 0;
 
     private ParcelFileDescriptor tun;
     private NetMux mux;
@@ -74,7 +74,7 @@ public class PcVpnService extends VpnService {
             try {
                 bringUp();
                 fails = 0;
-                setState("on", "через " + prefs.getString("hostport", "ПК"));
+                setState("on", (dnsOnly(this) ? "только DNS, " : "весь трафик, ") + "ПК " + prefs.getString("hostport", ""));
                 long lastStats = 0;
                 while (wanted && mux.isUp()) {
                     Thread.sleep(1000);
@@ -109,9 +109,12 @@ public class PcVpnService extends VpnService {
         socks = new Socks5Server(m);
         socks.start();
 
+        boolean dnsOnly = dnsOnly(this);
         Builder b = new Builder();
-        b.setSession("Интернет через ПК").setMtu(8500)
-                .addAddress(TUN_ADDR, 24).addRoute("0.0.0.0", 0).addDnsServer(TUN_DNS);
+        b.setSession(dnsOnly ? "DNS через ПК" : "Интернет через ПК").setMtu(8500).addAddress(TUN_ADDR, 24).addDnsServer(TUN_DNS);
+        // «только DNS»: the interface carries nothing but the resolver's address — ads are cut on the PC,
+        // the data itself goes straight out, no double hop
+        if (dnsOnly) b.addRoute(TUN_DNS, 32); else b.addRoute("0.0.0.0", 0);
         // our own link to the PC must not loop back into the tunnel; «Мой ПК» talks to the PC directly too
         for (String pkg : excludedApps(this)) {
             try { b.addDisallowedApplication(pkg); } catch (Exception ignored) {}
@@ -142,6 +145,7 @@ public class PcVpnService extends VpnService {
             try {
                 blockedAds = Long.parseLong(ru.pcremote.Pairing.jsonNumber(json, "dns_blocked"));
                 dnsQueries = Long.parseLong(ru.pcremote.Pairing.jsonNumber(json, "dns_queries"));
+                dnsCached = Long.parseLong(ru.pcremote.Pairing.jsonNumber(json, "dns_cached"));
             } catch (Exception ignored) {}
             NetTile.refresh(this);
         }
@@ -174,6 +178,15 @@ public class PcVpnService extends VpnService {
         if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i); else ctx.startService(i);
     }
     public static void stop(Context ctx) { ctx.startService(new Intent(ctx, PcVpnService.class).setAction(ACTION_STOP)); }
+
+    public static boolean dnsOnly(Context ctx) { return ctx.getSharedPreferences("pcnet", Context.MODE_PRIVATE).getBoolean("dns_only", false); }
+
+    /** Apply a changed setting to a running tunnel: rebuild the interface. */
+    public static void restartIfActive(Context ctx) {
+        if (!isActive()) return;
+        stop(ctx);
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> start(ctx), 800);
+    }
 
     public static Set<String> excludedApps(Context ctx) {
         Set<String> s = new HashSet<>(ctx.getSharedPreferences("pcnet", Context.MODE_PRIVATE).getStringSet("direct", new HashSet<>()));

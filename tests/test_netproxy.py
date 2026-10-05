@@ -22,10 +22,12 @@ class Echo(asyncio.DatagramProtocol):
     def connection_made(self, t): self.t = t
     def datagram_received(self, d, a): self.t.sendto(b"echo:" + d, a)
 
+UPSTREAM_HITS = [0]
 class FakeDns(asyncio.DatagramProtocol):
     def connection_made(self, t): self.t = t
     def datagram_received(self, d, a):
-        q = netproxy.dns_qname(d); self.t.sendto(netproxy.dns_answer(d, q[2], q[1], "93.184.216.34"), a)
+        UPSTREAM_HITS[0] += 1
+        q = netproxy.dns_qname(d); self.t.sendto(netproxy.dns_answer(d, q[2], q[1], "93.184.216.34", ttl=45), a)
 
 async def ws_net(session, token):
     ws = await session.ws_connect(U + "/ws/net")
@@ -53,7 +55,7 @@ async def main():
     await loop.create_datagram_endpoint(FakeDns, local_addr=("127.0.0.1", 8794))
     cfg = {"secret": T, "guest_secret": G, "host": "127.0.0.1", "port": PORT, "ntfy_wake_url": "", "tls_host": "0.0.0.0", "tls_port": 0,
            "tls_cert": "", "tls_key": "", "ca_cert": "", "share_dirs": [], "upload_dir": str(tmp / "up"),
-           "net_dir": str(tmp / "net"), "net_block_lists": ["http://127.0.0.1:1/none"], "dns_upstream": ["127.0.0.1:8794"],
+           "net_dir": str(tmp / "net"), "net_block_lists": ["http://127.0.0.1:1/none"], "dns_upstream": ["127.0.0.1:8794", "127.0.0.1:1"],
            "net_hosts": {"nas.home": "192.168.1.50"}}
     app = relay.make_app(cfg); runner = web.AppRunner(app, access_log=None); await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", PORT).start()
@@ -109,9 +111,19 @@ async def main():
         a = await dns("nas.home"); report("DNS custom host -> 192.168.1.50", a[-4:] == bytes([192, 168, 1, 50]), a.hex())
         a = await dns("example.com"); report("DNS upstream answer", a[-4:] == bytes([93, 184, 216, 34]), a.hex())
         a = await dns("ads.example.com", 28); report("DNS blocked AAAA -> ::", a[-16:] == bytes(16), a.hex())
+        # cache: the same name again is answered without the upstream, with the new query id
+        hits = UPSTREAM_HITS[0]
+        pkt = dns_query("example.com", 1, 0x7777); d = b"10.8.0.1"
+        await ws.send_bytes(bytes([UDP]) + struct.pack("!IHB", 200, 53, len(d)) + d + pkt)
+        f = await recv_bin(ws); a = f[8 + len(d):]
+        report("DNS cache hit (no upstream, id rewritten, TTL from the answer)", UPSTREAM_HITS[0] == hits and a[:2] == b"\x77\x77" and a[-4:] == bytes([93, 184, 216, 34])
+               and 40 <= (hub.netproxy.dns.cache[("example.com", 1)][0] - __import__("time").monotonic()) <= 45, f"hits {hits}->{UPSTREAM_HITS[0]} {a[:2].hex()}")
+        report("TTL parser", netproxy.dns_min_ttl(a) == 45 and netproxy.dns_min_ttl(dns_query("x.y")) is None, str(netproxy.dns_min_ttl(a)))
+        lat = hub.netproxy.dns.latency
+        report("race: dead upstream measured as slow, live one fast", lat.get("127.0.0.1:8794", 9999) < 500 and hub.netproxy.dns.wins.get("127.0.0.1:8794", 0) >= 1, str(lat))
         # stats
         await ws.send_str(json.dumps({"t": "stats"})); m = await ws.receive(); st = json.loads(m.data)
-        report("stats", st.get("dns_queries") == 4 and st.get("dns_blocked") == 2 and st.get("sessions") == 1, m.data[:120])
+        report("stats", st.get("dns_queries") == 5 and st.get("dns_blocked") == 2 and st.get("dns_cached") == 1 and st.get("sessions") == 1 and st.get("dns_upstreams"), m.data[:160])
         hs = await s.get(U + "/api/status", headers={"Authorization": "Bearer " + T}); j = await hs.json()
         report("/api/status carries net stats", j.get("net", {}).get("dns_blocked") == 2, json.dumps(j.get("net"))[:100])
         # disabled on the PC -> refused

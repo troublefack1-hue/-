@@ -40,7 +40,7 @@ public class NetTile extends TileService {
         t.setState(active ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
         t.setIcon(Icon.createWithResource(this, R.drawable.ic_tile));
         t.setLabel("Через ПК");
-        if (Build.VERSION.SDK_INT >= 29) t.setSubtitle(PcVpnService.isOn() ? "подключено" : "waiting".equals(PcVpnService.state) ? "ПК недоступен" : "connecting".equals(PcVpnService.state) ? "подключаюсь" : "выкл");
+        if (Build.VERSION.SDK_INT >= 29) t.setSubtitle(PcVpnService.isOn() ? (PcVpnService.dnsOnly(this) ? "только DNS" : "весь трафик") : "waiting".equals(PcVpnService.state) ? "ПК недоступен" : "connecting".equals(PcVpnService.state) ? "подключаюсь" : "выкл");
         t.updateTile();
     }
 }

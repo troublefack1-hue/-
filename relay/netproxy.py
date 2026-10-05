@@ -141,17 +141,55 @@ def dns_answer(pkt: bytes, qend: int, qtype: int, ip: str | None, ttl: int = 60)
     return header + body
 
 
+def dns_min_ttl(pkt: bytes) -> int | None:
+    """Smallest TTL over every resource record in a reply; None if it has no records (negative answer)."""
+    try:
+        qd, an, ns, ar = struct.unpack("!HHHH", pkt[4:12])
+        i = 12
+
+        def skip_name(i):
+            while True:
+                n = pkt[i]
+                if n == 0:
+                    return i + 1
+                if n & 0xC0 == 0xC0:
+                    return i + 2
+                i += 1 + n
+        for _ in range(qd):
+            i = skip_name(i) + 4
+        ttl = None
+        for _ in range(an + ns + ar):
+            i = skip_name(i)
+            _t, _c, rttl, rdlen = struct.unpack("!HHIH", pkt[i:i + 10])
+            i += 10 + rdlen
+            ttl = rttl if ttl is None else min(ttl, rttl)
+        return ttl
+    except (IndexError, struct.error):
+        return None
+
+
 class Dns:
+    """Blocked → answered here. Known → from the cache (TTL honoured). Else all upstreams are asked at
+    once and the first reply wins; their latencies are measured so the stats show who is fast."""
+
+    CACHE_MAX = 5000
+    TTL_MIN, TTL_MAX, TTL_NEG = 30, 3600, 60
+
     def __init__(self, upstream: list, blocklist: BlockList):
         self.upstream = upstream or ["1.1.1.1", "8.8.8.8"]
         self.block = blocklist
         self.queries = 0
         self.blocked = 0
+        self.cached = 0
         self.journal: list = []     # last 200 (ts, name, blocked)
+        self.cache: dict = {}       # (name, qtype) -> (expires, reply without the id)
+        self.latency: dict = {}     # upstream -> smoothed ms
+        self.wins: dict = {}        # upstream -> how often it answered first
 
     async def resolve(self, pkt: bytes) -> bytes | None:
         q = dns_qname(pkt)
         self.queries += 1
+        key = None
         if q:
             name, qtype, qend = q
             hit = self.block.blocked(name)
@@ -163,20 +201,68 @@ class Dns:
             custom = self.block.custom.get(name.lower())
             if custom:
                 return dns_answer(pkt, qend, qtype, custom if qtype == 1 else None)
+            key = (name.lower(), qtype)
+            c = self.cache.get(key)
+            if c and c[0] > time.monotonic():
+                self.cached += 1
+                return pkt[:2] + c[1]
+        reply = await self.race(pkt)
+        if reply is not None and key is not None and len(reply) >= 12 and (reply[3] & 0x0F) in (0, 3):   # NOERROR / NXDOMAIN
+            ttl = dns_min_ttl(reply)
+            ttl = self.TTL_NEG if ttl is None else max(self.TTL_MIN, min(self.TTL_MAX, ttl))
+            if len(self.cache) >= self.CACHE_MAX:
+                now = time.monotonic()
+                for k in [k for k, v in self.cache.items() if v[0] <= now][:1000] or list(self.cache)[:500]:
+                    self.cache.pop(k, None)
+            self.cache[key] = (time.monotonic() + ttl, reply[2:])
+        return reply
+
+    async def race(self, pkt: bytes) -> bytes | None:
+        """Ask every upstream at once, take the first answer, remember who was fast."""
         loop = asyncio.get_running_loop()
+        tasks = {}
         for server in self.upstream:
-            host, _, port = server.rpartition(":") if ":" in server and server.count(":") == 1 else (server, "", "")
-            try:
-                fut = loop.create_future()
-                tr, _ = await loop.create_datagram_endpoint(lambda: _OneShot(fut), remote_addr=(host, int(port or 53)))
-                try:
-                    tr.sendto(pkt)
-                    return await asyncio.wait_for(fut, 3.0)
-                finally:
-                    tr.close()
-            except (asyncio.TimeoutError, OSError) as e:
-                log.debug("dns %s: %s", server, e)
+            tasks[asyncio.ensure_future(self._ask(loop, server, pkt))] = server
+        if not tasks:
+            return None
+        pending = set(tasks)
+        try:
+            while pending:
+                done, pending = await asyncio.wait(pending, timeout=3.0, return_when=asyncio.FIRST_COMPLETED)
+                if not done:
+                    break
+                for t in done:
+                    r = t.result()
+                    if r is not None:
+                        self.wins[tasks[t]] = self.wins.get(tasks[t], 0) + 1
+                        return r
+        finally:
+            for t in pending:
+                t.cancel()
         return None
+
+    async def _ask(self, loop, server: str, pkt: bytes) -> bytes | None:
+        host, _, port = server.rpartition(":") if ":" in server and server.count(":") == 1 else (server, "", "")
+        t0 = time.monotonic()
+        try:
+            fut = loop.create_future()
+            tr, _ = await loop.create_datagram_endpoint(lambda: _OneShot(fut), remote_addr=(host, int(port or 53)))
+            try:
+                tr.sendto(pkt)
+                r = await asyncio.wait_for(fut, 3.0)
+            finally:
+                tr.close()
+        except (asyncio.TimeoutError, OSError) as e:
+            log.debug("dns %s: %s", server, e)
+            self.latency[server] = min(3000.0, self.latency.get(server, 3000.0) * 0.7 + 3000.0 * 0.3)
+            return None
+        ms = (time.monotonic() - t0) * 1000
+        self.latency[server] = ms if server not in self.latency else self.latency[server] * 0.7 + ms * 0.3
+        return r
+
+    def stats(self) -> dict:
+        return {"dns_queries": self.queries, "dns_blocked": self.blocked, "dns_cached": self.cached, "dns_cache_size": len(self.cache),
+                "dns_upstreams": [{"server": u, "ms": round(self.latency[u]) if u in self.latency else None, "wins": self.wins.get(u, 0)} for u in self.upstream]}
 
 
 class _OneShot(asyncio.DatagramProtocol):
@@ -370,8 +456,7 @@ class NetProxy:
     def stats(self) -> dict:
         return {"enabled": self.enabled, "sessions": len(self.sessions), "streams": sum(len(s.streams) for s in self.sessions),
                 "tcp_bytes": sum(s.tcp_bytes for s in self.sessions), "udp_bytes": sum(s.udp_bytes for s in self.sessions),
-                "dns_queries": self.dns.queries, "dns_blocked": self.dns.blocked, "block_names": len(self.block.names),
-                "block_ads": self.block.enabled}
+                **self.dns.stats(), "block_names": len(self.block.names), "block_ads": self.block.enabled}
 
     async def maintenance(self):
         """Weekly block-list refresh and idle UDP sockets."""
