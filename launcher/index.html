@@ -88,7 +88,7 @@
       if (!url) { setState("off", "ПК не в сети", "адрес ещё не опубликован"); return; }
       try {
         const ctl = new AbortController(); setTimeout(() => ctl.abort(), 6000);
-        const r = await fetch(`${url}/api/status?token=${encodeURIComponent(c.secret)}`, { signal: ctl.signal, cache: "no-store" });
+        const r = await fetch(`${url}/api/status`, { signal: ctl.signal, cache: "no-store", headers: { Authorization: "Bearer " + c.secret } });
         if (r.status === 403) { setState("off", "Неверный секрет", ""); return; }
         const s = await r.json();
         if (s.pc_online) { setState("on", "ПК в сети", ""); $("open").hidden = false; $("wakeBtn").classList.remove("busy"); }

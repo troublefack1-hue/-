@@ -2,22 +2,32 @@
 """
 pc-remote relay.
 
-Runs on the VPS. Connects the PC agent (outgoing connection from home,
-so a grey IP is fine) with the phone (a browser page).
+Connects the PC agent (an outgoing connection from home, so a grey IP is
+fine) with the phone. Runs on a VPS, or on the PC itself (direct/local modes,
+and inside the PC Remote app).
 
   /            -> phone web client (static files from ../web)
-  /ws/pc       -> agent connects here (binary frames = JPEG, text = JSON)
-  /ws/phone    -> phone connects here
-  /api/wake    -> POST: publish "wake" to the ntfy channel (optional)
+  /ws/pc       -> agent; first text message must be {"t":"auth","token":...}
+  /ws/phone    -> phone; same first-message auth
+  /api/status  -> GET, Authorization: Bearer <secret>
+  /api/wake    -> POST, same header: publish "wake" to the ntfy channel
+  /api/pair    -> GET ?code=NNNNNN: one-time exchange of the pairing code
+                  for the secret (code is set by the PC app, valid 5 min)
+  /ca.crt      -> the relay's own CA certificate (direct mode)
 
-Auth: a single shared secret (config.json -> "secret"). Both the agent and
-the phone send it as the "token" query parameter. Compared in constant time.
+Binary frames from the agent: first byte is the type, 0x01 = JPEG video
+frame, 0x02 = audio chunk. Text frames are JSON events, forwarded as-is.
+
+The secret never appears in a URL: it travels in a header or inside the
+WebSocket, so it cannot leak through browser history or access logs.
 """
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import os
+import secrets
 import ssl
 import sys
 import time
@@ -28,6 +38,16 @@ from aiohttp import ClientSession, WSMsgType, web
 HERE = Path(__file__).resolve().parent
 WEB_DIR = HERE.parent / "web"
 CONFIG_PATH = Path(os.environ.get("PC_REMOTE_CONFIG", HERE / "config.json"))
+
+FRAME_VIDEO, FRAME_AUDIO = 0x01, 0x02
+MAX_PHONES = 4                      # simultaneous viewers
+MAX_FRAME = 4 * 1024 * 1024         # bytes per binary frame from the agent
+MAX_EVENT = 64 * 1024               # bytes per text event from a phone
+AUTH_TIMEOUT = 5                    # seconds to send the auth message
+LOCKOUT_ATTEMPTS, LOCKOUT_WINDOW = 10, 600
+CORS = {"Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Authorization",
+        "Access-Control-Allow-Methods": "GET, POST"}
 
 log = logging.getLogger("relay")
 
@@ -41,7 +61,6 @@ def load_config() -> dict:
     cfg.setdefault("host", "127.0.0.1")
     cfg.setdefault("port", 8787)
     cfg.setdefault("ntfy_wake_url", "")
-    # optional second listener with our own certificate (direct mode)
     cfg.setdefault("tls_host", "0.0.0.0")
     cfg.setdefault("tls_port", 0)
     cfg.setdefault("tls_cert", "")
@@ -50,8 +69,49 @@ def load_config() -> dict:
     return cfg
 
 
+def client_ip(request: web.Request) -> str:
+    """Real client address. X-Forwarded-For is honoured only when the direct
+    peer is a loopback proxy (Caddy on the VPS), never from the internet."""
+    peer = request.remote or "?"
+    try:
+        if ipaddress.ip_address(peer).is_loopback:
+            fwd = request.headers.get("X-Forwarded-For", "")
+            if fwd:
+                return fwd.split(",")[0].strip()
+    except ValueError:
+        pass
+    return peer
+
+
+class Lockout:
+    """Per-IP counter of failed auth attempts with a bounded memory footprint."""
+
+    def __init__(self):
+        self.failed: dict[str, list[float]] = {}
+
+    def _prune(self, now: float):
+        for ip in [ip for ip, ts in self.failed.items() if not ts or now - ts[-1] > LOCKOUT_WINDOW]:
+            del self.failed[ip]
+        if len(self.failed) > 10000:  # someone is spraying from many addresses
+            for ip in list(self.failed)[: len(self.failed) - 5000]:
+                del self.failed[ip]
+
+    def blocked(self, ip: str) -> bool:
+        now = time.time()
+        self._prune(now)
+        ts = [t for t in self.failed.get(ip, []) if now - t < LOCKOUT_WINDOW]
+        self.failed[ip] = ts
+        return len(ts) >= LOCKOUT_ATTEMPTS
+
+    def fail(self, ip: str):
+        self.failed.setdefault(ip, []).append(time.time())
+
+    def ok(self, ip: str):
+        self.failed.pop(ip, None)
+
+
 class Hub:
-    """Holds the one PC socket and any number of phone sockets."""
+    """Holds the one PC socket and the phone sockets."""
 
     def __init__(self, cfg: dict):
         self.cfg = cfg
@@ -59,31 +119,63 @@ class Hub:
         self.pc_since: float = 0
         self.phones: set[web.WebSocketResponse] = set()
         self.last_frame: bytes | None = None
-        self.failed_auth: dict[str, list[float]] = {}
+        self.lockout = Lockout()
         # pairing: the PC app sets a 6-digit code that is valid for 5 minutes;
         # the phone app exchanges it once for the secret
         self.pair_code: str | None = None
         self.pair_until: float = 0
         self.on_paired = None  # callback(remote_ip) for the PC app's UI
 
+    # --- auth -----------------------------------------------------------
+    def token_ok(self, token: str) -> bool:
+        return hmac.compare_digest(token.encode(), self.cfg["secret"].encode())
+
+    def check_header(self, request: web.Request) -> bool:
+        ip = client_ip(request)
+        if self.lockout.blocked(ip):
+            return False
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:] if auth.startswith("Bearer ") else ""
+        if self.token_ok(token):
+            self.lockout.ok(ip)
+            return True
+        self.lockout.fail(ip)
+        log.warning("bad token from %s", ip)
+        return False
+
+    async def ws_auth(self, ws: web.WebSocketResponse, ip: str) -> bool:
+        """First message must be {"t":"auth","token":...} within AUTH_TIMEOUT."""
+        if self.lockout.blocked(ip):
+            await ws.close(code=4003, message=b"locked")
+            return False
+        try:
+            msg = await asyncio.wait_for(ws.receive(), AUTH_TIMEOUT)
+            ev = json.loads(msg.data) if msg.type == WSMsgType.TEXT else {}
+            if ev.get("t") == "auth" and self.token_ok(str(ev.get("token", ""))):
+                self.lockout.ok(ip)
+                return True
+        except (asyncio.TimeoutError, ValueError, TypeError, AttributeError):
+            pass
+        self.lockout.fail(ip)
+        log.warning("bad ws auth from %s", ip)
+        await ws.close(code=4003, message=b"auth")
+        return False
+
+    # --- pairing ----------------------------------------------------------
     def start_pairing(self) -> str:
-        import secrets
         self.pair_code = f"{secrets.randbelow(10**6):06d}"
         self.pair_until = time.time() + 300
         return self.pair_code
 
     async def pair_handler(self, request: web.Request):
-        ip = request.remote or "?"
-        now = time.time()
-        attempts = [t for t in self.failed_auth.get(ip, []) if now - t < 600]
-        if len(attempts) >= 10:
+        ip = client_ip(request)
+        if self.lockout.blocked(ip):
             raise web.HTTPForbidden()
         code = request.query.get("code", "")
-        ok = (self.pair_code is not None and now < self.pair_until
+        ok = (self.pair_code is not None and time.time() < self.pair_until
               and hmac.compare_digest(code, self.pair_code))
         if not ok:
-            attempts.append(now)
-            self.failed_auth[ip] = attempts
+            self.lockout.fail(ip)
             log.warning("bad pairing code from %s", ip)
             raise web.HTTPForbidden()
         self.pair_code = None  # single use
@@ -92,30 +184,10 @@ class Hub:
             self.on_paired(ip)
         return web.json_response({"secret": self.cfg["secret"]})
 
-    # --- auth -----------------------------------------------------------
-    def check_token(self, request: web.Request) -> bool:
-        ip = request.remote or "?"
-        now = time.time()
-        attempts = [t for t in self.failed_auth.get(ip, []) if now - t < 600]
-        if len(attempts) >= 10:
-            self.failed_auth[ip] = attempts
-            return False
-        token = request.query.get("token", "")
-        ok = hmac.compare_digest(token.encode(), self.cfg["secret"].encode())
-        if not ok:
-            attempts.append(now)
-            self.failed_auth[ip] = attempts
-            log.warning("bad token from %s", ip)
-        return ok
-
     # --- status broadcast ----------------------------------------------
     def status(self) -> dict:
-        return {
-            "t": "status",
-            "pc_online": self.pc is not None,
-            "pc_since": self.pc_since,
-            "phones": len(self.phones),
-        }
+        return {"t": "status", "pc_online": self.pc is not None,
+                "pc_since": self.pc_since, "phones": len(self.phones)}
 
     async def broadcast_phones(self, data, binary=False):
         dead = []
@@ -125,7 +197,7 @@ class Hub:
                     await ws.send_bytes(data)
                 else:
                     await ws.send_str(data)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 dead.append(ws)
         for ws in dead:
             self.phones.discard(ws)
@@ -134,27 +206,31 @@ class Hub:
         if self.pc is not None:
             try:
                 await self.pc.send_str(text)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
+
+    async def tell_pc_viewers(self):
+        await self.send_pc(json.dumps({"t": "viewers", "n": len(self.phones)}))
 
     # --- /ws/pc -----------------------------------------------------------
     async def pc_handler(self, request: web.Request):
-        if not self.check_token(request):
-            raise web.HTTPForbidden()
-        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=16 * 1024 * 1024)
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_FRAME)
         await ws.prepare(request)
+        ip = client_ip(request)
+        if not await self.ws_auth(ws, ip):
+            return ws
         old, self.pc = self.pc, ws
         if old is not None:
             await old.close(code=4000, message=b"replaced")
         self.pc_since = time.time()
-        log.info("pc connected from %s", request.remote)
+        log.info("pc connected from %s", ip)
         await self.broadcast_phones(json.dumps(self.status()))
-        # tell the agent whether anyone is watching right now
-        await ws.send_str(json.dumps({"t": "viewers", "n": len(self.phones)}))
+        await self.tell_pc_viewers()
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.BINARY:
-                    self.last_frame = msg.data
+                    if msg.data and msg.data[0] == FRAME_VIDEO:
+                        self.last_frame = msg.data
                     await self.broadcast_phones(msg.data, binary=True)
                 elif msg.type == WSMsgType.TEXT:
                     await self.broadcast_phones(msg.data)
@@ -170,36 +246,43 @@ class Hub:
 
     # --- /ws/phone ------------------------------------------------------
     async def phone_handler(self, request: web.Request):
-        if not self.check_token(request):
-            raise web.HTTPForbidden()
-        ws = web.WebSocketResponse(heartbeat=20)
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_EVENT)
         await ws.prepare(request)
+        ip = client_ip(request)
+        if not await self.ws_auth(ws, ip):
+            return ws
+        if len(self.phones) >= MAX_PHONES:
+            await ws.close(code=4004, message=b"too many viewers")
+            return ws
         self.phones.add(ws)
-        log.info("phone connected from %s (%d)", request.remote, len(self.phones))
+        log.info("phone connected from %s (%d)", ip, len(self.phones))
         await ws.send_str(json.dumps(self.status()))
-        await self.send_pc(json.dumps({"t": "viewers", "n": len(self.phones)}))
+        await self.tell_pc_viewers()
         if self.last_frame:
             await ws.send_bytes(self.last_frame)
         try:
             async for msg in ws:
-                if msg.type == WSMsgType.TEXT:
-                    # everything from the phone goes straight to the agent
-                    await self.send_pc(msg.data)
-                elif msg.type == WSMsgType.ERROR:
-                    break
+                if msg.type != WSMsgType.TEXT:
+                    if msg.type == WSMsgType.ERROR:
+                        break
+                    continue
+                if msg.data.startswith('{"t":"ping"') or msg.data.startswith('{"t": "ping"'):
+                    await ws.send_str(json.dumps({"t": "pong", "ts": time.time(), "pc_online": self.pc is not None}))
+                    continue
+                await self.send_pc(msg.data)  # everything else goes to the agent
         finally:
             self.phones.discard(ws)
-            await self.send_pc(json.dumps({"t": "viewers", "n": len(self.phones)}))
+            await self.tell_pc_viewers()
             log.info("phone disconnected (%d left)", len(self.phones))
         return ws
 
-    # --- /api/wake ------------------------------------------------------
+    # --- HTTP API ----------------------------------------------------------
     async def wake_handler(self, request: web.Request):
-        if not self.check_token(request):
-            raise web.HTTPForbidden()
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
         url = self.cfg.get("ntfy_wake_url")
         if not url:
-            return web.json_response({"ok": False, "error": "ntfy_wake_url not set"})
+            return web.json_response({"ok": False, "error": "ntfy_wake_url not set"}, headers=CORS)
         try:
             async with ClientSession() as s:
                 async with s.post(url, data=b"wake", timeout=15) as r:
@@ -209,13 +292,12 @@ class Hub:
         return web.json_response({"ok": ok}, headers=CORS)
 
     async def status_handler(self, request: web.Request):
-        # CORS: the launcher page lives on another origin (local mode)
-        if not self.check_token(request):
+        if not self.check_header(request):
             raise web.HTTPForbidden(headers=CORS)
         return web.json_response(self.status(), headers=CORS)
 
-
-CORS = {"Access-Control-Allow-Origin": "*"}
+    async def options_handler(self, _request):
+        return web.Response(headers=CORS)
 
 
 async def index(_request):
@@ -231,20 +313,21 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_post("/api/wake", hub.wake_handler)
     app.router.add_get("/api/status", hub.status_handler)
     app.router.add_get("/api/pair", hub.pair_handler)
+    app.router.add_route("OPTIONS", "/api/{tail:.*}", hub.options_handler)
     app.router.add_static("/static", WEB_DIR)
-    app["hub"] = hub
     if cfg["ca_cert"]:
-        # the phone downloads and installs this once, then trusts the relay
+        # direct mode: the phone's browser downloads and installs this once
         async def ca(_request):
             return web.FileResponse(cfg["ca_cert"], headers={
                 "Content-Type": "application/x-x509-ca-cert",
                 "Content-Disposition": 'attachment; filename="pc-remote-ca.crt"'})
         app.router.add_get("/ca.crt", ca)
+    app["hub"] = hub
     return app
 
 
 async def serve(cfg: dict, app: web.Application | None = None):
-    runner = web.AppRunner(app or make_app(cfg), access_log=None)  # URLs carry the token: no access log
+    runner = web.AppRunner(app or make_app(cfg), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, cfg["host"], cfg["port"]).start()
     log.info("listening on http://%s:%s", cfg["host"], cfg["port"])

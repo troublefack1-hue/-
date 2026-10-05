@@ -3,11 +3,17 @@
 pc-remote agent (Windows).
 
 Runs on the PC in the user's session. Connects OUT to the relay, streams
-the screen as JPEG frames while someone is watching, applies mouse/keyboard
-events coming from the phone and executes commands (reboot, shutdown, lock).
+the screen as JPEG frames (and optionally the PC's sound) while someone is
+watching, applies mouse/keyboard events coming from the phone and executes
+commands (reboot, shutdown, lock, sleep).
+
+Binary frames: first byte is the type.
+  0x01 + JPEG                          video frame
+  0x02 + rate(uint16 LE) + PCM16 mono  audio chunk
 
 Config: config.json next to this file (see config.example.json).
 """
+import array
 import asyncio
 import ctypes
 import hashlib
@@ -27,7 +33,16 @@ from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.json"
+FRAME_VIDEO, FRAME_AUDIO = b"\x01", b"\x02"
 log = logging.getLogger("agent")
+
+# Quality profiles the phone can switch between. "idle" = app in background.
+PROFILES = {
+    "eco":    {"fps": 2,  "max_width": 640,  "quality": 30},
+    "normal": {"fps": 12, "max_width": 1280, "quality": 55},
+    "hq":     {"fps": 20, "max_width": 1920, "quality": 75},
+    "idle":   {"fps": 0,  "max_width": 640,  "quality": 30},
+}
 
 # ---------------------------------------------------------------- config ---
 
@@ -106,6 +121,8 @@ VK = {
     "F1": 0x70, "F2": 0x71, "F3": 0x72, "F4": 0x73, "F5": 0x74, "F6": 0x75,
     "F7": 0x76, "F8": 0x77, "F9": 0x78, "F10": 0x79, "F11": 0x7A, "F12": 0x7B,
     "PrintScreen": 0x2C, "Insert": 0x2D,
+    "VolumeMute": 0xAD, "VolumeDown": 0xAE, "VolumeUp": 0xAF,
+    "MediaNext": 0xB0, "MediaPrev": 0xB1, "MediaStop": 0xB2, "MediaPlayPause": 0xB3,
 }
 EXTENDED = {"Delete", "Home", "End", "PageUp", "PageDown", "ArrowLeft", "ArrowUp",
             "ArrowRight", "ArrowDown", "Insert", "Meta", "PrintScreen"}
@@ -115,7 +132,6 @@ class Input:
     """Translates phone events into SendInput calls."""
 
     def __init__(self, monitor: dict):
-        # the monitor we stream; phone coords are 0..1 within it
         self.mon = monitor
         self.vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
         self.vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
@@ -123,6 +139,7 @@ class Input:
         self.vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
 
     def move(self, fx: float, fy: float):
+        fx, fy = min(1.0, max(0.0, fx)), min(1.0, max(0.0, fy))
         px = self.mon["left"] + fx * self.mon["width"]
         py = self.mon["top"] + fy * self.mon["height"]
         ax = int((px - self.vx) * 65535 / max(self.vw - 1, 1))
@@ -138,6 +155,7 @@ class Input:
         _send(_mouse(flags[0] if down else flags[1]))
 
     def wheel(self, dy: int, dx: int = 0):
+        dy, dx = max(-1200, min(1200, dy)), max(-1200, min(1200, dx))
         if dy:
             _send(_mouse(MOUSEEVENTF_WHEEL, data=ctypes.c_uint32(dy & 0xFFFFFFFF).value))
         if dx:
@@ -154,11 +172,12 @@ class Input:
 
     def text(self, s: str):
         # type arbitrary unicode, independent of keyboard layout
-        for code in memoryview(s.encode("utf-16-le")).cast("H"):
+        for code in memoryview(s[:2000].encode("utf-16-le")).cast("H"):
             _send(_key(scan=code, flags=KEYEVENTF_UNICODE),
                   _key(scan=code, flags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))
 
     def combo(self, keys: list[str]):
+        keys = keys[:6]
         for k in keys:
             self.key(k, True)
         for k in reversed(keys):
@@ -191,9 +210,21 @@ class Screen:
         self.cfg = cfg
         self.sct = mss.mss()
         self.mon = self.sct.monitors[min(cfg["monitor"], len(self.sct.monitors) - 1)]
-        self.quality = cfg["quality"]
-        self.set_width(cfg["max_width"])
+        self.profile = dict(PROFILES["normal"], fps=cfg["fps"], max_width=cfg["max_width"], quality=cfg["quality"])
+        self.quality = self.profile["quality"]
+        self.set_width(self.profile["max_width"])
         self._last_hash = b""
+
+    def set_profile(self, name: str):
+        p = PROFILES.get(name)
+        if not p:
+            return
+        if name == "normal":
+            p = dict(p, fps=self.cfg["fps"], max_width=self.cfg["max_width"], quality=self.cfg["quality"])
+        self.profile = dict(p)
+        self.quality = p["quality"]
+        self.set_width(p["max_width"])
+        log.info("profile %s: %s", name, p)
 
     def set_width(self, max_width: int):
         w, h = self.mon["width"], self.mon["height"]
@@ -203,16 +234,16 @@ class Screen:
 
     def adapt(self, rtt: float):
         """Trade picture quality for speed when the link is slow, and back."""
-        cfg = self.cfg
+        top_w, top_q = self.profile["max_width"], self.profile["quality"]
         if rtt > 0.6 and self.quality > 25:
             self.quality = max(25, self.quality - 10)
-        elif rtt > 0.6 and self.size[0] > 640:
+        elif rtt > 0.6 and self.size[0] > 480:
             self.set_width(int(self.size[0] * 0.8))
         elif rtt < 0.15:
-            if self.size[0] < min(cfg["max_width"], self.mon["width"]):
-                self.set_width(min(cfg["max_width"], int(self.size[0] * 1.25)))
-            elif self.quality < cfg["quality"]:
-                self.quality = min(cfg["quality"], self.quality + 5)
+            if self.size[0] < min(top_w, self.mon["width"]):
+                self.set_width(min(top_w, int(self.size[0] * 1.25)))
+            elif self.quality < top_q:
+                self.quality = min(top_q, self.quality + 5)
 
     def grab(self) -> bytes | None:
         """Return a JPEG, or None if the screen hasn't changed."""
@@ -229,11 +260,70 @@ class Screen:
         return buf.getvalue()
 
 
+class Audio:
+    """PC sound via WASAPI loopback (pyaudiowpatch), downmixed to 16 kHz mono."""
+
+    RATE = 16000
+
+    def __init__(self):
+        self.stream = None
+        self.pa = None
+        self.src_rate = 48000
+        self.channels = 2
+
+    def available(self) -> bool:
+        try:
+            import pyaudiowpatch  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def start(self):
+        import pyaudiowpatch as pyaudio
+        self.pa = pyaudio.PyAudio()
+        wasapi = self.pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+        dev = self.pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
+        if not dev.get("isLoopbackDevice"):
+            for d in self.pa.get_loopback_device_info_generator():
+                if dev["name"] in d["name"]:
+                    dev = d
+                    break
+        self.src_rate = int(dev["defaultSampleRate"])
+        self.channels = int(dev["maxInputChannels"])
+        self.stream = self.pa.open(format=pyaudio.paInt16, channels=self.channels, rate=self.src_rate,
+                                   input=True, input_device_index=dev["index"],
+                                   frames_per_buffer=self.src_rate // 20)
+        log.info("audio: %s @ %d Hz x%d", dev["name"], self.src_rate, self.channels)
+
+    def stop(self):
+        if self.stream:
+            self.stream.stop_stream()
+            self.stream.close()
+            self.stream = None
+        if self.pa:
+            self.pa.terminate()
+            self.pa = None
+
+    def read(self) -> bytes:
+        """One ~50 ms chunk as 16 kHz mono PCM16, framed for the relay."""
+        raw = self.stream.read(self.src_rate // 20, exception_on_overflow=False)
+        s = array.array("h", raw)
+        ch, step = self.channels, max(1, round(self.src_rate / self.RATE))
+        out = array.array("h")
+        n = len(s) // ch
+        for i in range(0, n, step):
+            base = i * ch
+            out.append(sum(s[base:base + ch]) // ch)
+        return FRAME_AUDIO + self.RATE.to_bytes(2, "little") + out.tobytes()
+
+
 class Agent:
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self.screen = Screen(cfg)
         self.input = Input(self.screen.mon)
+        self.audio = Audio()
+        self.audio_on = False
         self.viewers = 0
         self.ack = asyncio.Event()
         self.ack.set()
@@ -243,23 +333,26 @@ class Agent:
     def ws_url(self) -> str:
         base = self.cfg["relay_url"].rstrip("/")
         base = base.replace("https://", "wss://").replace("http://", "ws://")
-        return f"{base}/ws/pc?token={self.cfg['secret']}"
+        return f"{base}/ws/pc"
 
     async def run(self):
         delay = 2
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
-                    async with s.ws_connect(self.ws_url(), heartbeat=20, max_msg_size=0) as ws:
+                    async with s.ws_connect(self.ws_url(), heartbeat=20, max_msg_size=64 * 1024) as ws:
+                        await ws.send_str(json.dumps({"t": "auth", "token": self.cfg["secret"]}))
                         log.info("connected to relay")
                         delay = 2
-                        await ws.send_str(json.dumps({"t": "hello", "w": self.screen.size[0],
-                                                      "h": self.screen.size[1], "host": os.environ.get("COMPUTERNAME", "")}))
-                        sender = asyncio.create_task(self.stream(ws))
+                        await ws.send_str(json.dumps({
+                            "t": "hello", "w": self.screen.size[0], "h": self.screen.size[1],
+                            "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available()}))
+                        tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws))]
                         try:
                             await self.receive(ws)
                         finally:
-                            sender.cancel()
+                            for t in tasks:
+                                t.cancel()
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -268,13 +361,14 @@ class Agent:
             delay = min(delay * 2, 60)
 
     async def stream(self, ws):
-        interval = 1 / self.cfg["fps"]
         last_sent = 0.0
         loop = asyncio.get_running_loop()
         while True:
-            if self.viewers == 0:
+            fps = self.screen.profile["fps"]
+            if self.viewers == 0 or fps == 0:
                 await asyncio.sleep(0.5)
                 continue
+            interval = 1 / fps
             t0 = time.monotonic()
             # wait until the phone has drawn the previous frame (or 1 s)
             try:
@@ -290,11 +384,30 @@ class Agent:
                 jpeg = await loop.run_in_executor(None, self.screen.grab)
             self.ack.clear()
             self.sent_at = time.monotonic()
-            await ws.send_bytes(jpeg)
+            await ws.send_bytes(FRAME_VIDEO + jpeg)
             last_sent = self.sent_at
             if int(last_sent) % 3 == 0:
                 self.screen.adapt(self.rtt)
             await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
+
+    async def stream_audio(self, ws):
+        loop = asyncio.get_running_loop()
+        while True:
+            if not (self.audio_on and self.viewers and self.screen.profile["fps"]):
+                if self.audio.stream:
+                    self.audio.stop()
+                await asyncio.sleep(0.3)
+                continue
+            if not self.audio.stream:
+                try:
+                    await loop.run_in_executor(None, self.audio.start)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("audio unavailable: %s", e)
+                    self.audio_on = False
+                    await ws.send_str(json.dumps({"t": "audio", "on": False, "error": str(e)}))
+                    continue
+            chunk = await loop.run_in_executor(None, self.audio.read)
+            await ws.send_bytes(chunk)
 
     async def receive(self, ws):
         async for msg in ws:
@@ -317,6 +430,10 @@ class Agent:
                     self.viewers = int(ev.get("n", 0))
                     if self.viewers:
                         self.screen._last_hash = b""  # force a fresh frame
+                elif t == "profile":
+                    self.screen.set_profile(str(ev.get("name", "normal")))
+                elif t == "audio":
+                    self.audio_on = bool(ev.get("on"))
                 elif t == "move":
                     self.input.move(float(ev["x"]), float(ev["y"]))
                 elif t == "btn":
@@ -324,7 +441,7 @@ class Agent:
                 elif t == "click":
                     self.input.move(float(ev["x"]), float(ev["y"]))
                     b = ev.get("b", "left")
-                    for _ in range(int(ev.get("n", 1))):
+                    for _ in range(max(1, min(3, int(ev.get("n", 1))))):
                         self.input.button(b, True)
                         self.input.button(b, False)
                 elif t == "wheel":

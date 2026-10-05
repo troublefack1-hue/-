@@ -34,7 +34,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; width: 100%;
 
 /* ---- app shell ---- */
 #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
-#bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+#bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
   padding-top: calc(6px + env(safe-area-inset-top)); background: var(--panel); border-bottom: 1px solid var(--border); }
 .status { flex: 1; min-width: 0; line-height: 1.2; }
 #state { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -51,8 +51,9 @@ button.icon.active { background: var(--accent); border-color: transparent; }
 #cursor { position: absolute; width: 0; height: 0; pointer-events: none; z-index: 2;
   border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 18px solid #fff;
   transform: translate(-3px, 0) rotate(-35deg); filter: drop-shadow(0 0 2px #000); }
-#zoomBadge { position: absolute; right: 10px; top: 10px; padding: 3px 8px; border-radius: 8px; font-size: 12px;
+#zoomBadge, #ecoBadge { position: absolute; top: 10px; padding: 3px 8px; border-radius: 8px; font-size: 12px;
   background: #000a; color: #fff; pointer-events: none; }
+#zoomBadge { right: 10px; } #ecoBadge { left: 10px; color: var(--warn); }
 
 .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 12px; background: var(--bg); text-align: center; padding: 20px; }
@@ -68,21 +69,25 @@ button.icon.active { background: var(--accent); border-color: transparent; }
   animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---- keys ---- */
-#keys { display: flex; gap: 6px; padding: 6px; overflow-x: auto; background: var(--panel);
-  border-top: 1px solid var(--border); white-space: nowrap; scrollbar-width: none;
-  padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
-#keys::-webkit-scrollbar { display: none; }
-#keys button { padding: 9px 12px; flex: 0 0 auto; border-radius: 9px; font-size: 14px; }
+/* ---- keyboard panel ---- */
+#kbPanel { background: var(--panel); border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom); }
+#kbPanel .row { display: flex; gap: 6px; padding: 6px 6px 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+#kbPanel .row:last-child { padding-bottom: 6px; }
+#kbPanel .row::-webkit-scrollbar { display: none; }
+#kbPanel button { padding: 9px 12px; flex: 0 0 auto; border-radius: 9px; font-size: 14px; }
+#kbPanel button[data-mod] { font-weight: 600; }
+#kbPanel button.on { background: var(--accent); border-color: transparent; color: #fff; }
+#kbPanel .sep { width: 1px; background: var(--border); margin: 4px 2px; flex: 0 0 auto; }
 #kbInput { position: fixed; left: -1000px; top: 0; width: 10px; height: 10px; opacity: 0.01; }
 
 /* ---- sheet / menu ---- */
 .sheet { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
   background: var(--panel); border-top: 1px solid var(--border); border-radius: 20px 20px 0 0;
   display: flex; flex-direction: column; gap: 8px; box-shadow: 0 -10px 40px rgba(0,0,0,.6); z-index: 5;
-  animation: up .18s ease-out; }
+  animation: up .18s ease-out; max-height: 85vh; overflow-y: auto; }
 @keyframes up { from { transform: translateY(30px); opacity: 0; } }
-.handle { width: 40px; height: 4px; border-radius: 2px; background: var(--border); margin: 2px auto 8px; }
+.handle { width: 40px; height: 4px; border-radius: 2px; background: var(--border); margin: 2px auto 8px; flex: 0 0 auto; }
 .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .grid button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; font-size: 12px; }
 .grid button i { font-style: normal; font-size: 24px; line-height: 1; }
@@ -97,6 +102,12 @@ label.row span { flex: 1; }
   background: #fff; transition: .15s; }
 .switch input:checked + i { background: var(--accent); }
 .switch input:checked + i::after { left: 21px; }
+.seg { display: flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 6px; }
+.seg .lbl { flex: 1; padding-left: 8px; }
+.seg button { padding: 8px 12px; border-radius: 9px; font-size: 13px; background: transparent; border-color: transparent; }
+.seg button.on { background: var(--accent); color: #fff; }
+.stats { font-size: 12px; color: var(--muted); padding: 4px 14px 0; white-space: pre-line; }
 
 /* ---- modal / toast ---- */
 .modal { position: fixed; inset: 0; background: #0009; display: grid; place-items: center; z-index: 10; padding: 20px; }
