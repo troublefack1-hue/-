@@ -146,16 +146,19 @@ public class MainActivity extends Activity {
         card.addView(btn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
 
         btn.setOnClickListener(v -> {
-            String hp = host.getText().toString().trim(); String c = code.getText().toString().trim();
+            // be forgiving: "https://1.2.3.4:8443/", "1.2.3.4" (default port), code typed as "113 879"
+            String hp = host.getText().toString().trim().replaceAll("^[a-zA-Z]+://", "").replaceAll("/.*$", "");
+            String c = code.getText().toString().replaceAll("[^0-9]", "");
             String[] parts = hp.split(":");
-            if (parts.length != 2 || c.length() != 6) { err.setText("Нужен адрес вида IP:порт и код из 6 цифр"); return; }
+            if (hp.isEmpty() || parts.length > 2 || c.length() != 6) { err.setText("Нужен адрес ПК (IP или IP:порт) и код из 6 цифр"); return; }
             final String h = parts[0]; final int port;
-            try { port = Integer.parseInt(parts[1]); } catch (NumberFormatException e) { err.setText("Порт должен быть числом"); return; }
+            try { port = parts.length == 2 ? Integer.parseInt(parts[1]) : 8443; } catch (NumberFormatException e) { err.setText("Порт должен быть числом"); return; }
+            final String hostport = h + ":" + port;
             btn.setEnabled(false); err.setText("Подключаюсь…"); err.setTextColor(MUTED);
             new Thread(() -> {
                 try {
                     Pairing.Result r = Pairing.pair(h, port, c);
-                    prefs.edit().putString("hostport", hp).putString("host", h).putInt("port", port)
+                    prefs.edit().putString("hostport", hostport).putString("host", h).putInt("port", port)
                             .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).putString("wake", r.wake).apply();
                     runOnUiThread(this::startRemote);
                 } catch (Exception e) {
