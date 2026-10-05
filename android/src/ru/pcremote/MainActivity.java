@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = getSharedPreferences("pcremote", MODE_PRIVATE);
+        CellularLink.install(this);   // mobile data as the last road when Wi-Fi cannot reach the PC
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
@@ -253,6 +254,11 @@ public class MainActivity extends Activity {
         btn.setText("Привязать"); btn.setTextColor(Color.WHITE); btn.setBackgroundColor(ACCENT); btn.setAllCaps(false);
         btn.setTypeface(null, Typeface.BOLD);
         card.addView(btn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        if (prefs.contains("secret")) {   // still paired: going back simply reconnects with the old secret
+            Button back = new Button(this); back.setText("Отмена — подключиться как раньше"); back.setAllCaps(false);
+            back.setOnClickListener(v -> { RemoteService.ensureRunning(this); startRemote(); });
+            card.addView(back, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        }
 
         btn.setOnClickListener(v -> {
             // be forgiving: "https://1.2.3.4:8443/", "1.2.3.4" (default port), code typed as "113 879"
@@ -345,7 +351,8 @@ public class MainActivity extends Activity {
             TextView sp = text("", 6, MUTED); root.addView(sp);
         }
         Button again = new Button(this); again.setText("Привязать заново"); again.setAllCaps(false);
-        again.setOnClickListener(v -> { prefs.edit().remove("secret").apply(); showSetup(null); });
+        // the old secret stays until a new pairing succeeds: an unreachable PC is not a reason to forget it
+        again.setOnClickListener(v -> showSetup(null));
         root.addView(again);
         setContentView(root);
         web.postDelayed(() -> { if (web != null && web.getParent() == null) setContentView(web); }, 4900);
@@ -427,8 +434,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void installFromPc(String asset) { runOnUiThread(() -> MainActivity.this.installFromPc(asset, false)); }
 
         @JavascriptInterface public void repair() {
-            prefs.edit().remove("secret").apply();
-            runOnUiThread(() -> showSetup(null));
+            runOnUiThread(() -> showSetup(null));   // the secret is replaced only by a successful pairing
         }
         @JavascriptInterface public void startCast() { runOnUiThread(MainActivity.this::requestCast); }
         @JavascriptInterface public void stopCast() {

@@ -44,6 +44,12 @@ public final class Pinned {
      */
     /** At home on Wi-Fi the PC is one hop away: try its LAN address first (short timeout),
      *  then the public one. Same certificate, same pin either way. */
+    /** The phone's mobile data as a road of its own (Android: Network.getSocketFactory()), or null when there is none.
+     *  A guest Wi-Fi refuses the router's own public address and cannot see the home LAN: then nothing on Wi-Fi
+     *  reaches the PC, while mobile data does — without making the owner switch Wi-Fi off. */
+    public interface Cellular { javax.net.SocketFactory get(int waitMs); }
+    public static volatile Cellular cellular;
+
     public static SSLSocket connectPreferLan(String lan, String host, int port, String pin, String[] seen, int timeoutMs, boolean tryLan)
             throws IOException {
         java.util.List<Paths.Candidate> cands = Paths.candidates(Paths.pcAddrs, lan, tryLan, host);
@@ -61,10 +67,29 @@ public final class Pinned {
                 last = e;
             }
         }
+        Cellular cell = cellular;
+        javax.net.SocketFactory sf = cell != null && host != null && !host.isEmpty() ? cell.get(5000) : null;
+        if (sf != null) {
+            try {
+                SSLSocket s = connect(sf, host, port, pin, seen, timeoutMs);
+                Paths.lastPath = "mobile " + host;
+                return s;
+            } catch (Mismatch m) {
+                throw m;
+            } catch (IOException e) {
+                last = e;
+            }
+        }
         throw last != null ? last : new IOException("no address for the PC");
     }
 
     public static SSLSocket connect(String host, int port, final String pin, final String[] seen, int timeoutMs)
+            throws IOException {
+        return connect(null, host, port, pin, seen, timeoutMs);
+    }
+
+    /** @param net the network to go through (its socket factory), or null for the default one */
+    public static SSLSocket connect(javax.net.SocketFactory net, String host, int port, final String pin, final String[] seen, int timeoutMs)
             throws IOException {
         TrustManager tm = new X509TrustManager() {
             public void checkClientTrusted(X509Certificate[] chain, String authType) {}
@@ -79,7 +104,7 @@ public final class Pinned {
             SSLContext ctx = SSLContext.getInstance("TLS");
             ctx.init(null, new TrustManager[]{tm}, null);
             SSLSocketFactory f = ctx.getSocketFactory();
-            Socket raw = new Socket();
+            Socket raw = net != null ? net.createSocket() : new Socket();
             raw.connect(new InetSocketAddress(host, port), timeoutMs);
             raw.setSoTimeout(timeoutMs);
             SSLSocket s = (SSLSocket) f.createSocket(raw, host, port, true);

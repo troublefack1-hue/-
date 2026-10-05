@@ -63,6 +63,7 @@ public class RemoteService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         prefs = getSharedPreferences("pcremote", MODE_PRIVATE);
+        CellularLink.install(this);   // mobile data as the last road when Wi-Fi cannot reach the PC
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Связь с ПК", NotificationManager.IMPORTANCE_LOW));
         NotificationChannel ring = new NotificationChannel(CHANNEL_RING, "Поиск телефона", NotificationManager.IMPORTANCE_HIGH);
