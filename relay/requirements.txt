@@ -1,1 +1,2 @@
 aiohttp>=3.9
+send2trash>=1.8

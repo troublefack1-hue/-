@@ -440,7 +440,7 @@
     else { send({ t: "key", k, down: true }); send({ t: "key", k, down: false }); }
   }
   $("kbBtn").onclick = () => {
-    kbPanel.hidden = !kbPanel.hidden; $("kbBtn").classList.toggle("active", !kbPanel.hidden);
+    kbPanel.hidden = !kbPanel.hidden; $("kbBtn").classList.toggle("on", !kbPanel.hidden);
     if (!kbPanel.hidden) kbInput.focus(); else kbInput.blur();
     setTimeout(layout, 50);
   };
@@ -464,14 +464,23 @@
   });
 
   // --------------------------------------------------------------- menu
-  $("menuBtn").onclick = () => (menu.hidden = !menu.hidden);
-  menu.addEventListener("click", async (e) => {
-    const p = e.target.closest("button[data-profile]");
+  // pages (settings, files, terminal) and sheets (menu, power) + dock state
+  const pages = ["settingsPage", "filesPage", "termPanel"];
+  function showPage(id) { for (const p of pages) $(p).hidden = p !== id; menu.hidden = true; $("powerSheet").hidden = true; dockState(id); }
+  function closePages() { for (const p of pages) $(p).hidden = true; dockState("screen"); }
+  function dockState(id) { for (const [bid, pid] of [["dockScreen", "screen"], ["filesBtn", "filesPage"], ["termBtn", "termPanel"]]) $(bid).classList.toggle("on", pid === id); }
+  document.querySelectorAll("[data-close]").forEach((b) => (b.onclick = closePages));
+  $("dockScreen").onclick = () => { closePages(); menu.hidden = true; $("powerSheet").hidden = true; };
+  $("menuBtn").onclick = () => { $("powerSheet").hidden = true; menu.hidden = !menu.hidden; };
+  $("powerBtn").onclick = () => { menu.hidden = true; $("powerSheet").hidden = false; };
+  $("settingsBtn").onclick = () => showPage("settingsPage");
+  document.addEventListener("click", async (e) => {
+    const p = e.target.closest("#profile button[data-profile]");
     if (p) { setProfile(p.dataset.profile); return; }
-    const b = e.target.closest("button[data-cmd]"); if (!b) return;
+    const b = e.target.closest("#powerSheet button[data-cmd]"); if (!b) return;
     const names = { reboot: "Перезагрузить ПК?", shutdown: "Выключить ПК?", sleep: "Перевести ПК в сон?",
                     lock: "Заблокировать ПК?", cancel: "Отменить выключение?" };
-    menu.hidden = true;
+    $("powerSheet").hidden = true;
     if (!pcOnline) { show("ПК не в сети"); return; }
     if (b.dataset.cmd !== "cancel" && !(await ask(names[b.dataset.cmd]))) return;
     send({ t: "cmd", cmd: b.dataset.cmd }); buzz(20);
@@ -541,10 +550,10 @@
   // ---- phone screen -> PC (only inside the Android app, via the JS bridge)
   const bridge = window.PcRemoteApp;
   if (bridge && bridge.startCast) {
-    $("castBox").hidden = false;
+    $("castBox").hidden = false; $("castBtn").hidden = false;
     const refreshCast = () => {
       const on = bridge.isCasting();
-      $("castBtn").textContent = on ? "⏹ Остановить трансляцию" : "📱 Транслировать экран телефона на ПК";
+      $("castBtn").innerHTML = on ? "<i>⏹</i>Стоп трансл." : "<i>📱</i>Трансляция";
       $("muteRow").hidden = !on;
       $("phoneMute").checked = bridge.isPhoneMuted();
     };
@@ -618,7 +627,7 @@
     return { background: "#0b0d12", foreground: "#e6e9f0", cursor: cs.getPropertyValue("--accent").trim(), selectionBackground: "#4f8cff55" };
   }
   function openTermPanel() {
-    termPanel.hidden = false; menu.hidden = true;
+    showPage("termPanel");
     if (!terms.size) renderTermEmpty(); else showTerm(activeTerm);
   }
   function renderTermEmpty() {
@@ -681,7 +690,7 @@
   function termSend(data) { if (!activeTerm) return show("Сначала запустите сессию"); send({ t: "term_in", id: activeTerm, data }); }
   $("termBtn").onclick = openTermPanel;
   $("termMenuBtn").onclick = openTermPanel;
-  $("termBack").onclick = () => (termPanel.hidden = true);
+  $("termBack").onclick = closePages;
   $("termNew").onclick = () => renderTermEmpty();
   $("termQuick").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-send]"); if (!b) return;
@@ -716,34 +725,104 @@
   // Files: browse share folders, download to the phone, upload from the phone
   // ================================================================
   let filesPath = "";
+
+  // ================================================================
+  // Explorer: full-page file manager over /api/files, /api/fs, /api/file
+  // ================================================================
   const isImage = (n) => /\.(jpe?g|png|gif|webp|bmp|avif)$/i.test(n);
   const thumbCache = new Map();
+  let fPath = "", fItems = [], fSelecting = false, fSel = new Set(), fClip = null, fGridPref = prefs.filesGrid || "auto";
+  const fmtSize = (n) => n > 1e9 ? `${(n / 1e9).toFixed(1)} ГБ` : n > 1e6 ? `${(n / 1e6).toFixed(1)} МБ` : `${Math.max(1, Math.round(n / 1024))} КБ`;
+  const fmtDate = (t) => new Date(t * 1000).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" });
+  const sep = (p) => (p.includes("/") && !p.includes("\\")) ? "/" : "\\";
+  function openFiles(path) { showPage("filesPage"); loadFiles(path ?? fPath); }
   async function loadFiles(path) {
-    filesPath = path;
+    fPath = path; fSel.clear(); fSelecting = false; updateSelBar();
     const r = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
-    if (!r.ok) { $("filesList").innerHTML = `<div class="empty">Нет доступа</div>`; return; }
-    const j = await r.json(); const list = $("filesList"); list.innerHTML = "";
-    $("filesTitle").textContent = j.path ? j.path.split(/[\\/]/).filter(Boolean).pop() : "Файлы на ПК";
-    $("uploadLbl").textContent = j.path ? "⬆ Отправить сюда" : "⬆ Отправить на ПК";
-    if (!j.items.length) list.innerHTML = `<div class="empty">Пусто</div>`;
-    const images = j.items.filter((it) => !it.dir && isImage(it.name));
-    const grid = images.length >= 2 && images.length >= j.items.length / 2;   // a photo folder -> thumbnails
-    list.classList.toggle("grid", grid);
-    for (const it of j.items) {
-      const size = it.dir ? "" : it.size > 1e6 ? `${(it.size / 1e6).toFixed(1)} МБ` : `${Math.round(it.size / 1024)} КБ`;
-      const d = document.createElement("div");
+    if (!r.ok) { $("fList").innerHTML = `<div class="empty">Нет доступа</div>`; return; }
+    const j = await r.json(); fItems = j.items; fPath = j.path || "";
+    renderCrumbs(); renderFiles();
+  }
+  function renderCrumbs() {
+    const c = $("crumbs"); c.innerHTML = "";
+    const root = document.createElement("button"); root.textContent = "💻 ПК"; root.onclick = () => loadFiles(""); c.appendChild(root);
+    if (!fPath) { root.classList.add("cur"); return; }
+    const sp = sep(fPath), parts = fPath.split(/[\\/]/).filter(Boolean);
+    parts.forEach((seg, i) => {
+      const sepEl = document.createElement("i"); sepEl.textContent = "›"; c.appendChild(sepEl);
+      const b = document.createElement("button"); b.textContent = seg;
+      const target = parts.slice(0, i + 1).join(sp) + (i === 0 && /^[A-Za-z]:$/.test(seg) ? sp : "");
+      b.onclick = () => loadFiles(target); if (i === parts.length - 1) b.classList.add("cur"); c.appendChild(b);
+    });
+    c.scrollLeft = c.scrollWidth;
+  }
+  function useGrid() {
+    if (fGridPref !== "auto") return fGridPref === "grid";
+    const imgs = fItems.filter((it) => !it.dir && isImage(it.name)).length;
+    return imgs >= 2 && imgs >= fItems.length / 2;
+  }
+  function renderFiles() {
+    const list = $("fList"); list.innerHTML = ""; const grid = useGrid(); list.classList.toggle("grid", grid);
+    $("fView").textContent = grid ? "☰" : "▦";
+    if (!fItems.length) { list.innerHTML = `<div class="empty">${fPath ? "Пусто" : "Нет общих папок"}</div>`; return; }
+    for (const it of fItems) {
+      const d = document.createElement("div"); d.dataset.path = it.path;
       if (grid) {
         d.className = "th" + (it.dir ? " dir" : "");
         if (it.dir) d.textContent = "📁"; else if (isImage(it.name)) { const im = document.createElement("img"); loadThumb(im, it.path); d.appendChild(im); } else d.textContent = "📄";
         const cap = document.createElement("span"); cap.textContent = it.name; d.appendChild(cap);
+        const chk = document.createElement("b"); chk.className = "chk"; chk.textContent = "✓"; chk.hidden = !fSelecting; d.appendChild(chk);
       } else {
         d.className = "it";
-        d.innerHTML = `<i>${it.dir ? "📁" : isImage(it.name) ? "🖼" : "📄"}</i><span class="n">${it.name}</span><span class="s">${size}</span>`;
+        const icon = it.dir ? "📁" : isImage(it.name) ? "🖼" : /\.(mp4|mkv|avi|mov)$/i.test(it.name) ? "🎬" : /\.(mp3|wav|flac)$/i.test(it.name) ? "🎵" : /\.(zip|rar|7z)$/i.test(it.name) ? "🗜" : /\.(exe|msi)$/i.test(it.name) ? "⚙" : "📄";
+        d.innerHTML = `<i>${icon}</i><span class="n"><b>${it.name}</b><span class="m">${it.dir ? "папка" : fmtSize(it.size)}${it.mtime ? " · " + fmtDate(it.mtime) : ""}</span></span><span class="chk" ${fSelecting ? "" : "hidden"}>✓</span>`;
       }
-      d.onclick = () => it.dir ? loadFiles(it.path) : isImage(it.name) ? viewImage(it) : downloadFile(it);
+      d.classList.toggle("sel", fSel.has(it.path));
+      let lp = null;
+      d.addEventListener("touchstart", () => { lp = setTimeout(() => { lp = null; fSelecting = true; toggleSel(it); buzz(20); }, 500); }, { passive: true });
+      d.addEventListener("touchmove", () => { clearTimeout(lp); lp = null; }, { passive: true });
+      d.addEventListener("touchend", () => { clearTimeout(lp); }, { passive: true });
+      d.onclick = () => {
+        if (fSelecting) { toggleSel(it); return; }
+        if (it.dir) loadFiles(it.path);
+        else if (isImage(it.name)) viewImage(it);
+        else { fSel.clear(); fSel.add(it.path); fSelecting = true; renderFiles(); }
+      };
       list.appendChild(d);
     }
+    updateSelBar();
   }
+  function toggleSel(it) { fSel.has(it.path) ? fSel.delete(it.path) : fSel.add(it.path); if (!fSel.size) fSelecting = false; renderFiles(); }
+  function updateSelBar() {
+    $("fSelBar").hidden = !fSel.size; $("fBar").hidden = !!fSel.size; $("fPaste").hidden = !fClip || !fPath;
+    $("fRename").hidden = fSel.size !== 1;
+  }
+  const selItems = () => fItems.filter((it) => fSel.has(it.path));
+  async function fsOp(body) {
+    const r = await fetch("/api/fs", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({ ok: false, error: r.status }));
+    if (!j.ok) show("Ошибка: " + j.error, 4000); return j.ok;
+  }
+  $("filesBtn").onclick = () => openFiles(fPath);
+  $("fView").onclick = () => { fGridPref = useGrid() ? "list" : "grid"; prefs.filesGrid = fGridPref; savePrefs(); renderFiles(); };
+  $("fSelect").onclick = () => { fSelecting = !fSelecting; if (!fSelecting) fSel.clear(); renderFiles(); };
+  $("fCancelSel").onclick = () => { fSel.clear(); fSelecting = false; renderFiles(); };
+  $("fOpenPC").onclick = () => { for (const it of selItems()) send({ t: "open_path", path: it.path }); show("Открываю на ПК"); $("fCancelSel").click(); };
+  $("fDownload").onclick = async () => { for (const it of selItems()) if (!it.dir) await downloadFile(it); $("fCancelSel").click(); };
+  $("fRename").onclick = () => { const it = selItems()[0]; if (!it) return;
+    textDialog("Новое имя", it.name, async (v) => { if (await fsOp({ op: "rename", path: it.path, name: v.trim() })) loadFiles(fPath); });
+    $("textDlgInput").value = it.name; };
+  $("fCut").onclick = () => { fClip = { op: "move", paths: [...fSel] }; show(`Вырезано: ${fSel.size}`); $("fCancelSel").click(); };
+  $("fCopy").onclick = () => { fClip = { op: "copy", paths: [...fSel] }; show(`Скопировано: ${fSel.size}`); $("fCancelSel").click(); };
+  $("fPaste").onclick = async () => { if (!fClip) return; let n = 0;
+    for (const p of fClip.paths) if (await fsOp({ op: fClip.op, path: p, to: fPath })) n++;
+    show(`${fClip.op === "move" ? "Перемещено" : "Скопировано"}: ${n}`); fClip = null; loadFiles(fPath); };
+  $("fDelete").onclick = async () => { const items = selItems(); if (!items.length) return;
+    if (!(await ask(`Удалить ${items.length === 1 ? "«" + items[0].name + "»" : items.length + " элементов"}? Уйдёт в корзину ПК.`))) return;
+    let n = 0; for (const it of items) if (await fsOp({ op: "delete", path: it.path })) n++; show(`Удалено: ${n}`); loadFiles(fPath); };
+  $("fNew").onclick = () => { if (!fPath) return show("Сначала откройте папку"); textDialog("Новая папка", "имя", async (v) => { if (await fsOp({ op: "mkdir", path: fPath, name: v.trim() })) loadFiles(fPath); }); };
+  $("fTermHere").onclick = () => { if (!fPath) return show("Сначала откройте папку"); showPage("termPanel"); newTerm((pcInfo.shells || []).includes("bash") ? "bash" : "shell", fPath); };
+  $("fReveal").onclick = () => { const p = fSel.size ? [...fSel][0] : fPath; if (!p) return; send({ t: "reveal", path: p }); show("Показываю в Проводнике ПК"); };
   async function loadThumb(img, path) {
     if (thumbCache.has(path)) { img.src = thumbCache.get(path); return; }
     try {
@@ -760,11 +839,23 @@
     a.href = URL.createObjectURL(blob); a.download = it.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     show("Сохранено на телефон"); sfx("ok");
   }
+  $("fileInput").onchange = async () => {
+    const files = [...$("fileInput").files]; $("fileInput").value = ""; const pr = $("fProgress"); pr.hidden = false;
+    for (const f of files) {
+      pr.textContent = `Отправляю ${f.name} (${fmtSize(f.size)})…`;
+      try {
+        const r = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "X-Filename": f.name, ...(fPath ? { "X-Dir": fPath } : {}) }, body: f });
+        const j = await r.json(); bytesOut += f.size;
+        pr.textContent = j.ok ? `✓ ${j.name}` : "Ошибка: " + j.error;
+      } catch (e) { pr.textContent = "Ошибка: " + e; }
+    }
+    setTimeout(() => (pr.hidden = true), 4000); sfx("ok"); if (fPath) loadFiles(fPath);
+  };
   // ---- image viewer: photos from the PC and screenshots, pinch to zoom
   let imgBlobUrl = null, imgName = "", iz = 1, ix = 0, iy = 0, ipinch = null, ilastTap = 0;
   function openViewer(url, name) {
     imgBlobUrl = url; imgName = name; $("imgName").textContent = name; $("imgEl").src = url;
-    iz = 1; ix = iy = 0; applyImg(); $("imgView").hidden = false; $("filesDlg").hidden = true;
+    iz = 1; ix = iy = 0; applyImg(); $("imgView").hidden = false;
   }
   async function viewImage(it) {
     show(`Открываю ${it.name}…`, 4000);
@@ -799,22 +890,6 @@
   }, { passive: true });
   $("imgBack").onclick = () => { $("imgView").hidden = true; };
   $("imgSave").onclick = () => { const a = document.createElement("a"); a.href = imgBlobUrl; a.download = imgName; a.click(); show("Сохранено на телефон"); sfx("ok"); };
-  $("fileInput").onchange = async () => {
-    const files = [...$("fileInput").files]; $("fileInput").value = "";
-    for (const f of files) {
-      $("filesProgress").textContent = `Отправляю ${f.name} (${Math.round(f.size / 1024)} КБ)…`;
-      try {
-        const r = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "X-Filename": f.name, ...(filesPath ? { "X-Dir": filesPath } : {}) }, body: f });
-        const j = await r.json(); bytesOut += f.size;
-        $("filesProgress").textContent = j.ok ? `✓ ${j.name} на ПК` : "Ошибка: " + j.error;
-        if (j.ok && filesPath) loadFiles(filesPath);
-      } catch (e) { $("filesProgress").textContent = "Ошибка: " + e; }
-    }
-    sfx("ok");
-  };
-  $("filesBtn").onclick = () => { menu.hidden = true; $("filesDlg").hidden = false; loadFiles(""); };
-  $("filesClose").onclick = () => ($("filesDlg").hidden = true);
-  $("filesUp").onclick = () => { const parts = filesPath.split(/[\\/]/); parts.pop(); loadFiles(parts.length > 1 ? parts.join("\\") : ""); };
   // ================================================================
   // Macros: named step lists, shown as buttons in the keyboard panel
   // ================================================================

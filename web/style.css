@@ -176,7 +176,7 @@ button.icon.active { background: var(--accent); border-color: transparent; color
 #kbInput { position: fixed; left: -1000px; top: 0; width: 10px; height: 10px; opacity: 0.01; }
 
 /* ---- sheet / menu ---- */
-.sheet { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
+.sheet { position: fixed; left: 0; right: 0; bottom: calc(58px + env(safe-area-inset-bottom)); padding: 8px 14px 14px;
   background: var(--glass); backdrop-filter: blur(18px); border-top: 1px solid var(--border); border-radius: 24px 24px 0 0;
   display: flex; flex-direction: column; gap: 8px; box-shadow: 0 -10px 40px rgba(0,0,0,.5); z-index: 8;
   animation: up .22s cubic-bezier(.2,.9,.3,1.1); max-height: 86vh; overflow-y: auto; }
@@ -213,7 +213,7 @@ label.row span { flex: 1; }
 .stats canvas { width: 110px; height: 26px; }
 
 /* ---- modal / toast ---- */
-.modal { position: fixed; inset: 0; background: #0009; display: grid; place-items: center; z-index: 10; padding: 20px; backdrop-filter: blur(4px); animation: fadeIn .2s; }
+.modal { position: fixed; inset: 0; background: #0009; display: grid; place-items: center; z-index: 40; padding: 20px; backdrop-filter: blur(4px); animation: fadeIn .2s; }
 @keyframes fadeIn { from { opacity: 0; } }
 .box { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 20px; width: 100%; max-width: 330px;
   box-shadow: var(--shadow); animation: pop .3s cubic-bezier(.2,.9,.3,1.2); }
@@ -225,7 +225,7 @@ label.row span { flex: 1; }
 textarea { width: 100%; font: inherit; padding: 10px; border-radius: var(--r); border: 1px solid var(--border);
   background: var(--bg); color: var(--text); resize: vertical; margin-bottom: 12px; outline: none; }
 textarea:focus { border-color: var(--accent); }
-#toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); padding: 9px 16px; z-index: 20;
+#toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); padding: 9px 16px; z-index: 45;
   background: var(--glass); backdrop-filter: blur(12px); border: 1px solid var(--border); border-radius: 14px; font-size: 14px;
   max-width: 90vw; text-align: center; animation: toastIn .25s cubic-bezier(.2,.9,.3,1.2); box-shadow: var(--shadow); }
 @keyframes toastIn { from { transform: translate(-50%, 16px); opacity: 0; } }
@@ -288,3 +288,46 @@ label.btn { display: block; }
 .flist.grid .th.dir { display: grid; place-items: center; font-size: 34px; }
 .speed { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .speed span.hot { color: var(--ok); }
+
+/* ===================== dock / pages / explorer ===================== */
+#dock { display: flex; background: var(--glass); backdrop-filter: blur(16px); border-top: 1px solid var(--border);
+  padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); z-index: 9; position: relative; height: calc(58px + env(safe-area-inset-bottom)); }
+#dock button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; background: transparent;
+  border: 0; color: var(--muted); font-size: 11px; border-radius: 12px; }
+#dock button svg { width: 24px; height: 24px; fill: currentColor; }
+#dock button.on { color: var(--accent); }
+#dock button:active { background: var(--panel2); }
+.page { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); animation: pageIn .22s cubic-bezier(.2,.9,.3,1); }
+@keyframes pageIn { from { transform: translateX(40px); opacity: 0; } }
+.tbar h2 { margin: 0; font-size: 17px; flex: 1; }
+.pbody { flex: 1; overflow-y: auto; padding: 10px 14px calc(20px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
+.pbody h3 { margin: 14px 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.pbody .stats { padding: 4px 0; }
+.sheet .grid.tools { grid-template-columns: repeat(4, 1fr); }
+.sheet .grid.tools button i { font-size: 22px; }
+.sheet .grid.tools button { padding: 12px 2px; font-size: 11px; }
+
+/* explorer */
+.crumbs { flex: 1; display: flex; align-items: center; gap: 2px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; font-size: 13px; }
+.crumbs::-webkit-scrollbar { display: none; }
+.crumbs button { padding: 6px 8px; border-radius: 8px; background: transparent; border-color: transparent; font-size: 13px; }
+.crumbs button.cur { background: var(--panel2); font-weight: 600; }
+.crumbs i { color: var(--muted); font-style: normal; }
+.page-list { flex: 1; margin: 0; border: 0; border-radius: 0; max-height: none; background: var(--bg); }
+.flist .it.sel, .flist.grid .th.sel { outline: 2px solid var(--accent); outline-offset: -2px; background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.flist .it .chk { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); display: grid; place-items: center; font-size: 12px; }
+.flist .it.sel .chk { background: var(--accent); border-color: var(--accent); color: #fff; }
+.flist.grid .th .chk { position: absolute; top: 6px; left: 6px; width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; background: #0008; display: grid; place-items: center; font-size: 12px; color: #fff; }
+.flist.grid .th.sel .chk { background: var(--accent); border-color: var(--accent); }
+.flist .it .m { color: var(--muted); font-size: 11px; }
+.flist .it .n b { display: block; font-weight: 500; }
+.fbar { display: flex; gap: 4px; padding: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); background: var(--glass); backdrop-filter: blur(14px);
+  border-top: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.fbar::-webkit-scrollbar { display: none; }
+.fb { flex: 1 0 auto; min-width: 64px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 6px; font-size: 15px;
+  background: transparent; border: 0; border-radius: 10px; color: var(--text); }
+.fb span { font-size: 11px; color: var(--muted); }
+.fb:active { background: var(--panel2); }
+.fb.danger { color: var(--bad); }
+.fbar.sel { background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
+.fprog { padding: 6px 12px; font-size: 12px; background: var(--panel); }

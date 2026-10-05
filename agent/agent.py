@@ -628,6 +628,14 @@ class Agent:
                     await ws.send_str(json.dumps({"t": "cmd_result", "cmd": "open_url", "result": res}))
                 elif t == "monitor":
                     self.screen.set_monitor(int(ev.get("n", 1)))
+                elif t == "open_path":      # open a file/folder on the PC with its default app
+                    path = str(ev.get("path", ""))[:4000]
+                    if os.path.exists(path):
+                        os.startfile(path)  # noqa: S606
+                elif t == "reveal":         # show it selected in Windows Explorer
+                    path = str(ev.get("path", ""))[:4000]
+                    if os.path.exists(path):
+                        subprocess.Popen(["explorer.exe", "/select,", path])
                 elif t == "term_open":
                     tid = str(ev.get("id", "t1"))[:16]
                     if tid in self.terms or len(self.terms) >= 4:

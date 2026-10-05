@@ -430,6 +430,63 @@ class Hub:
             raise web.HTTPForbidden(headers=CORS)
         return web.json_response({"path": str(p), "items": items}, headers=CORS)
 
+    async def fs_handler(self, request: web.Request):
+        """Explorer-like operations: mkdir, rename, delete, copy, move. All paths inside share_dirs."""
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        try:
+            body = await request.json()
+        except ValueError:
+            raise web.HTTPBadRequest(headers=CORS)
+        op = str(body.get("op", ""))
+        src = self._safe_path(str(body.get("path", "")))
+        if src is None:
+            return web.json_response({"ok": False, "error": "путь вне разрешённых папок"}, headers=CORS)
+        import shutil
+        loop = asyncio.get_running_loop()
+        try:
+            if op == "mkdir":
+                name = "".join(c for c in str(body.get("name", "")) if c not in '<>:"/\\|?*').strip()
+                if not name:
+                    raise ValueError("пустое имя")
+                (src / name).mkdir(exist_ok=False)
+                self.log_event(f"новая папка: {src / name}")
+            elif op == "rename":
+                name = "".join(c for c in str(body.get("name", "")) if c not in '<>:"/\\|?*').strip()
+                if not name:
+                    raise ValueError("пустое имя")
+                src.rename(src.parent / name)
+                self.log_event(f"переименовано: {src.name} → {name}")
+            elif op == "delete":
+                try:
+                    from send2trash import send2trash
+                    await loop.run_in_executor(None, send2trash, str(src))
+                except ImportError:
+                    if src.is_dir():
+                        await loop.run_in_executor(None, shutil.rmtree, src)
+                    else:
+                        src.unlink()
+                self.log_event(f"удалено: {src}")
+            elif op in ("copy", "move"):
+                dst = self._safe_path(str(body.get("to", "")))
+                if dst is None or not dst.is_dir():
+                    raise ValueError("папка назначения недоступна")
+                target = dst / src.name
+                if target.exists():
+                    raise ValueError("там уже есть такой файл")
+                if op == "move":
+                    await loop.run_in_executor(None, shutil.move, str(src), str(target))
+                elif src.is_dir():
+                    await loop.run_in_executor(None, shutil.copytree, src, target)
+                else:
+                    await loop.run_in_executor(None, shutil.copy2, src, target)
+                self.log_event(f"{'перемещено' if op == 'move' else 'скопировано'}: {src.name} → {dst}")
+            else:
+                raise ValueError("неизвестная операция")
+        except Exception as e:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": str(e)}, headers=CORS)
+        return web.json_response({"ok": True}, headers=CORS)
+
     async def thumb_handler(self, request: web.Request):
         """Small JPEG preview of an image for the files grid (needs Pillow)."""
         if not self.check_header(request):
@@ -483,6 +540,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_get("/api/files", hub.files_handler)
     app.router.add_get("/api/file", hub.file_handler)
     app.router.add_get("/api/thumb", hub.thumb_handler)
+    app.router.add_post("/api/fs", hub.fs_handler)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", hub.options_handler)
     app.router.add_static("/static", WEB_DIR)
     if cfg["ca_cert"]:

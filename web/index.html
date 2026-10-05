@@ -16,7 +16,7 @@
 </head>
 <body>
 
-<!-- splash: shown while connecting, fades into the app -->
+<!-- splash -->
 <section id="splash">
   <div class="bg"><i></i><i></i><i></i></div>
   <div class="splash-logo">
@@ -44,10 +44,7 @@
     <img class="logo" src="/static/icon.svg" alt="">
     <h1>Мой ПК</h1>
     <p class="muted">Удалённый доступ к домашнему компьютеру</p>
-    <label class="field">
-      <span>Секрет</span>
-      <input id="secret" type="password" autocomplete="current-password" placeholder="из программы на ПК">
-    </label>
+    <label class="field"><span>Секрет</span><input id="secret" type="password" autocomplete="current-password" placeholder="из программы на ПК"></label>
     <button id="loginBtn" class="btn primary big">Подключиться</button>
     <p id="loginErr" class="err"></p>
   </div>
@@ -57,27 +54,18 @@
 <section id="app" hidden>
   <header id="bar">
     <span id="dot" class="dot"></span>
-    <span id="signal" class="signal" title="качество связи"><i></i><i></i><i></i></span>
+    <span id="signal" class="signal"><i></i><i></i><i></i></span>
     <div class="status">
       <div id="state">подключение…</div>
       <div id="sub" class="sub"></div>
-      <div id="speed" class="speed"><span id="spdDown">↓ 0 Б/с</span> <span id="spdUp">↑ 0 Б/с</span></div>
     </div>
+    <div id="speed" class="speed"><span id="spdDown">↓ 0 Б/с</span><span id="spdUp">↑ 0 Б/с</span></div>
     <button id="audioBtn" class="icon" title="Звук с ПК" hidden>
       <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
     </button>
-    <button id="termBtn" class="icon" title="Терминал и Claude Code" hidden>
-      <svg viewBox="0 0 24 24"><path d="M3 4h18a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v12h16V6H4zm2 2.5 4 3.5-4 3.5V8.5zM11 15h6v1.5h-6V15z"/></svg>
-    </button>
-    <button id="kbBtn" class="icon" title="Клавиатура">
-      <svg viewBox="0 0 24 24"><path d="M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm1 2v8h16V8H4zm1 1h2v2H5V9zm3 0h2v2H8V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zM5 12h2v2H5v-2zm3 0h2v2H8v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zM7 15h10v1H7v-1z"/></svg>
-    </button>
-    <button id="menuBtn" class="icon" title="Меню">
-      <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
-    </button>
   </header>
-
   <div id="pill"><i></i><span id="pillText"></span></div>
+
   <main id="view">
     <canvas id="screen"></canvas>
     <div id="ripples"></div>
@@ -90,13 +78,13 @@
       <div class="bg"><i></i><i></i><i></i></div>
       <div id="clock"></div>
       <svg class="pc-art" id="pcArt" viewBox="0 0 220 150">
-        <defs><clipPath id="scrClip"><rect x="22" y="14" width="176" height="100" rx="4"/></clipPath></defs>
+        <defs><clipPath id="scrClip"><rect x="22" y="14" width="176" height="100" rx="4"/></clipPath>
+          <linearGradient id="scanGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#8ab4ff" stop-opacity=".45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
         <rect x="14" y="6" width="192" height="116" rx="10" fill="#0a0d16" stroke="#2a2f3d" stroke-width="2"/>
         <rect class="screen-fill" x="22" y="14" width="176" height="100" rx="4"/>
         <g clip-path="url(#scrClip)"><rect class="scan" x="22" y="14" width="176" height="18" fill="url(#scanGrad)"/></g>
-        <defs><linearGradient id="scanGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#8ab4ff" stop-opacity=".45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
         <rect x="96" y="122" width="28" height="10" fill="#0a0d16"/><rect x="70" y="132" width="80" height="8" rx="4" fill="#0a0d16" stroke="#2a2f3d" stroke-width="2"/>
-        <circle cx="110" cy="118" r="2" fill="#38d070" id="pcLed"/>
+        <circle cx="110" cy="118" r="2" fill="#38d070"/>
       </svg>
       <button id="wakeBtn" class="power" title="Включить ПК"><span class="ring"></span>
         <svg viewBox="0 0 24 24"><path d="M12 3v9m5.66-5.66a8 8 0 1 1-11.32 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
@@ -105,60 +93,62 @@
       <p id="wakeMsg" class="muted">Нажмите, чтобы включить</p>
       <p id="wakeTimer" hidden></p>
     </div>
-
-    <div id="connecting" class="center" hidden>
-      <div class="spinner"></div>
-      <p id="connMsg" class="muted">Подключение…</p>
-    </div>
+    <div id="connecting" class="center" hidden><div class="spinner"></div><p id="connMsg" class="muted">Подключение…</p></div>
   </main>
 
-  <!-- keyboard panel: modifiers, keys, quick actions -->
+  <!-- keyboard panel -->
   <div id="kbPanel" hidden>
     <div class="row" id="mods">
-      <button data-mod="Control">Ctrl</button>
-      <button data-mod="Alt">Alt</button>
-      <button data-mod="Shift">Shift</button>
-      <button data-mod="Meta">Win</button>
+      <button data-mod="Control">Ctrl</button><button data-mod="Alt">Alt</button><button data-mod="Shift">Shift</button><button data-mod="Meta">Win</button>
       <span class="sep"></span>
-      <button data-key="Escape">Esc</button>
-      <button data-key="Tab">Tab</button>
-      <button data-key="Enter">Enter</button>
-      <button data-key="Backspace">⌫</button>
-      <button data-key="Delete">Del</button>
-      <button data-key="ArrowUp">↑</button>
-      <button data-key="ArrowDown">↓</button>
-      <button data-key="ArrowLeft">←</button>
-      <button data-key="ArrowRight">→</button>
-      <button data-key="Home">Home</button>
-      <button data-key="End">End</button>
-      <button data-key="F5">F5</button>
-      <button data-key="F11">F11</button>
+      <button data-key="Escape">Esc</button><button data-key="Tab">Tab</button><button data-key="Enter">Enter</button><button data-key="Backspace">⌫</button><button data-key="Delete">Del</button>
+      <button data-key="ArrowUp">↑</button><button data-key="ArrowDown">↓</button><button data-key="ArrowLeft">←</button><button data-key="ArrowRight">→</button>
+      <button data-key="Home">Home</button><button data-key="End">End</button><button data-key="F5">F5</button><button data-key="F11">F11</button>
     </div>
     <div class="row" id="macroRow" hidden></div>
     <div class="row" id="quick">
-      <button data-combo="Alt,Tab">Alt+Tab</button>
-      <button data-combo="Meta,d">Рабочий стол</button>
-      <button data-combo="Control,Shift,Escape">Диспетчер</button>
-      <button data-combo="Meta,e">Проводник</button>
-      <button data-combo="Meta,r">Выполнить</button>
-      <button data-combo="Alt,F4">Закрыть окно</button>
-      <button data-combo="Control,c">Ctrl+C</button>
-      <button data-combo="Control,v">Ctrl+V</button>
-      <button data-combo="Control,z">Ctrl+Z</button>
-      <button data-key="PrintScreen">PrtSc</button>
+      <button data-combo="Alt,Tab">Alt+Tab</button><button data-combo="Meta,d">Рабочий стол</button><button data-combo="Control,Shift,Escape">Диспетчер</button>
+      <button data-combo="Meta,e">Проводник</button><button data-combo="Meta,r">Выполнить</button><button data-combo="Alt,F4">Закрыть окно</button>
+      <button data-combo="Control,c">Ctrl+C</button><button data-combo="Control,v">Ctrl+V</button><button data-combo="Control,z">Ctrl+Z</button><button data-key="PrintScreen">PrtSc</button>
       <span class="sep"></span>
-      <button data-key="VolumeDown">🔉 −</button>
-      <button data-key="VolumeUp">🔊 +</button>
-      <button data-key="VolumeMute">Без звука</button>
-      <button data-key="MediaPlayPause">⏯</button>
-      <button data-key="MediaPrev">⏮</button>
-      <button data-key="MediaNext">⏭</button>
+      <button data-key="VolumeDown">🔉 −</button><button data-key="VolumeUp">🔊 +</button><button data-key="VolumeMute">Без звука</button>
+      <button data-key="MediaPlayPause">⏯</button><button data-key="MediaPrev">⏮</button><button data-key="MediaNext">⏭</button>
     </div>
   </div>
   <input id="kbInput" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
 
-  <!-- menu -->
+  <!-- dock: always at hand during a session -->
+  <nav id="dock">
+    <button id="dockScreen" class="on"><svg viewBox="0 0 24 24"><path d="M3 5h18v11H3zM9 19h6v1.5H9z"/></svg><span>Экран</span></button>
+    <button id="filesBtn"><svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></svg><span>Файлы</span></button>
+    <button id="termBtn"><svg viewBox="0 0 24 24"><path d="M3 4h18v16H3zm3 4.5 4 3.5-4 3.5V8.5zM11 15h6v1.5h-6z"/></svg><span>Терминал</span></button>
+    <button id="kbBtn"><svg viewBox="0 0 24 24"><path d="M2 6h20v12H2zm2 2v8h16V8H4zm1 1h2v2H5zm3 0h2v2H8zm3 0h2v2h-2zm3 0h2v2h-2zm3 0h2v2h-2zM5 12h2v2H5zm3 0h2v2H8zm3 0h2v2h-2zm3 0h2v2h-2zm3 0h2v2h-2zM7 15h10v1H7z"/></svg><span>Клавиши</span></button>
+    <button id="menuBtn"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg><span>Ещё</span></button>
+  </nav>
+
+  <!-- "Ещё": compact tool grid -->
   <div id="menu" class="sheet" hidden>
+    <div class="handle"></div>
+    <div class="grid tools">
+      <button id="powerBtn"><i>⏻</i>Питание</button>
+      <button id="settingsBtn"><i>⚙</i>Настройки</button>
+      <button id="macrosBtn"><i>⚡</i>Макросы</button>
+      <button id="logBtn"><i>📜</i>Журнал</button>
+      <button id="shotBtn"><i>📷</i>Снимок</button>
+      <button id="pasteBtn"><i>📋</i>Вставить</button>
+      <button id="linkBtn"><i>🔗</i>Ссылка</button>
+      <button id="hintsBtn"><i>👆</i>Жесты</button>
+      <button id="castBtn" hidden><i>📱</i>Трансляция</button>
+      <button id="fsBtn"><i>⛶</i>Весь экран</button>
+      <button id="zoomReset"><i>1:1</i>Масштаб</button>
+      <button id="termMenuBtn" hidden></button>
+    </div>
+    <button id="pcClipBtn" class="row" hidden>📋 Буфер ПК: <span id="pcClipText" class="muted"></span></button>
+    <div id="castBox" hidden><label class="row switch" id="muteRow" hidden><span>Заглушить телефон на время трансляции</span><input type="checkbox" id="phoneMute"><i></i></label></div>
+  </div>
+
+  <!-- power -->
+  <div id="powerSheet" class="sheet" hidden>
     <div class="handle"></div>
     <div class="grid">
       <button data-cmd="reboot"><i>⟳</i>Перезагрузить</button>
@@ -167,132 +157,85 @@
       <button data-cmd="lock"><i>🔒</i>Блокировка</button>
     </div>
     <button data-cmd="cancel" class="row muted">Отменить выключение</button>
-    <hr>
-    <div class="seg" id="profile">
-      <span class="lbl">Качество</span>
-      <button data-profile="eco">Эконом</button>
-      <button data-profile="normal" class="on">Обычное</button>
-      <button data-profile="hq">Макс.</button>
-    </div>
-    <div class="seg" id="monitors" hidden>
-      <span class="lbl">Монитор</span>
-    </div>
-    <div class="grid tools">
-      <button id="termMenuBtn"><i>&gt;_</i>Claude / git</button>
-      <button id="filesBtn"><i>📁</i>Файлы</button>
-      <button id="macrosBtn"><i>⚡</i>Макросы</button>
-      <button id="logBtn"><i>📜</i>Журнал</button>
-    </div>
-    <div class="grid tools">
-      <button id="shotBtn"><i>📷</i>Снимок</button>
-      <button id="pasteBtn"><i>📋</i>Вставить текст</button>
-      <button id="linkBtn"><i>🔗</i>Открыть ссылку</button>
-      <button id="hintsBtn"><i>👆</i>Жесты</button>
-    </div>
-    <button id="pcClipBtn" class="row" hidden>📋 Буфер ПК: <span id="pcClipText" class="muted"></span></button>
-    <label class="row switch"><span>Качество по сети: Wi-Fi — обычное, мобильная — эконом</span><input type="checkbox" id="autoProfile"><i></i></label>
-    <div id="castBox" hidden>
-      <button id="castBtn" class="row accent">📱 Транслировать экран телефона на ПК</button>
-      <label class="row switch" id="muteRow" hidden><span>Заглушить телефон на время трансляции</span><input type="checkbox" id="phoneMute"><i></i></label>
-    </div>
-    <label class="row switch"><span>Режим тачпада</span><input type="checkbox" id="trackpad"><i></i></label>
-    <button id="zoomReset" class="row">Сбросить масштаб</button>
-    <button id="fsBtn" class="row">На весь экран</button>
-    <div class="seg" id="theme">
-      <span class="lbl">Тема</span>
-      <button data-theme="midnight" class="on">Полночь</button>
-      <button data-theme="aurora">Аврора</button>
-      <button data-theme="sunset">Закат</button>
-      <button data-theme="oled">OLED</button>
-      <button data-theme="light">Светлая</button>
-    </div>
-    <div class="seg" id="accent">
-      <span class="lbl">Цвет</span>
-      <button data-accent="#4f8cff" style="--sw:#4f8cff"></button>
-      <button data-accent="#38d070" style="--sw:#38d070"></button>
-      <button data-accent="#a06bff" style="--sw:#a06bff"></button>
-      <button data-accent="#ff8a3d" style="--sw:#ff8a3d"></button>
-      <button data-accent="#ff4f8b" style="--sw:#ff4f8b"></button>
-    </div>
-    <label class="row switch"><span>Звуки</span><input type="checkbox" id="sfx"><i></i></label>
-    <label class="row switch"><span>Вибрация</span><input type="checkbox" id="haptic"><i></i></label>
-    <button id="logoutBtn" class="row muted">Сменить секрет</button>
-    <div class="stats"><span id="stats"></span><canvas id="spark" width="220" height="52"></canvas></div>
   </div>
 
-  <!-- terminal: Claude Code / PowerShell with quick buttons and git -->
-  <section id="termPanel" hidden>
+  <!-- settings page -->
+  <section id="settingsPage" class="page" hidden>
+    <header class="tbar"><button class="icon back" data-close="settingsPage"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button><h2>Настройки</h2></header>
+    <div class="pbody">
+      <h3>Картинка</h3>
+      <div class="seg" id="profile"><span class="lbl">Качество</span><button data-profile="eco">Эконом</button><button data-profile="normal" class="on">Обычное</button><button data-profile="hq">Макс.</button></div>
+      <label class="row switch"><span>По сети: Wi-Fi — обычное, мобильная — эконом</span><input type="checkbox" id="autoProfile"><i></i></label>
+      <div class="seg" id="monitors" hidden><span class="lbl">Монитор</span></div>
+      <h3>Управление</h3>
+      <label class="row switch"><span>Режим тачпада</span><input type="checkbox" id="trackpad"><i></i></label>
+      <label class="row switch"><span>Вибрация</span><input type="checkbox" id="haptic"><i></i></label>
+      <label class="row switch"><span>Звуки</span><input type="checkbox" id="sfx"><i></i></label>
+      <h3>Оформление</h3>
+      <div class="seg" id="theme"><span class="lbl">Тема</span><button data-theme="midnight" class="on">Полночь</button><button data-theme="aurora">Аврора</button><button data-theme="sunset">Закат</button><button data-theme="oled">OLED</button><button data-theme="light">Светлая</button></div>
+      <div class="seg" id="accent"><span class="lbl">Цвет</span>
+        <button data-accent="#4f8cff" style="--sw:#4f8cff"></button><button data-accent="#38d070" style="--sw:#38d070"></button><button data-accent="#a06bff" style="--sw:#a06bff"></button><button data-accent="#ff8a3d" style="--sw:#ff8a3d"></button><button data-accent="#ff4f8b" style="--sw:#ff4f8b"></button>
+      </div>
+      <h3>Связь</h3>
+      <div class="stats"><span id="stats"></span><canvas id="spark" width="220" height="52"></canvas></div>
+      <button id="logoutBtn" class="row muted">Сменить секрет / привязать заново</button>
+    </div>
+  </section>
+
+  <!-- files page: explorer -->
+  <section id="filesPage" class="page" hidden>
     <header class="tbar">
-      <button id="termBack" class="icon" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>
+      <button class="icon back" data-close="filesPage"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>
+      <div id="crumbs" class="crumbs"></div>
+      <button id="fView" class="icon" title="Вид">▦</button>
+      <button id="fSelect" class="icon" title="Выделить">☑</button>
+    </header>
+    <div id="fList" class="flist page-list"></div>
+    <div id="fProgress" class="muted fprog" hidden></div>
+    <div class="fbar" id="fBar">
+      <label class="fb" for="fileInput">⬆<span>Сюда</span></label><input id="fileInput" type="file" multiple hidden>
+      <button class="fb" id="fNew">📁+<span>Папка</span></button>
+      <button class="fb" id="fPaste" hidden>📥<span>Вставить</span></button>
+      <button class="fb" id="fTermHere">&gt;_<span>Терминал</span></button>
+      <button class="fb" id="fReveal">🗔<span>На ПК</span></button>
+    </div>
+    <div class="fbar sel" id="fSelBar" hidden>
+      <button class="fb" id="fOpenPC">▶<span>Открыть</span></button>
+      <button class="fb" id="fDownload">⬇<span>Скачать</span></button>
+      <button class="fb" id="fRename">✎<span>Имя</span></button>
+      <button class="fb" id="fCut">✂<span>Вырезать</span></button>
+      <button class="fb" id="fCopy">⧉<span>Копия</span></button>
+      <button class="fb danger" id="fDelete">🗑<span>Удалить</span></button>
+      <button class="fb" id="fCancelSel">✕<span>Отмена</span></button>
+    </div>
+  </section>
+
+  <!-- terminal -->
+  <section id="termPanel" class="page" hidden>
+    <header class="tbar">
+      <button id="termBack" class="icon back"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>
       <div class="tabs" id="termTabs"></div>
       <button id="termNew" class="icon" title="Новая сессия">＋</button>
     </header>
     <div id="termHost"></div>
     <div class="trow" id="termQuick">
-      <button data-send="/rc\r">/rc</button>
-      <button data-send="/help\r">/help</button>
-      <button data-send="/clear\r">/clear</button>
-      <button data-send="\r">Enter</button>
-      <button data-send="\x1b">Esc</button>
-      <button data-send="\x03">Ctrl+C</button>
-      <button data-send="\x1b[A">↑</button>
-      <button data-send="\x1b[B">↓</button>
-      <button data-send="\t">Tab</button>
-      <button data-send="y\r">y</button>
-      <button data-send="n\r">n</button>
+      <button data-send="/rc\r">/rc</button><button data-send="/help\r">/help</button><button data-send="/clear\r">/clear</button>
+      <button data-send="\r">Enter</button><button data-send="\x1b">Esc</button><button data-send="\x03">Ctrl+C</button>
+      <button data-send="\x1b[A">↑</button><button data-send="\x1b[B">↓</button><button data-send="\t">Tab</button><button data-send="y\r">y</button><button data-send="n\r">n</button>
       <button id="termQuickEdit" title="Свои кнопки">✎</button>
     </div>
     <div class="trow" id="termGit">
-      <button data-cmd="git status">status</button>
-      <button data-cmd="git pull">pull</button>
-      <button data-cmd="git push">push</button>
-      <button data-cmd="git log --oneline -15">log</button>
-      <button data-cmd="git diff --stat">diff</button>
-      <button data-cmd="git add -A && git commit -m &quot;update&quot;">commit</button>
-      <button data-cmd="git stash">stash</button>
-      <button data-cmd="claude">claude</button>
+      <button data-cmd="git status">status</button><button data-cmd="git pull">pull</button><button data-cmd="git push">push</button>
+      <button data-cmd="git log --oneline -15">log</button><button data-cmd="git diff --stat">diff</button>
+      <button data-cmd="git add -A && git commit -m &quot;update&quot;">commit</button><button data-cmd="git stash">stash</button><button data-cmd="claude">claude</button>
     </div>
-    <div class="tinput">
-      <input id="termLine" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="команда или сообщение для Claude… (Enter — отправить)">
-      <button id="termSend" class="btn primary">➤</button>
-    </div>
+    <div class="tinput"><input id="termLine" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="команда или сообщение для Claude… (Enter — отправить)"><button id="termSend" class="btn primary">➤</button></div>
   </section>
 
-  <!-- files -->
-  <div id="filesDlg" class="modal" hidden>
-    <div class="box files">
-      <p id="filesTitle">Файлы на ПК</p>
-      <div class="frow">
-        <button id="filesUp" class="btn">↑ Вверх</button>
-        <label class="btn primary" for="fileInput" id="uploadLbl">⬆ Отправить сюда</label>
-        <input id="fileInput" type="file" multiple hidden>
-      </div>
-      <div id="filesList" class="flist"></div>
-      <div id="filesProgress" class="muted"></div>
-      <div class="actions"><button id="filesClose" class="btn">Закрыть</button></div>
-    </div>
-  </div>
-
-  <!-- macros -->
-  <div id="macrosDlg" class="modal" hidden>
-    <div class="box">
-      <p>Макросы</p>
-      <div id="macroList" class="flist"></div>
-      <textarea id="macroEdit" rows="6" placeholder="Название в первой строке, затем шаги:
-keys: Meta,r
-text: notepad
-key: Enter
-wait: 500
-url: https://youtube.com
-shell: git pull"></textarea>
-      <div class="actions"><button id="macroSave" class="btn primary">Сохранить</button><button id="macroClose" class="btn">Закрыть</button></div>
-    </div>
-  </div>
-
-  <!-- image viewer (photos from the PC, screenshots) -->
+  <!-- image viewer -->
   <div id="imgView" hidden>
     <header class="tbar">
-      <button id="imgBack" class="icon"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>
+      <button id="imgBack" class="icon back"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>
       <div class="tabs"><span id="imgName" class="imgname"></span></div>
       <button id="imgSave" class="btn primary">Сохранить</button>
     </header>
@@ -300,54 +243,24 @@ shell: git pull"></textarea>
     <p id="imgHint" class="muted">щипок — масштаб · двойное касание — 100% / по размеру</p>
   </div>
 
-  <!-- event log -->
-  <div id="logDlg" class="modal" hidden>
-    <div class="box">
-      <p>Журнал событий</p>
-      <div id="logList" class="flist mono"></div>
-      <div class="actions"><button id="logClose" class="btn">Закрыть</button></div>
-    </div>
-  </div>
-
-  <!-- paste / link dialog -->
-  <div id="textDlg" class="modal" hidden>
-    <div class="box">
-      <p id="textDlgTitle">Вставить текст на ПК</p>
-      <textarea id="textDlgInput" rows="5" placeholder="Текст появится на ПК там, где курсор"></textarea>
-      <div class="actions">
-        <button id="textDlgNo" class="btn">Отмена</button>
-        <button id="textDlgYes" class="btn primary">Отправить</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- gesture hints (first run) -->
-  <div id="hints" class="modal" hidden>
-    <div class="box hints">
-      <p>Как управлять</p>
-      <ul>
-        <li><b>Касание</b> — клик, <b>двойное</b> — двойной клик</li>
-        <li><b>Долгое нажатие</b> — правая кнопка</li>
-        <li><b>Ведёте пальцем</b> — перетаскивание</li>
-        <li><b>Два пальца вверх/вниз</b> — прокрутка</li>
-        <li><b>Щипок</b> — масштаб, два пальца — сдвиг</li>
-        <li><b>⌨</b> — клавиатура и быстрые кнопки, <b>☰</b> — меню</li>
-      </ul>
-      <div class="actions"><button id="hintsOk" class="btn primary">Понятно</button></div>
-    </div>
-  </div>
-
-  <!-- confirm dialog -->
-  <div id="confirm" class="modal" hidden>
-    <div class="box">
-      <p id="confirmText"></p>
-      <div class="actions">
-        <button id="confirmNo" class="btn">Отмена</button>
-        <button id="confirmYes" class="btn danger">Да</button>
-      </div>
-    </div>
-  </div>
-
+  <!-- dialogs -->
+  <div id="macrosDlg" class="modal" hidden><div class="box"><p>Макросы</p><div id="macroList" class="flist"></div>
+    <textarea id="macroEdit" rows="6" placeholder="Название в первой строке, затем шаги:
+keys: Meta,r
+text: notepad
+key: Enter
+wait: 500
+url: https://youtube.com
+shell: git pull"></textarea>
+    <div class="actions"><button id="macroSave" class="btn primary">Сохранить</button><button id="macroClose" class="btn">Закрыть</button></div></div></div>
+  <div id="logDlg" class="modal" hidden><div class="box"><p>Журнал событий</p><div id="logList" class="flist mono"></div><div class="actions"><button id="logClose" class="btn">Закрыть</button></div></div></div>
+  <div id="textDlg" class="modal" hidden><div class="box"><p id="textDlgTitle">Вставить текст на ПК</p><textarea id="textDlgInput" rows="5"></textarea>
+    <div class="actions"><button id="textDlgNo" class="btn">Отмена</button><button id="textDlgYes" class="btn primary">Отправить</button></div></div></div>
+  <div id="hints" class="modal" hidden><div class="box hints"><p>Как управлять</p><ul>
+    <li><b>Касание</b> — клик, <b>двойное</b> — двойной клик</li><li><b>Долгое нажатие</b> — правая кнопка</li><li><b>Ведёте пальцем</b> — перетаскивание</li>
+    <li><b>Два пальца вверх/вниз</b> — прокрутка</li><li><b>Щипок</b> — масштаб, два пальца — сдвиг</li><li>Внизу док: Файлы, Терминал, Клавиши, Ещё</li></ul>
+    <div class="actions"><button id="hintsOk" class="btn primary">Понятно</button></div></div></div>
+  <div id="confirm" class="modal" hidden><div class="box"><p id="confirmText"></p><div class="actions"><button id="confirmNo" class="btn">Отмена</button><button id="confirmYes" class="btn danger">Да</button></div></div></div>
   <div id="toast" hidden></div>
 </section>
 
