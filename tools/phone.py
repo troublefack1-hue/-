@@ -20,6 +20,7 @@ Talks to the PC Remote relay on this machine (http://127.0.0.1:8787) with the se
 %LOCALAPPDATA%\\pc-remote\\config.json. The phone must be paired and have
 "Файлы телефона доступны для ПК" switched on.
 """
+import re
 import json
 import os
 import sys
@@ -171,6 +172,9 @@ def tree(path: str, depth: int, prefix: str = "", level: int = 0):
 
 
 def main(argv):
+    # a path Git Bash already rewrote (C:/Program Files/Git/sdcard/x): give the phone its own path back
+    argv = [re.sub(r"^[A-Za-z]:[/\\](?:[^/\\]+[/\\])*?Git([/\\](?:sdcard|storage)(?:[/\\].*)?)$",
+                   lambda m: m.group(1).replace("\\", "/"), a) for a in argv]
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
         return

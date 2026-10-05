@@ -1,4 +1,4 @@
-# phone — the phone's files from the PC, through PC Remote (no Python needed).
+﻿# phone — the phone's files from the PC, through PC Remote (no Python needed).
 # Installed by PC Remote into %LOCALAPPDATA%\pc-remote\bin; `phone --help` for usage.
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

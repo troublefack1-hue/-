@@ -1,3 +1,5 @@
 #!/bin/sh
 # Git Bash wrapper: `phone ls /sdcard/DCIM`
+# Git Bash rewrites /sdcard/x into C:/Program Files/Git/sdcard/x for Windows programs: keep phone paths as typed
+export MSYS_NO_PATHCONV=1
 exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$(dirname "$0")/phone.ps1")" "$@"
