@@ -56,7 +56,13 @@ def main():
     ap.add_argument("--version-name", default="1.0")
     ap.add_argument("--keystore", help="signing keystore (default: out/pcremote.keystore, created if missing)")
     ap.add_argument("--ks-pass", default="pcremote")
+    ap.add_argument("--project", help="app folder with AndroidManifest.xml, res/, src/ (default: this folder)")
+    ap.add_argument("--extra-src", action="append", default=[], help="extra Java file or folder shared from another app")
+    ap.add_argument("--native-libs", help="folder with <abi>/*.so to pack as lib/<abi>/")
+    ap.add_argument("--out-name", default="pcremote.apk")
     args = ap.parse_args()
+    PROJECT = Path(args.project).resolve() if args.project else HERE
+    OUT = HERE / "out"
     sdk = find_sdk(args.sdk)
     bt = newest(sdk / "build-tools")
     platform = newest(sdk / "platforms")
@@ -67,24 +73,27 @@ def main():
     d8, apksigner = bt / f"d8{bat}", bt / f"apksigner{bat}"
     print(f"SDK {sdk}\nbuild-tools {bt.name}, platform {platform.name}")
 
-    build = HERE / "build"
-    out = HERE / "out"
+    build = PROJECT / "build"
+    out = OUT
     shutil.rmtree(build, ignore_errors=True)
     for d in ("res", "gen", "classes", "dex"):
         (build / d).mkdir(parents=True)
     out.mkdir(exist_ok=True)
 
     # 1. resources + manifest -> base apk and R.java
-    run([aapt2, "compile", "--dir", HERE / "res", "-o", build / "res.zip"])
+    run([aapt2, "compile", "--dir", PROJECT / "res", "-o", build / "res.zip"])
     run([aapt2, "link", "-o", build / "base.apk", "-I", android_jar,
-         "--manifest", HERE / "AndroidManifest.xml", "--java", build / "gen",
+         "--manifest", PROJECT / "AndroidManifest.xml", "--java", build / "gen",
          "--min-sdk-version", "24", "--target-sdk-version", "33",
          "--version-code", str(args.version_code), "--version-name", args.version_name,
          build / "res.zip"])
 
     # 2. java -> classes
-    sources = glob.glob(str(HERE / "src" / "**" / "*.java"), recursive=True) + \
+    sources = glob.glob(str(PROJECT / "src" / "**" / "*.java"), recursive=True) + \
         glob.glob(str(build / "gen" / "**" / "R.java"), recursive=True)
+    for extra in args.extra_src:
+        ep = Path(extra)
+        sources += glob.glob(str(ep / "**" / "*.java"), recursive=True) if ep.is_dir() else [str(ep)]
     run(["javac", "-source", "11", "-target", "11", "-Xlint:-options", "-encoding", "UTF-8", "-nowarn",
          "-classpath", android_jar, "-d", build / "classes", *sources])
 
@@ -97,6 +106,10 @@ def main():
     shutil.copy(build / "base.apk", unsigned)
     with zipfile.ZipFile(unsigned, "a", zipfile.ZIP_DEFLATED) as z:
         z.write(build / "dex" / "classes.dex", "classes.dex")
+        if args.native_libs:
+            for so in sorted(Path(args.native_libs).glob("*/*.so")):
+                z.write(so, f"lib/{so.parent.name}/{so.name}")
+                print("  +", f"lib/{so.parent.name}/{so.name}")
     aligned = build / "aligned.apk"
     run([zipalign, "-f", "4", unsigned, aligned])
 
@@ -106,7 +119,7 @@ def main():
         run(["keytool", "-genkeypair", "-v", "-keystore", ks, "-storepass", pw, "-keypass", pw,
              "-alias", "pcremote", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
              "-dname", "CN=pc-remote"])
-    apk = out / "pcremote.apk"
+    apk = out / args.out_name
     run([apksigner, "sign", "--ks", ks, "--ks-pass", f"pass:{pw}", "--key-pass", f"pass:{pw}",
          "--ks-key-alias", "pcremote", "--out", apk, aligned])
     run([apksigner, "verify", apk])

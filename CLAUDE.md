@@ -13,6 +13,8 @@
 | `web/` | клиент телефона: `index.html`, `app.js`, `style.css`, `cc_ru.js` (перевод фраз Claude Code); грузится в WebView с ПК |
 | `pcapp/` | окно PC Remote (tkinter), трей, плавающий значок, обновления (`updater.py`), докачка компонентов (`deps.py`), команда `phone` (`phone_cli/`) |
 | `android/` | исходники APK без Gradle (`build.py`: aapt2/javac/d8/apksigner); фоновый сервис с WebSocket, звонок, трансляция, виджет, файлы телефона (`PhoneFs.java`), загрузчик |
+| `android-net/` | второе приложение «Интернет через ПК» (`pcremote-net.apk`): VpnService + hev-socks5-tunnel (JNI `hev.htproxy.TProxyService`, .so собирает CI через ndk-build) → `Socks5Server` → `NetMux` → `/ws/net`; плитка `NetTile`; общие `Pinned/Pairing/WsClient/Updater` из `android/` через `--extra-src` |
+| `relay/netproxy.py` | серверная часть «Интернет через ПК»: мультиплекс TCP/UDP, DNS с блок-листами, `/ws/net` |
 | `tests/` | атаки на relay, сквозной тест файлов телефона, smoke-тест веб-клиента в браузере |
 | `tools/phone.py` | та же команда `phone` на Python (для тестов и не-Windows) |
 
@@ -36,6 +38,8 @@ python pcapp/main.py          # окно PC Remote; данные в %LOCALAPPDAT
 python tests/test_relay_attacks.py      # 38 проверок relay, включая атаки
 python tests/test_phone_cli.py          # файлы телефона: relay + fake_phone + tools/phone.py
 python tests/test_web_smoke.py          # веб-клиент в настоящем браузере (нужен playwright + chromium)
+python tests/test_netproxy.py           # «Интернет через ПК», серверная часть: 17 проверок
+python tests/test_netmux_jvm.py         # телефонная часть (NetMux + SOCKS5) на обычной JVM против relay по TLS; нужны javac/java и curl
 node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 ```
 Коммит только когда всё зелёное: один красный коммит уже ломал страницу телефона.
@@ -51,6 +55,7 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 - Звук в Opus (`agent/opus.py`: ffmpeg libopus → Ogg → пакеты, кадр `0x0A`) и декодирование на телефоне через WebCodecs `AudioDecoder`; задержка и дропы на реальном канале.
 - Переключение устройства вывода на время прослушивания (`agent/audio_out.py`, IPolicyConfig через comtypes): что на реальном ПК список устройств приходит в настройки, переключение и возврат срабатывают, loopback берётся с нового устройства.
 - Профиль «10 КБ/с» (`tiny`): автопереход по `self.bw` в `video_step`, один кадр в полёте; проверить на ограниченном канале (например, `tc`/NetLimiter).
+- «Интернет через ПК» на живом телефоне: сборка .so в CI (ndk-build, ANDROID_NDK_LATEST_HOME), запрос разрешения VPN, что трафик реально идёт через ПК (проверить внешний IP телефона = IP VPN ПК), QUIC/UDP, плитка в шторке, возврат на прямой интернет при выключенном ПК, батарея. Исключение самого приложения из туннеля (`addDisallowedApplication`) обязательно, иначе петля.
 - QR-привязка: QR в окне ПК (`draw_qr`, пакет `qrcode`) → ссылка `pcremote://pair?host=…&code=…&fp=…&lan=…` → `MainActivity.handlePairLink`; телефон сверяет отпечаток сертификата с `fp` до отправки кода. Проверить со стандартной камерой и с MIUI-сканером.
 - Обновление exe (`updater.apply` через batch-скрипт) и APK (подпись: нужны секреты `ANDROID_KEYSTORE_B64`/`ANDROID_KEYSTORE_PASS` в репозитории, иначе временный ключ).
 

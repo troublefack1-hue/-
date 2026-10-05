@@ -41,18 +41,21 @@ public final class Updater {
     }
 
     /** Newer release than {@code current} (e.g. "1.7"), or null. */
-    public static Info check(String current) throws IOException {
+    public static Info check(String current) throws IOException { return check(current, ASSET); }
+
+    /** The same for another app built from this repository (its APK is a different release asset). */
+    public static Info check(String current, String asset) throws IOException {
         String json = get(API);
         String tag = Pairing.jsonString(json, "tag_name");
         if (tag == null) return null;
         String version = tag.startsWith("v") ? tag.substring(1) : tag;
         if (compare(version, current) <= 0) return null;
-        int i = json.indexOf("\"name\":\"" + ASSET + "\"");
-        if (i < 0) i = json.indexOf("\"name\": \"" + ASSET + "\"");
+        int i = json.indexOf("\"name\":\"" + asset + "\"");
+        if (i < 0) i = json.indexOf("\"name\": \"" + asset + "\"");
         if (i < 0) return null;
         int u = json.indexOf("browser_download_url", i);
         String url = u < 0 ? null : Pairing.jsonString(json.substring(u - 1), "browser_download_url");
-        return url == null ? null : new Info(version, url, publishedSha256(json, ASSET));
+        return url == null ? null : new Info(version, url, publishedSha256(json, asset));
     }
 
     public static File download(String url, File dir) throws IOException { return download(url, dir, null); }

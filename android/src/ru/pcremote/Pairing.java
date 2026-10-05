@@ -61,8 +61,19 @@ public final class Pairing {
         }
     }
 
+    /** A bare number field ("dns_blocked": 12) as text, or null. */
+    public static String jsonNumber(String json, String key) {
+        int k = json.indexOf("\"" + key + "\"");
+        if (k < 0) return null;
+        int c = json.indexOf(':', k) + 1;
+        while (c < json.length() && json.charAt(c) == ' ') c++;
+        int e = c;
+        while (e < json.length() && (Character.isDigit(json.charAt(e)) || json.charAt(e) == '-' || json.charAt(e) == '.')) e++;
+        return e > c ? json.substring(c, e) : null;
+    }
+
     /** Minimal extraction of a string field from a flat JSON object. */
-    static String jsonString(String json, String key) {
+    public static String jsonString(String json, String key) {
         int k = json.indexOf("\"" + key + "\"");
         if (k < 0) return null;
         int q1 = json.indexOf('"', json.indexOf(':', k) + 1);
