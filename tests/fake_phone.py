@@ -6,9 +6,10 @@ def resolve(p):
     p=(p or "/sdcard").replace("\\","/")
     if p.startswith("/sdcard"): p=p[7:]
     f=os.path.realpath(os.path.join(ROOT, p.lstrip("/")))
-    if not (f+"/").startswith(os.path.realpath(ROOT)+"/") and f!=os.path.realpath(ROOT): raise ValueError("outside storage")
+    root=os.path.realpath(ROOT)   # compare whole components: on Windows realpath gives "\\", "+'/'" never matched
+    if os.path.normcase(os.path.commonpath([f, root])) != os.path.normcase(root): raise ValueError("outside storage")
     return f
-def show(f): return "/sdcard"+os.path.realpath(f)[len(os.path.realpath(ROOT)):]
+def show(f): return "/sdcard"+os.path.realpath(f)[len(os.path.realpath(ROOT)):].replace(os.sep, "/")
 def item(f): st=os.stat(f); return {"name":os.path.basename(f),"path":show(f),"dir":os.path.isdir(f),"size":0 if os.path.isdir(f) else st.st_size,"mtime":int(st.st_mtime)}
 async def main():
     writes={}

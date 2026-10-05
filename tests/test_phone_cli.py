@@ -21,9 +21,11 @@ async def main():
     app = relay.make_app(cfg); runner = web.AppRunner(app, access_log=None); await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", PORT).start()
     phone = subprocess.Popen([sys.executable, str(HERE / "fake_phone.py"), str(root), U])
-    env = {**os.environ, "PC_REMOTE_DATA": str(data), "PC_REMOTE_URL": U}
+    # the child writes UTF-8 and we read UTF-8, whatever the console code page (cp1251 turned "привет" into junk)
+    env = {**os.environ, "PC_REMOTE_DATA": str(data), "PC_REMOTE_URL": U, "PYTHONIOENCODING": "utf-8"}
     def cli(*args, check=True):
-        r = subprocess.run([sys.executable, str(HERE.parent / "tools" / "phone.py"), *args], capture_output=True, text=True, env=env, timeout=60)
+        r = subprocess.run([sys.executable, str(HERE.parent / "tools" / "phone.py"), *args], capture_output=True,
+                           encoding="utf-8", errors="replace", env=env, timeout=60)
         return r.returncode, r.stdout, r.stderr
     try:
         for _ in range(50):
