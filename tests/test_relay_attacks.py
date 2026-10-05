@@ -130,7 +130,23 @@ async def main():
         await asyncio.sleep(0.2)
         report("ATTACK 9b: oversized phone frame closes that phone", closed and owner not in hub.phones)
         hub.on_cast = None
-        await guest.close(); await pc2.close()
+        await guest.close(); await owner.close(); await asyncio.sleep(0.2)
+        # ---------- background service connection is not a viewer and gets no frames ----------
+        bg = await ws_auth(s, "/ws/phone"); await bg.receive()
+        await drain(pc2)
+        await bg.send_str(json.dumps({"t": "hello_phone", "model": "Service", "fs": False, "bg": True})); await asyncio.sleep(0.2)
+        vmsgs = [json.loads(m) for m in await drain(pc2) if '"viewers"' in m]
+        report("background service -> viewers 0", vmsgs and vmsgs[-1]["n"] == 0, str(vmsgs[-1:]))
+        await bg.send_str(json.dumps({"t": "profile", "name": "idle"})); await asyncio.sleep(0.2)
+        report("background service's profile is not forwarded", not any('"profile"' in m for m in await drain(pc2)))
+        await pc2.send_bytes(b"\x01FRAME"); await asyncio.sleep(0.2)
+        got_bin = False
+        try:
+            m = await asyncio.wait_for(bg.receive(), 0.4); got_bin = m.type == aiohttp.WSMsgType.BINARY
+        except asyncio.TimeoutError:
+            pass
+        report("background service receives no video frames", not got_bin)
+        await bg.close(); await pc2.close()
 
     await runner.cleanup()
     print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")

@@ -251,6 +251,7 @@ class Hub:
         # phone files for the PC: the Android service announces hello_phone{"fs":true}; the local
         # `phone` CLI asks /api/phone, we forward to that phone and wait for its answer
         self.fs_phone = None
+        self.bg: set = set()          # the phones' background services: no picture/sound, no viewer count
         self.pfs_pending: dict = {}   # id -> {"fut": Future, "chunks": asyncio.Queue | None}
         self.pfs_seq = 0
 
@@ -333,6 +334,8 @@ class Hub:
     async def broadcast_phones(self, data, binary=False):
         dead = []
         for ws in self.phones:
+            if binary and ws in self.bg:
+                continue
             try:
                 if binary:
                     await ws.send_bytes(data)
@@ -377,7 +380,7 @@ class Hub:
             self.on_phones(len(self.phones), [n for n in names if n])
 
     async def tell_pc_viewers(self):
-        await self.send_pc(json.dumps({"t": "viewers", "n": len(self.phones)}))
+        await self.send_pc(json.dumps({"t": "viewers", "n": len([p for p in self.phones if p not in self.bg])}))
 
     # --- /ws/pc -----------------------------------------------------------
     async def pc_handler(self, request: web.Request):
@@ -460,6 +463,9 @@ class Hub:
                         self.phone_names[ws] = str(hp.get("model", ""))[:40]
                         if hp.get("fs") and ws not in self.guests:
                             self.fs_phone = ws
+                        if hp.get("bg"):
+                            self.bg.add(ws)
+                            await self.tell_pc_viewers()   # it is not a viewer
                     except ValueError:
                         pass
                     self.phones_changed()
@@ -490,10 +496,13 @@ class Hub:
                             continue
                     except ValueError:
                         continue
+                if ws in self.bg and (msg.data.startswith('{"t":"profile"') or msg.data.startswith('{"t": "profile"')):
+                    continue
                 await self.send_pc(msg.data)  # everything else goes to the agent
         finally:
             self.phones.discard(ws)
             self.guests.discard(ws)
+            self.bg.discard(ws)
             if ws is self.fs_phone:
                 self.fs_phone = None
                 for p in list(self.pfs_pending.values()):

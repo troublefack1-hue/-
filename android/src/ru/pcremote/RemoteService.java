@@ -148,7 +148,7 @@ public class RemoteService extends Service {
                 c.connect();
                 c.sendText("{\"t\":\"auth\",\"token\":\"" + prefs.getString("secret", "") + "\"}");
                 c.sendText("{\"t\":\"profile\",\"name\":\"idle\"}");   // no video for the background link
-                c.sendText("{\"t\":\"hello_phone\",\"model\":\"" + Build.MODEL.replace('"', ' ') + "\",\"fs\":" + filesAllowed() + "}");
+                c.sendText("{\"t\":\"hello_phone\",\"model\":\"" + Build.MODEL.replace('"', ' ') + "\",\"fs\":" + filesAllowed() + ",\"bg\":true}");
                 ws = c; delay = 1000;
                 final WsClient cc = c;
                 fs = new PhoneFs(new PhoneFs.Sender() {
