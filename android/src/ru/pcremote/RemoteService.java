@@ -40,7 +40,7 @@ import java.nio.ByteBuffer;
 public class RemoteService extends Service {
     public static final String ACTION_START = "start", ACTION_CAST = "cast", ACTION_CAST_STOP = "cast_stop",
             ACTION_MUTE = "mute", ACTION_STOP_RING = "stop_ring";
-    public static final String CHANNEL = "pcremote", CHANNEL_RING = "pcremote_ring";
+    public static final String CHANNEL = "pcremote", CHANNEL_RING = "pcremote_ring", CHANNEL_PC = "pcremote_pc";
     private static final int NOTIF_ID = 1;
     public static volatile boolean casting = false, phoneMuted = false;
 
@@ -67,6 +67,7 @@ public class RemoteService extends Service {
         NotificationChannel ring = new NotificationChannel(CHANNEL_RING, "Поиск телефона", NotificationManager.IMPORTANCE_HIGH);
         ring.setSound(null, null);
         nm.createNotificationChannel(ring);
+        nm.createNotificationChannel(new NotificationChannel(CHANNEL_PC, "Уведомления с ПК", NotificationManager.IMPORTANCE_DEFAULT));
         startForeground(NOTIF_ID, notification("Связь с ПК", "ожидание команд"));
         keeper = new Thread(this::keepConnected, "ws-keeper");
         keeper.setDaemon(true); keeper.start();
@@ -175,6 +176,8 @@ public class RemoteService extends Service {
             } catch (Exception ignored) {}
         } else if (s.startsWith("{\"t\":\"attention\"")) {
             try { attention(new JSONObject(s)); } catch (Exception ignored) {}
+        } else if (s.startsWith("{\"t\":\"pc_notify\"")) {
+            try { pcNotify(new JSONObject(s)); } catch (Exception ignored) {}
         }
     }
 
@@ -226,6 +229,21 @@ public class RemoteService extends Service {
 
     private static void toast(Context ctx, String msg) {
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show());
+    }
+
+    private int pcNotifyId = 100;
+
+    /** A Windows toast, mirrored on the phone. */
+    private void pcNotify(JSONObject ev) {
+        if (MainActivity.visible) return;   // the page shows it as a pill while the app is open
+        String app = ev.optString("app", "ПК"), title = ev.optString("title", ""), text = ev.optString("text", "");
+        Intent open = new Intent(this, MainActivity.class);
+        Notification n = new Notification.Builder(this, CHANNEL_PC)
+                .setSmallIcon(R.drawable.ic_launcher).setContentTitle(app + (title.isEmpty() ? "" : ": " + title))
+                .setContentText(text.isEmpty() ? title : text).setStyle(new Notification.BigTextStyle().bigText(text.isEmpty() ? title : text))
+                .setContentIntent(PendingIntent.getActivity(this, 6, open, PendingIntent.FLAG_IMMUTABLE)).setAutoCancel(true).setGroup("pc").build();
+        pcNotifyId = 100 + (pcNotifyId - 99) % 20;
+        getSystemService(NotificationManager.class).notify(pcNotifyId, n);
     }
 
     private void termSend(String id, String data) {

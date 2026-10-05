@@ -32,6 +32,8 @@ import mss
 from PIL import Image
 
 import extras
+import notify_watch
+import video
 
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.json"
@@ -478,6 +480,19 @@ class Screen:
         self._last_hash = b""
         self.zone = None          # {"x","y","w","h"} fractions of the monitor: streamed in full resolution
         self._zone_hash = b""
+        self.profile_name = "normal"
+
+    def grab_raw(self):
+        """Raw pixels for the video encoder: (bytes, pix_fmt, (w, h)); None if unchanged."""
+        shot = self.sct.grab(self.mon)
+        digest = hashlib.blake2b(shot.raw, digest_size=8).digest()
+        if digest == self._last_hash:
+            return None
+        self._last_hash = digest
+        if self.size == shot.size:
+            return bytes(shot.raw), "bgra", shot.size
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX").resize(self.size, Image.BILINEAR)
+        return img.tobytes(), "rgb24", self.size
 
     def set_zone(self, rect):
         if not rect:
@@ -549,6 +564,7 @@ class Screen:
         p = PROFILES.get(name)
         if not p:
             return
+        self.profile_name = name
         if name == "normal":
             p = dict(p, fps=self.cfg["fps"], max_width=self.cfg["max_width"], quality=self.cfg["quality"])
         self.profile = dict(p)
@@ -677,7 +693,12 @@ class Agent:
         self.stats = extras.Stats()
         self.timers = extras.Timers(run_command)
         self.downloads = extras.Downloads(os.path.join(os.path.expanduser("~"), "Downloads", "PC Remote"), self._notify)
-        self.rules = {"on_connect_monitor": False, "on_disconnect_lock": False, "on_disconnect_monitor_off": False}
+        self.rules = {"on_connect_monitor": False, "on_disconnect_lock": False, "on_disconnect_monitor_off": False, "notify_phone": True}
+        self.notifs = notify_watch.NotifWatcher()
+        self.ffmpeg = video.find_ffmpeg()
+        self.codecs: list = []      # what the phone can decode: ["avc1", "vp8"]
+        self.video_gen = 0          # bump to restart the encoder (new viewer -> key frame)
+        self.enc = None
         self.audio_source = "speakers"
         self._ws = None
 
@@ -704,13 +725,14 @@ class Agent:
                         log.info("connected to relay")
                         delay = 2
                         await ws.send_str(json.dumps({
-                            "t": "hello", "w": self.screen.size[0], "h": self.screen.size[1],
+                            "t": "hello", "w": self.screen.size[0], "h": self.screen.size[1], "video": bool(self.ffmpeg),
                             "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available(),
                             "monitors": len(self.screen.sct.monitors) - 1, "monitor": self.screen.mon_index,
                             "term": Term.available(), "shells": list(Term.shells().keys()),
                             "projects": self.cfg.get("projects", []), **{"volume": self.volume.get()}}))
                         tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws)),
-                                 asyncio.create_task(self.watch_clipboard(ws)), asyncio.create_task(self.stream_zone(ws))]
+                                 asyncio.create_task(self.watch_clipboard(ws)), asyncio.create_task(self.stream_zone(ws)),
+                                 asyncio.create_task(self.watch_notifications(ws))]
                         try:
                             await self.receive(ws)
                         finally:
@@ -736,6 +758,11 @@ class Agent:
                 continue
             interval = 1 / fps
             t0 = time.monotonic()
+            codec = video.pick_codec(self.codecs, self.ffmpeg) if (self.ffmpeg and self.codecs) else None
+            if codec:
+                await self.video_step(ws, codec, fps, interval, t0)
+                continue
+            self.video_close()
             # wait until the phone has drawn the previous frame (or 1 s)
             try:
                 await asyncio.wait_for(self.ack.wait(), 1.0)
@@ -771,6 +798,64 @@ class Agent:
             if int(last_sent) % 3 == 0:
                 self.screen.adapt(self.rtt)
             await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
+
+    def video_close(self):
+        if self.enc:
+            self.enc.close()
+            self.enc = None
+
+    async def video_step(self, ws, codec: str, fps: int, interval: float, t0: float):
+        """One tick of the encoded-video path: grab raw pixels, feed ffmpeg, ship what it produced."""
+        loop = asyncio.get_running_loop()
+        try:
+            raw = await loop.run_in_executor(None, self.screen.grab_raw)
+            if not self.screen_ok:
+                self.screen_ok = True
+                await ws.send_str(json.dumps({"t": "screen", "ok": True}))
+        except Exception as e:  # noqa: BLE001
+            if self.screen_ok:
+                self.screen_ok = False
+                log.warning("screen capture failed: %s", e)
+                await ws.send_str(json.dumps({"t": "screen", "ok": False, "error": str(e)[:120]}))
+            self.video_close()
+            await asyncio.sleep(3)
+            try:
+                self.screen.reinit()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        if raw is None:
+            # nothing changed: the decoder keeps the last picture; still restart on demand
+            if self.enc and (self.enc.key[4] != self.video_gen or not self.enc.alive):
+                self.video_close()
+                self.screen._last_hash = b""
+            await asyncio.sleep(interval)
+            return
+        data, pix_fmt, size = raw
+        key = (codec, size, fps, self.screen.profile_name, self.video_gen, pix_fmt)
+        if self.enc is None or self.enc.key != key or not self.enc.alive:
+            self.video_close()
+            try:
+                self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], fps, self.screen.profile_name, pix_fmt)
+                self.enc.key = key
+                log.info("video: %s %dx%d @%d (%s)", codec, size[0], size[1], fps, self.screen.profile_name)
+            except Exception as e:  # noqa: BLE001
+                log.warning("ffmpeg failed to start: %s", e)
+                self.ffmpeg = None   # JPEG from now on
+                return
+        if not await loop.run_in_executor(None, self.enc.write, data):
+            self.video_close()
+            return
+        cid = 1 if codec == "h264" else 2
+        while True:
+            item = self.enc.get(0.0 if self.enc.out.qsize() else min(0.25, interval))
+            if item is None:
+                break
+            is_key, pts, payload = item
+            await ws.send_bytes(video.FRAME_VIDEO_CODEC + bytes([1 if is_key else 0, cid]) + pts.to_bytes(8, "little") + payload)
+            if not self.enc.out.qsize():
+                break
+        await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
 
     async def stream_zone(self, ws):
         """The HD zone goes beside the normal picture, at its own (higher) frame rate."""
@@ -810,6 +895,21 @@ class Agent:
                     continue
             chunk = await loop.run_in_executor(None, self.audio.read)
             await ws.send_bytes(chunk)
+
+    async def watch_notifications(self, ws):
+        """Windows toasts -> the phone, as long as the rule is on."""
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(4.0)
+            if not self.rules.get("notify_phone", True) or not self.notifs.available:
+                continue
+            try:
+                items = await loop.run_in_executor(None, self.notifs.poll)
+            except Exception as e:  # noqa: BLE001
+                log.debug("notifications: %s", e)
+                continue
+            for n in items:
+                await ws.send_str(json.dumps({"t": "pc_notify", **n}))
 
     async def watch_clipboard(self, ws):
         """PC clipboard -> phone, whenever it changes while someone is watching."""
@@ -877,6 +977,7 @@ class Agent:
                     self.viewers = int(ev.get("n", 0))
                     if self.viewers:
                         self.screen._last_hash = b""  # force a fresh frame
+                        self.video_gen += 1           # and a key frame for the newcomer
                     # keep the PC awake while someone is connected (monitor may be off)
                     ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
                     kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if self.viewers else 0))
@@ -916,6 +1017,12 @@ class Agent:
                     else:
                         self.screen.set_zone(ev)
                         await ws.send_str(json.dumps({"t": "zone", "rect": self.screen.zone}))
+                elif t == "video":
+                    if ev.get("off"):
+                        self.codecs = []
+                    elif isinstance(ev.get("codecs"), list):
+                        self.codecs = [c for c in ev["codecs"] if c in ("avc1", "vp8")][:4]
+                    self.video_gen += 1
                 elif t == "audio_source":
                     self.audio_source = "mic" if ev.get("src") == "mic" else "speakers"
                     if self.audio.stream:

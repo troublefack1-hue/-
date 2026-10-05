@@ -11,6 +11,7 @@ import hashlib
 import importlib
 import json
 import logging
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -61,33 +62,66 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def fetch_components(data_dir: Path, status) -> int:
-    """Download components from the latest release manifest. Returns how many were fetched."""
-    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
-                                 headers={"User-Agent": "pc-remote", "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        rel = json.load(r)
-    url = next((a["browser_download_url"] for a in rel.get("assets", []) if a.get("name") == "components.json"), None)
-    if not url:
-        return 0
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "pc-remote"}), timeout=15) as r:
-        manifest = json.load(r)
+# Components every install wants, even without a components.json in the release.
+# ffmpeg turns the screen into real H.264/VP8 video (agent/video.py); ~100 MB once.
+BUILTIN = [
+    {"name": "ffmpeg/ffmpeg.exe", "url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+     "zip_member": "bin/ffmpeg.exe", "windows": True, "label": "ffmpeg (видео-поток, ~100 МБ)"},
+]
+
+
+def fetch_components(data_dir: Path, status, want_video: bool = True) -> int:
+    """Download components from the latest release manifest (+ built-ins). Returns how many were fetched."""
+    manifest = {"files": []}
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
+                                     headers={"User-Agent": "pc-remote", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            rel = json.load(r)
+        url = next((a["browser_download_url"] for a in rel.get("assets", []) if a.get("name") == "components.json"), None)
+        if url:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "pc-remote"}), timeout=15) as r:
+                manifest = json.load(r)
+    except Exception as e:  # noqa: BLE001
+        log.info("components manifest: %s", e)
+    files = list(manifest.get("files", []))
+    if want_video:
+        files += [c for c in BUILTIN if not (c.get("windows") and sys.platform != "win32")]
     root = data_dir / "components"
     root.mkdir(parents=True, exist_ok=True)
     got = 0
-    for item in manifest.get("files", []):
+    for item in files:
         name = str(item.get("name", "")).replace("\\", "/").lstrip("/")
         if not name or ".." in name or not item.get("url"):
             continue
         dest = root / name
         if dest.exists() and (not item.get("sha256") or _sha256(dest) == item["sha256"]):
             continue
-        status(f"докачиваю {name}…")
+        status(f"докачиваю {item.get('label') or name}…")
         dest.parent.mkdir(parents=True, exist_ok=True)
         part = dest.with_suffix(dest.suffix + ".part")
         with urllib.request.urlopen(urllib.request.Request(item["url"], headers={"User-Agent": "pc-remote"}), timeout=120) as r, open(part, "wb") as f:
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
             while chunk := r.read(1 << 17):
                 f.write(chunk)
+                done += len(chunk)
+                if total and done % (8 << 20) < (1 << 17):
+                    status(f"докачиваю {item.get('label') or name}: {done * 100 // total}%")
+        if item.get("zip_member"):
+            # take one file out of the archive (e.g. bin/ffmpeg.exe), whatever the top folder is called
+            import zipfile
+            member = str(item["zip_member"]).replace("\\", "/")
+            with zipfile.ZipFile(part) as z:
+                hit = next((n for n in z.namelist() if n.replace("\\", "/").endswith("/" + member) or n == member), None)
+                if not hit:
+                    part.unlink(missing_ok=True)
+                    log.warning("component %s: %s not in archive", name, member)
+                    continue
+                with z.open(hit) as src, open(dest.with_suffix(dest.suffix + ".tmp"), "wb") as out:
+                    shutil.copyfileobj(src, out, 1 << 20)
+            part.unlink(missing_ok=True)
+            part = dest.with_suffix(dest.suffix + ".tmp")
         if item.get("sha256") and _sha256(part) != item["sha256"]:
             part.unlink(missing_ok=True)
             log.warning("component %s: checksum mismatch", name)
@@ -102,15 +136,15 @@ def fetch_components(data_dir: Path, status) -> int:
     return got
 
 
-def ensure(data_dir: Path, status=lambda s: None) -> None:
+def ensure(data_dir: Path, status=lambda s: None, want_video: bool = True) -> None:
     """Call from a background thread at start. `status` gets short Russian progress lines."""
     if not getattr(sys, "frozen", False):
         miss = missing_packages()
         if miss:
             install_packages(miss, status)
     try:
-        n = fetch_components(data_dir, status)
-        if n:
-            status(f"докачано компонентов: {n}")
+        n = fetch_components(data_dir, status, want_video)
+        status(f"докачано компонентов: {n}" if n else "компоненты на месте")
     except Exception as e:  # noqa: BLE001
         log.info("components: %s", e)
+        status(f"компоненты: {e}")

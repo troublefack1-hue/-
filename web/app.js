@@ -183,7 +183,7 @@
         renderMonitors();
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
-        sendRules(); sendAudioSrc();
+        sendRules(); sendAudioSrc(); if (m.video) announceCodecs();
       } else if (m.t === "cmd_result") {
         const okText = { open_url: "Ссылка открыта на ПК", print: "Отправлено на печать", kill: "Процесс завершён", monitor_off: "Экран выключен", monitor_on: "Экран включён", powerplan: "Схема питания изменена" };
         show(m.result === "ok" ? (okText[m.cmd] || "Команда отправлена на ПК") : "Ошибка: " + m.result);
@@ -211,6 +211,8 @@
         pingSentAt = Date.now(); send({ t: "ping" });
         setTimeout(() => { if (Date.now() - lastMsgAt > 1400 && ws && ws.readyState === 1) { backoff = 300; ws.close(); } }, 1500);
       } else if (m.t === "term_out") { termOut(m.id, m.data);
+      } else if (m.t === "pc_notify") {
+        if (!document.hidden) { pill(`${m.app}: ${m.title || m.text}`.slice(0, 80), false, 4000); buzz(15); }
       } else if (m.t === "attention") {
         if ($("termPanel").hidden || document.hidden) { pill("Claude ждёт ответа — откройте терминал", true, 5000); buzz([30, 60, 30]); sfx("ok"); }
       } else if (m.t === "term_exit") { termExit(m.id);
@@ -273,6 +275,7 @@
     if (type === 1) drawFrame(new Blob([buf.slice(1)], { type: "image/jpeg" }));
     else if (type === 2) playAudio(buf);
     else if (type === 5) drawZone(buf);
+    else if (type === 9) decodeFrame(buf);
   }
   const img = new Image();
   let pendingUrl = null;
@@ -293,6 +296,49 @@
     };
     img.src = url;
   }
+  // ---- encoded video (H.264 / VP8 via WebCodecs): the PC asks what we can decode
+  let codecList = null, vdec = null, vcodec = 0, waitKey = true;
+  async function probeCodecs() {
+    if (codecList) return codecList;
+    codecList = [];
+    if (!("VideoDecoder" in window)) return codecList;
+    for (const [name, cfg] of [["avc1", { codec: "avc1.42E01E" }], ["vp8", { codec: "vp8" }]]) {
+      try { const r = await VideoDecoder.isConfigSupported({ ...cfg, codedWidth: 1280, codedHeight: 720 }); if (r.supported) codecList.push(name); } catch {}
+    }
+    return codecList;
+  }
+  async function announceCodecs() {
+    const list = prefs.video === false ? [] : await probeCodecs();
+    send({ t: "video", codecs: list });
+  }
+  function ensureDecoder(codec) {
+    if (vdec && vcodec === codec && vdec.state !== "closed") return true;
+    try { vdec && vdec.close(); } catch {}
+    try {
+      vdec = new VideoDecoder({
+        output: (f) => {
+          if (f.displayWidth !== frameW || f.displayHeight !== frameH) { frameW = f.displayWidth; frameH = f.displayHeight; canvas.width = frameW; canvas.height = frameH; layout(); }
+          ctx.drawImage(f, 0, 0, frameW, frameH); paintZone(); f.close();
+          canvas.classList.add("live"); frames++; lastFrameAt = Date.now();
+        },
+        error: (e) => { console.warn("video decoder", e); try { vdec.close(); } catch {} vdec = null; send({ t: "video", off: true }); show("Видео недоступно, перехожу на JPEG"); },
+      });
+      vdec.configure(codec === 1 ? { codec: "avc1.42E01E", optimizeForLatency: true } : { codec: "vp8", optimizeForLatency: true });
+      vcodec = codec; waitKey = true; return true;
+    } catch (e) { vdec = null; send({ t: "video", off: true }); return false; }
+  }
+  function decodeFrame(buf) {
+    const u = new Uint8Array(buf); const key = !!(u[1] & 1), codec = u[2];
+    const v = new DataView(buf); const pts = Number(v.getBigUint64(3, true));
+    if (!ensureDecoder(codec)) return;
+    if (waitKey && !key) return;
+    waitKey = false;
+    try { vdec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: pts, data: buf.slice(11) })); }
+    catch (e) { waitKey = true; }
+  }
+  $("videoOn").checked = prefs.video !== false;
+  $("videoOn").onchange = () => { prefs.video = $("videoOn").checked; savePrefs(); announceCodecs(); };
+
   // HD zone: a native-resolution patch drawn over the base picture
   let zoneRect = null, zoneImg = null, zoneUrl = null;
   function drawZone(buf) {
@@ -628,10 +674,12 @@
     b.classList.toggle("on", b.dataset.src === (prefs.audioSrc || "speakers"));
     b.onclick = () => { prefs.audioSrc = b.dataset.src; savePrefs(); document.querySelectorAll("#audioSrc button").forEach((x) => x.classList.toggle("on", x === b)); sendAudioSrc(); buzz(8); };
   });
-  const RULES = { ruleMonOn: "on_connect_monitor", ruleMonOff: "on_disconnect_monitor_off", ruleLock: "on_disconnect_lock" };
-  const sendRules = () => { const r = { t: "rules" }; for (const k in RULES) r[RULES[k]] = !!(prefs.rules || {})[RULES[k]]; send(r); };
+  const RULES = { ruleMonOn: "on_connect_monitor", ruleMonOff: "on_disconnect_monitor_off", ruleLock: "on_disconnect_lock", ruleNotify: "notify_phone" };
+  const RULE_DEFAULT = { notify_phone: true };
+  const ruleVal = (k) => { const v = (prefs.rules || {})[k]; return v === undefined ? !!RULE_DEFAULT[k] : !!v; };
+  const sendRules = () => { const r = { t: "rules" }; for (const k in RULES) r[RULES[k]] = ruleVal(RULES[k]); send(r); };
   for (const id in RULES) {
-    $(id).checked = !!(prefs.rules || {})[RULES[id]];
+    $(id).checked = ruleVal(RULES[id]);
     $(id).onchange = () => { prefs.rules = prefs.rules || {}; prefs.rules[RULES[id]] = $(id).checked; savePrefs(); sendRules(); };
   }
   $("sfx").checked = prefs.sfx === true; $("haptic").checked = prefs.haptic !== false;

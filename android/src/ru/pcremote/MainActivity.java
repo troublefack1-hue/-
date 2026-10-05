@@ -37,6 +37,7 @@ import android.widget.TextView;
 public class MainActivity extends Activity {
     private static final int BG = 0xFF0F1117, PANEL = 0xFF181B24, TEXT = 0xFFEEF0F5, MUTED = 0xFF8E94A6, ACCENT = 0xFF4F8CFF;
     private static final int REQ_CAST = 7;
+    public static volatile boolean visible = false;
     private SharedPreferences prefs;
     private WebView web;
     private Tunnel tunnel;
@@ -83,6 +84,9 @@ public class MainActivity extends Activity {
         MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAST);
     }
+
+    @Override protected void onResume() { super.onResume(); visible = true; }
+    @Override protected void onPause() { super.onPause(); visible = false; }
 
     @Override protected void onActivityResult(int req, int code, Intent data) {
         super.onActivityResult(req, code, data);

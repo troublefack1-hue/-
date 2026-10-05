@@ -93,6 +93,8 @@ def load_config() -> dict:
     cfg.setdefault("fps", 12)
     cfg.setdefault("monitor", 1)
     cfg.setdefault("auto_update", True)
+    cfg.setdefault("video", True)
+    os.environ.setdefault("PC_REMOTE_DATA", str(DATA))
     home = Path.home()
     cfg.setdefault("projects", [])                                   # folders for the terminal panel
     cfg.setdefault("upload_dir", str(home / "Downloads" / "PC Remote"))  # files from the phone
@@ -536,7 +538,19 @@ class App(tk.Tk):
         self.deps_msg.grid(row=9, column=0, sticky="w", **pad)
         ttk.Button(f, text="Выход", command=self.quit_app).grid(row=9, column=1, sticky="e", **pad)
         self.bubble = Bubble(self)
-        threading.Thread(target=lambda: deps.ensure(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m})), daemon=True).start()
+        self.video_on = tk.BooleanVar(value=cfg.get("video", True))
+        ttk.Checkbutton(f, text="Видео-поток H.264/VP8 (докачивает ffmpeg, ~100 МБ)", variable=self.video_on,
+                        command=self.toggle_video).grid(row=8, column=1, sticky="w", **pad)
+
+        def deps_worker():
+            deps.ensure(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}), want_video=self.cfg.get("video", True))
+            try:
+                import video as video_mod
+                if self.backend.agent:
+                    self.backend.agent.ffmpeg = video_mod.find_ffmpeg() if self.cfg.get("video", True) else None
+            except Exception:  # noqa: BLE001
+                pass
+        threading.Thread(target=deps_worker, daemon=True).start()
         if "--updated" in sys.argv:
             self.after(1500, lambda: self.tray.notify(f"Обновлено до версии {updater.current_version()}"))
 
@@ -630,6 +644,20 @@ class App(tk.Tk):
             self.iconify()
         if self.bubble_on.get():
             self.bubble.deiconify(); self.bubble.lift()
+
+    def toggle_video(self):
+        self.cfg["video"] = self.video_on.get()
+        save_config(self.cfg)
+        try:
+            import video as video_mod
+            if not self.backend.agent:
+                return
+            self.backend.agent.ffmpeg = video_mod.find_ffmpeg() if self.cfg["video"] else None
+            if self.cfg["video"] and not self.backend.agent.ffmpeg:
+                threading.Thread(target=lambda: (deps.ensure(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}), True),
+                                                 setattr(self.backend.agent, "ffmpeg", video_mod.find_ffmpeg())), daemon=True).start()
+        except Exception:  # noqa: BLE001
+            log.exception("video toggle")
 
     def toggle_bubble(self):
         self.cfg["bubble"] = self.bubble_on.get()
