@@ -390,3 +390,17 @@ body.guest #screen { pointer-events: none; } body.guest #navbar { display: none;
 .grid button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel2)); }
 #ccList .it .n { white-space: normal; } #ccList .it .n b { white-space: normal; }
 .small { font-size: 12px; margin: 0 4px; } .small code { background: var(--panel2); padding: 1px 5px; border-radius: 5px; }
+
+/* ---- "Ещё": grouped, scrolls when the screen is short (landscape) ---- */
+.sheet { max-height: calc(100vh - 58px - 48px - env(safe-area-inset-bottom)); overflow-y: auto; scrollbar-width: none; }
+.sheet::-webkit-scrollbar { display: none; }
+.tools-wrap .sec { margin: 6px 4px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.tools-wrap .sec:first-child { margin-top: 0; }
+.tools-wrap .grid.tools + .sec { margin-top: 10px; }
+.tools-wrap .grid.tools button { padding: 10px 2px; }
+.tools-wrap .grid.tools button i { font-size: 20px; }
+@media (max-height: 520px) {
+  .tools-wrap { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+  .tools-wrap .grid.tools { display: contents; }
+  .tools-wrap .sec { display: none; }
+}

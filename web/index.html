@@ -136,22 +136,31 @@
   <!-- "Ещё": compact tool grid -->
   <div id="menu" class="sheet" hidden>
     <div class="handle"></div>
-    <div class="grid tools">
-      <button id="powerBtn"><i>⏻</i>Питание</button>
-      <button id="settingsBtn"><i>⚙</i>Настройки</button>
-      <button id="macrosBtn"><i>⚡</i>Макросы</button>
-      <button id="sysBtn"><i>🖥</i>Система</button>
-      <button id="winBtn"><i>🗗</i>Окна</button>
-      <button id="zoneBtn"><i>🎬</i>HD-зона</button>
-      <button id="shotBtn"><i>📷</i>Снимок</button>
-      <button id="pasteBtn"><i>📋</i>Вставить</button>
-      <button id="linkBtn"><i>🔗</i>Ссылка</button>
-      <button id="sayBtn"><i>🗣</i>Сказать</button>
-      <button id="hintsBtn"><i>👆</i>Жесты</button>
-      <button id="castBtn" hidden><i>📱</i>Трансляция</button>
-      <button id="fsBtn"><i>⛶</i>Весь экран</button>
-      <button id="zoomReset"><i>1:1</i>Масштаб</button>
-      <button id="termMenuBtn" hidden></button>
+    <div class="tools-wrap">
+      <p class="sec">ПК</p>
+      <div class="grid tools">
+        <button id="powerBtn"><i>⏻</i>Питание</button>
+        <button id="winBtn"><i>🗗</i>Окна</button>
+        <button id="zoneBtn"><i>🎬</i>HD-зона</button>
+        <button id="sysBtn"><i>🖥</i>Система</button>
+      </div>
+      <p class="sec">Обмен</p>
+      <div class="grid tools">
+        <button id="shotBtn"><i>📷</i>Снимок</button>
+        <button id="pasteBtn"><i>📋</i>Вставить</button>
+        <button id="linkBtn"><i>🔗</i>Ссылка</button>
+        <button id="sayBtn"><i>🗣</i>Сказать</button>
+        <button id="castBtn" hidden><i>📱</i>Трансляция</button>
+      </div>
+      <p class="sec">Приложение</p>
+      <div class="grid tools">
+        <button id="settingsBtn"><i>⚙</i>Настройки</button>
+        <button id="macrosBtn"><i>⚡</i>Макросы</button>
+        <button id="hintsBtn"><i>👆</i>Жесты</button>
+        <button id="fsBtn"><i>⛶</i>Весь экран</button>
+        <button id="zoomReset"><i>1:1</i>Масштаб</button>
+        <button id="termMenuBtn" hidden></button>
+      </div>
     </div>
     <div class="vol" id="volRow" hidden>
       <button id="muteBtn" class="icon" title="Без звука"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg></button>
