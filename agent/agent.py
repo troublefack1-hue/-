@@ -985,6 +985,8 @@ class Agent:
                     if self.viewers:
                         self.screen._last_hash = b""  # force a fresh frame
                         self.video_gen += 1           # and a key frame for the newcomer
+                    else:
+                        self.codecs = []              # last viewer left: next one re-announces
                     # keep the PC awake while someone is connected (monitor may be off)
                     ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
                     kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if self.viewers else 0))
