@@ -185,6 +185,12 @@
       } else if (m.t === "cmd_result") {
         show(m.result === "ok" ? (m.cmd === "open_url" ? "Ссылка открыта на ПК" : "Команда отправлена на ПК") : "Ошибка: " + m.result);
         sfx(m.result === "ok" ? "ok" : "offline");
+      } else if (m.t === "volume" || (m.t === "hello" && m.volume)) {
+        const v = m.t === "hello" ? m.volume : m;
+        if (v.level != null) { $("volRow").hidden = false; if (!volDragging) { $("volRange").value = v.level; $("volVal").textContent = v.level; }
+          $("volRow").classList.toggle("muted", !!v.mute); }
+      } else if (m.t === "screen") {
+        $("noScreen").hidden = !!m.ok; if (!m.ok) pill("Экран ПК недоступен — управление работает", true, 4000);
       } else if (m.t === "net") {
         // the PC just toggled its VPN: probe now, reconnect in 1.5 s if it went quiet
         pill(m.vpn ? "VPN на ПК включён" : "VPN на ПК выключен", m.vpn);
@@ -436,6 +442,14 @@
   }, { passive: false });
   view.addEventListener("touchcancel", () => { clearTimeout(longTimer); longTimer = null; t0 = null; pinch = null; pts.clear(); });
   $("zoomReset").onclick = () => { zoom = 1; panX = panY = 0; applyTransform(); menu.hidden = true; };
+
+  // ---- volume slider (PC master volume via the agent)
+  let volDragging = false, volTimer = null;
+  $("volRange").addEventListener("input", () => { volDragging = true; $("volVal").textContent = $("volRange").value;
+    clearTimeout(volTimer); volTimer = setTimeout(() => send({ t: "volume", level: +$("volRange").value }), 120); });
+  $("volRange").addEventListener("change", () => { volDragging = false; send({ t: "volume", level: +$("volRange").value }); buzz(6); });
+  $("muteBtn").onclick = () => { send({ t: "volume", mute: !$("volRow").classList.contains("muted") }); buzz(8); };
+  $("menuBtn").addEventListener("click", () => { if (pcOnline) send({ t: "volume_get" }); });
 
   // ---- Android-style nav: ◁ back, ○ start menu, □ task view, ▽ minimize window; edge swipes
   const NAV = { back: () => tapKey("BrowserBack"), home: () => tapKey("Meta"), recent: () => send({ t: "combo", keys: ["Meta", "Tab"] }),

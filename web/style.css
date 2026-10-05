@@ -340,3 +340,10 @@ label.btn { display: block; }
 #navbar button:active { background: rgba(255,255,255,.18); transform: scale(.92); }
 #navbar[hidden] { display: none !important; }
 .edge-hint { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: color-mix(in srgb, var(--accent) 70%, transparent); z-index: 4; animation: fade .6s forwards; }
+
+/* ===================== volume ===================== */
+.vol { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r); }
+.vol input[type=range] { flex: 1; accent-color: var(--accent); height: 28px; }
+.vol #volVal { min-width: 28px; text-align: right; font-variant-numeric: tabular-nums; }
+.vol.muted #muteBtn { color: var(--bad); }
+#noScreen { background: var(--bg); z-index: 1; }

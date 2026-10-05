@@ -323,6 +323,50 @@ class Term:
             pass
 
 
+# -------------------------------------------------------------- volume ---
+
+class Volume:
+    """Master volume via Windows Core Audio (pycaw); falls back to media keys."""
+
+    def __init__(self):
+        self.ep = None
+        try:
+            from ctypes import POINTER, cast
+            from comtypes import CLSCTX_ALL
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            dev = AudioUtilities.GetSpeakers()
+            iface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            self.ep = cast(iface, POINTER(IAudioEndpointVolume))
+        except Exception as e:  # noqa: BLE001
+            log.info("pycaw unavailable (%s): volume via media keys only", e)
+
+    def get(self) -> dict:
+        if not self.ep:
+            return {"level": None, "mute": None}
+        try:
+            return {"level": int(round(self.ep.GetMasterVolumeLevelScalar() * 100)), "mute": bool(self.ep.GetMute())}
+        except Exception:  # noqa: BLE001
+            return {"level": None, "mute": None}
+
+    def set(self, level: int | None = None, mute: bool | None = None, inp: "Input | None" = None):
+        if self.ep:
+            try:
+                if level is not None:
+                    self.ep.SetMasterVolumeLevelScalar(max(0, min(100, int(level))) / 100, None)
+                if mute is not None:
+                    self.ep.SetMute(bool(mute), None)
+                return
+            except Exception as e:  # noqa: BLE001
+                log.warning("volume: %s", e)
+        if inp is not None:  # fallback: media keys
+            if mute is not None:
+                inp.key("VolumeMute", True); inp.key("VolumeMute", False)
+            elif level is not None:
+                for _ in range(3):
+                    inp.key("VolumeUp" if level >= 50 else "VolumeDown", True)
+                    inp.key("VolumeUp" if level >= 50 else "VolumeDown", False)
+
+
 # ----------------------------------------------------------- streaming ---
 
 class Screen:
@@ -373,8 +417,17 @@ class Screen:
             elif self.quality < top_q:
                 self.quality = min(top_q, self.quality + 5)
 
+    def reinit(self):
+        """Displays changed (monitor unplugged, resolution switch): start over."""
+        try:
+            self.sct.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self.sct = mss.mss()
+        self.set_monitor(self.mon_index)
+
     def grab(self) -> bytes | None:
-        """Return a JPEG, or None if the screen hasn't changed."""
+        """Return a JPEG, or None if the screen hasn't changed. Raises on capture failure."""
         shot = self.sct.grab(self.mon)
         digest = hashlib.blake2b(shot.raw, digest_size=8).digest()
         if digest == self._last_hash:
@@ -458,6 +511,8 @@ class Agent:
         self.sent_at = 0.0
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
         self.terms: dict[str, Term] = {}
+        self.volume = Volume()
+        self.screen_ok = True
 
     def ws_url(self) -> str:
         base = self.cfg["relay_url"].rstrip("/")
@@ -478,7 +533,7 @@ class Agent:
                             "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available(),
                             "monitors": len(self.screen.sct.monitors) - 1, "monitor": self.screen.mon_index,
                             "term": Term.available(), "shells": list(Term.shells().keys()),
-                            "projects": self.cfg.get("projects", [])}))
+                            "projects": self.cfg.get("projects", []), **{"volume": self.volume.get()}}))
                         tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws)),
                                  asyncio.create_task(self.watch_clipboard(ws))]
                         try:
@@ -511,7 +566,23 @@ class Agent:
                 await asyncio.wait_for(self.ack.wait(), 1.0)
             except asyncio.TimeoutError:
                 pass
-            jpeg = await loop.run_in_executor(None, self.screen.grab)
+            try:
+                jpeg = await loop.run_in_executor(None, self.screen.grab)
+                if not self.screen_ok:
+                    self.screen_ok = True
+                    await ws.send_str(json.dumps({"t": "screen", "ok": True}))
+            except Exception as e:  # noqa: BLE001
+                # monitor unplugged / displays reconfigured: tell the phone, retry every 3 s
+                if self.screen_ok:
+                    self.screen_ok = False
+                    log.warning("screen capture failed: %s", e)
+                    await ws.send_str(json.dumps({"t": "screen", "ok": False, "error": str(e)[:120]}))
+                await asyncio.sleep(3)
+                try:
+                    self.screen.reinit()
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
             if jpeg is None and time.monotonic() - last_sent < 2.0:
                 await asyncio.sleep(interval)
                 continue
@@ -601,6 +672,14 @@ class Agent:
                     self.viewers = int(ev.get("n", 0))
                     if self.viewers:
                         self.screen._last_hash = b""  # force a fresh frame
+                    # keep the PC awake while someone is connected (monitor may be off)
+                    ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+                    kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if self.viewers else 0))
+                elif t == "volume":
+                    self.volume.set(ev.get("level"), ev.get("mute"), self.input)
+                    await ws.send_str(json.dumps({"t": "volume", **self.volume.get()}))
+                elif t == "volume_get":
+                    await ws.send_str(json.dumps({"t": "volume", **self.volume.get()}))
                 elif t == "profile":
                     self.screen.set_profile(str(ev.get("name", "normal")))
                 elif t == "audio":

@@ -73,6 +73,7 @@
     <div id="cursor" hidden></div>
     <div id="zoomBadge" hidden></div>
     <div id="ecoBadge" hidden>эконом</div>
+    <div id="noScreen" class="center" hidden><p>🖥 Экран ПК сейчас недоступен</p><p class="muted">монитор отключён или перестраивается; управление, файлы и терминал работают</p></div>
     <nav id="navbar">
       <button data-nav="back" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 4 7 12l8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></svg></button>
       <button data-nav="home" title="Главное меню"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
@@ -148,6 +149,11 @@
       <button id="fsBtn"><i>⛶</i>Весь экран</button>
       <button id="zoomReset"><i>1:1</i>Масштаб</button>
       <button id="termMenuBtn" hidden></button>
+    </div>
+    <div class="vol" id="volRow" hidden>
+      <button id="muteBtn" class="icon" title="Без звука"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg></button>
+      <input id="volRange" type="range" min="0" max="100" value="50">
+      <span id="volVal" class="muted">50</span>
     </div>
     <button id="pcClipBtn" class="row" hidden>📋 Буфер ПК: <span id="pcClipText" class="muted"></span></button>
     <div id="castBox" hidden><label class="row switch" id="muteRow" hidden><span>Заглушить телефон на время трансляции</span><input type="checkbox" id="phoneMute"><i></i></label></div>
