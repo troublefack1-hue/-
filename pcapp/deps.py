@@ -66,8 +66,9 @@ def _sha256(path: Path) -> str:
 # Components every install wants, even without a components.json in the release.
 # ffmpeg turns the screen into real H.264/VP8 video (agent/video.py); ~100 MB once.
 BUILTIN = [
-    {"name": "ffmpeg/ffmpeg.exe", "url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
-     "zip_member": "bin/ffmpeg.exe", "windows": True, "label": "ffmpeg (видео-поток, ~100 МБ)"},
+    # GitHub (BtbN static GPL build: libx264 + nvenc/amf/qsv): gyan.dev crawled at ~50 KB/s here, GitHub ~2 MB/s
+    {"name": "ffmpeg/ffmpeg.exe", "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
+     "zip_member": "bin/ffmpeg.exe", "windows": True, "label": "ffmpeg (видео-поток, ~200 МБ)"},
 ]
 
 
