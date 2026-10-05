@@ -115,13 +115,16 @@ def main():
 
     ks = Path(args.keystore) if args.keystore else out / "pcremote.keystore"
     pw = args.ks_pass
+    # the password goes through the environment, so the printed commands never show it
+    ks_env = dict(os.environ, PCREMOTE_KS_PASS=pw)
     if not ks.exists():
-        run(["keytool", "-genkeypair", "-v", "-keystore", ks, "-storepass", pw, "-keypass", pw,
+        run(["keytool", "-genkeypair", "-v", "-keystore", ks,
+             "-storepass:env", "PCREMOTE_KS_PASS", "-keypass:env", "PCREMOTE_KS_PASS",
              "-alias", "pcremote", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
-             "-dname", "CN=pc-remote"])
+             "-dname", "CN=pc-remote"], env=ks_env)
     apk = out / args.out_name
-    run([apksigner, "sign", "--ks", ks, "--ks-pass", f"pass:{pw}", "--key-pass", f"pass:{pw}",
-         "--ks-key-alias", "pcremote", "--out", apk, aligned])
+    run([apksigner, "sign", "--ks", ks, "--ks-pass", "env:PCREMOTE_KS_PASS", "--key-pass", "env:PCREMOTE_KS_PASS",
+         "--ks-key-alias", "pcremote", "--out", apk, aligned], env=ks_env)
     run([apksigner, "verify", apk])
     # the version must really be inside: the app compares it with the release to offer updates
     badging = subprocess.run([str(aapt2), "dump", "badging", str(apk)], capture_output=True, text=True).stdout

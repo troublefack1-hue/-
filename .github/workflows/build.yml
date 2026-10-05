@@ -72,7 +72,59 @@ jobs:
           name: exe
           path: dist/PC-Remote.exe
 
+  keystore:
+    # One permanent signing key for all three APKs, so updates install over the old version.
+    # The key is created once and kept in git only encrypted (android/release.keystore.enc,
+    # AES-256-CBC, PBKDF2 300000 iterations); the password is the KEY_PASSWORD secret.
+    # Only the encrypted file leaves this job (as an artifact); the plain keystore never does.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Create the keystore if the repository has none
+        env:
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEY_PASSWORD" ]; then echo "::error::KEY_PASSWORD secret is not set"; exit 1; fi
+          if [ -f android/release.keystore.enc ]; then echo "android/release.keystore.enc is in the repository"; exit 0; fi
+          umask 077
+          KS_DIR=$(mktemp -d)
+          trap 'rm -rf "$KS_DIR"' EXIT
+          keytool -genkeypair -storetype PKCS12 -keystore "$KS_DIR/release.keystore" \
+            -storepass:env KEY_PASSWORD -keypass:env KEY_PASSWORD \
+            -alias pcremote -keyalg RSA -keysize 3072 -validity 18263 -dname "CN=pc-remote"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 300000 -salt -pass env:KEY_PASSWORD \
+            -in "$KS_DIR/release.keystore" -out "$KS_DIR/release.keystore.enc"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch --depth=1 origin main
+            git checkout -q --detach FETCH_HEAD
+            if git cat-file -e HEAD:android/release.keystore.enc 2>/dev/null; then
+              echo "another run already committed the keystore, using it"; exit 0
+            fi
+            cp "$KS_DIR/release.keystore.enc" android/release.keystore.enc
+            git add android/release.keystore.enc
+            git commit -q -m "Ключ подписи APK (зашифрован, пароль в секрете KEY_PASSWORD)"
+            if git push origin HEAD:main; then exit 0; fi
+            git reset -q --hard FETCH_HEAD
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not push android/release.keystore.enc to main"; exit 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keystore-enc
+          path: android/release.keystore.enc
+          retention-days: 1
+
   apk:
+    needs: keystore
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,23 +132,24 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      # The signing key lives in repository secrets (Settings -> Secrets -> Actions):
-      #   ANDROID_KEYSTORE_B64  - the keystore file, base64
-      #   ANDROID_KEYSTORE_PASS - its password
-      # Without them a throwaway key is used: the APK installs, but self-update
-      # cannot replace an APK signed with a different key.
+      - uses: actions/download-artifact@v4
+        with:
+          name: keystore-enc
+          path: /tmp/keystore-enc
       - name: Signing key
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.keystore; echo "release key"; else echo "::warning::ANDROID_KEYSTORE_B64 secret not set, using a temporary key"; fi
+          umask 077
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 -pass env:KEY_PASSWORD \
+            -in /tmp/keystore-enc/release.keystore.enc -out /tmp/release.keystore
       - name: Build
         env:
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -f /tmp/release.keystore ]; then KS="--keystore /tmp/release.keystore --ks-pass $KS_PASS"; else KS=""; fi
+          KS=(--keystore /tmp/release.keystore --ks-pass "$KEY_PASSWORD")
           python3 android/build.py --sdk "$ANDROID_HOME" \
-            --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" $KS
+            --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" "${KS[@]}"
       - name: The PC's own signer (pcapp/apksign.py) must produce APKs apksigner accepts
         run: |
           pip install cryptography
@@ -111,6 +164,7 @@ jobs:
           path: android/out/pcremote.apk
 
   apk-net:
+    needs: keystore
     # «Интернет через ПК»: the second phone app. Its packet engine (hev-socks5-tunnel, MIT)
     # is built from source with the NDK that ships on the runner, at a pinned commit.
     runs-on: ubuntu-latest
@@ -128,26 +182,33 @@ jobs:
           NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
           "$NDK/ndk-build" -j4 APP_ABI="arm64-v8a armeabi-v7a" APP_PLATFORM=android-24 NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk APP_OPTIM=release APP_CFLAGS="-O3" NDK_TOOLCHAIN_VERSION=clang > /dev/null
           ls -la libs/*/
+      - uses: actions/download-artifact@v4
+        with:
+          name: keystore-enc
+          path: /tmp/keystore-enc
       - name: Signing key
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.keystore; echo "release key"; else echo "::warning::ANDROID_KEYSTORE_B64 secret not set, using a temporary key"; fi
+          umask 077
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 -pass env:KEY_PASSWORD \
+            -in /tmp/keystore-enc/release.keystore.enc -out /tmp/release.keystore
       - name: Build
         env:
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -f /tmp/release.keystore ]; then KS="--keystore /tmp/release.keystore --ks-pass $KS_PASS"; else KS=""; fi
+          KS=(--keystore /tmp/release.keystore --ks-pass "$KEY_PASSWORD")
           python3 android/build.py --sdk "$ANDROID_HOME" --project android-net --out-name pcremote-net.apk --native-libs hev/libs \
             --extra-src android/src/ru/pcremote/Pinned.java --extra-src android/src/ru/pcremote/Pairing.java \
             --extra-src android/src/ru/pcremote/WsClient.java --extra-src android/src/ru/pcremote/Updater.java --extra-src android/src/ru/pcremote/Paths.java \
-            --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" $KS
+            --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" "${KS[@]}"
       - uses: actions/upload-artifact@v4
         with:
           name: apk-net
           path: android/out/pcremote-net.apk
 
   apk-files:
+    needs: keystore
     # «Проводник»: the file manager. Pure Java, no native code.
     runs-on: ubuntu-latest
     steps:
@@ -156,19 +217,25 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: actions/download-artifact@v4
+        with:
+          name: keystore-enc
+          path: /tmp/keystore-enc
       - name: Signing key
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.keystore; echo "release key"; else echo "::warning::ANDROID_KEYSTORE_B64 secret not set, using a temporary key"; fi
+          umask 077
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 -pass env:KEY_PASSWORD \
+            -in /tmp/keystore-enc/release.keystore.enc -out /tmp/release.keystore
       - name: Build
         env:
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -f /tmp/release.keystore ]; then KS="--keystore /tmp/release.keystore --ks-pass $KS_PASS"; else KS=""; fi
+          KS=(--keystore /tmp/release.keystore --ks-pass "$KEY_PASSWORD")
           python3 android/build.py --sdk "$ANDROID_HOME" --project android-files --out-name pcremote-files.apk \
             --extra-src android/src/ru/pcremote/Pairing.java --extra-src android/src/ru/pcremote/Updater.java --extra-src android/src/ru/pcremote/Pinned.java --extra-src android/src/ru/pcremote/Paths.java \
-            --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" $KS
+            --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" "${KS[@]}"
       - uses: actions/upload-artifact@v4
         with:
           name: apk-files
@@ -181,6 +248,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: out
+      - name: All three APKs are signed with the same certificate
+        run: |
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          for apk in out/apk/pcremote.apk out/apk-net/pcremote-net.apk out/apk-files/pcremote-files.apk; do
+            "$APKSIGNER" verify --print-certs "$apk" | grep -m1 "certificate SHA-256 digest" | tee -a /tmp/certs
+          done
+          [ "$(sed 's/.*: //' /tmp/certs | sort -u | wc -l)" = 1 ] || { echo "::error::APKs are signed with different keys"; exit 1; }
       - name: Checksums
         run: |
           (cd out/exe && sha256sum PC-Remote.exe) > out/SHA256SUMS
