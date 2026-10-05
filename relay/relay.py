@@ -907,6 +907,16 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_post("/api/phone", hub.phone_files_handler)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", hub.options_handler)
     app.router.add_static("/static", WEB_DIR)
+
+    @web.middleware
+    async def no_stale_client(request, handler):
+        # after a PC update the phone must pick the new page up at once: always revalidate
+        # (aiohttp answers 304 from ETag/Last-Modified, so this costs nothing)
+        resp = await handler(request)
+        if request.path == "/" or request.path.startswith("/static/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    app.middlewares.append(no_stale_client)
     if cfg["ca_cert"]:
         # direct mode: the phone's browser downloads and installs this once
         async def ca(_request):
