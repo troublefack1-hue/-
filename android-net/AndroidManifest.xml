@@ -4,6 +4,9 @@
 >
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="33" />
+    <!-- pair once for every app: «Мой ПК» shares its pairing with our other apps (same signing key only) -->
+    <permission android:name="ru.pcremote.permission.PAIRING" android:protectionLevel="signature" />
+    <uses-permission android:name="ru.pcremote.permission.PAIRING" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

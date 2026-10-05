@@ -52,6 +52,7 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = getSharedPreferences("pcnet", MODE_PRIVATE);
+        PairShare.sync(this);   // paired in «Мой ПК» = paired here
         getWindow().setStatusBarColor(BG); getWindow().setNavigationBarColor(BG);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);

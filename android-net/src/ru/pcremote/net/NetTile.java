@@ -16,6 +16,7 @@ public class NetTile extends TileService {
     @Override public void onStopListening() { live = null; }
 
     @Override public void onClick() {
+        PairShare.sync(this);
         if (!getSharedPreferences("pcnet", MODE_PRIVATE).contains("secret") || VpnService.prepare(this) != null) {
             // not paired yet, or Android still has to ask for VPN consent: the activity handles both
             Intent i = new Intent(this, MainActivity.class).setAction(MainActivity.ACTION_TOGGLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

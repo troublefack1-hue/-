@@ -49,6 +49,7 @@ public class PcVpnService extends VpnService {
         super.onCreate();
         instance = this;
         prefs = getSharedPreferences("pcnet", MODE_PRIVATE);
+        PairShare.sync(this);
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Интернет через ПК", NotificationManager.IMPORTANCE_LOW));
     }
