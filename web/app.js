@@ -178,6 +178,7 @@
         pcHost = `${m.host || "ПК"} · ${m.w}×${m.h}`; pcAudio = !!m.audio;
         pill(`${m.host || "ПК"} · ${m.w}×${m.h}`);
         pcInfo = { term: !!m.term, shells: m.shells || ["shell"], projects: m.projects || [], monitors: m.monitors || 1, monitor: m.monitor || 1 };
+        if (m.volume) applyVolume(m.volume);
         $("termBtn").hidden = false;
         renderMonitors();
         $("audioBtn").hidden = !pcAudio;
@@ -185,10 +186,7 @@
       } else if (m.t === "cmd_result") {
         show(m.result === "ok" ? (m.cmd === "open_url" ? "Ссылка открыта на ПК" : "Команда отправлена на ПК") : "Ошибка: " + m.result);
         sfx(m.result === "ok" ? "ok" : "offline");
-      } else if (m.t === "volume" || (m.t === "hello" && m.volume)) {
-        const v = m.t === "hello" ? m.volume : m;
-        if (v.level != null) { $("volRow").hidden = false; if (!volDragging) { $("volRange").value = v.level; $("volVal").textContent = v.level; }
-          $("volRow").classList.toggle("muted", !!v.mute); }
+      } else if (m.t === "volume") { applyVolume(m);
       } else if (m.t === "screen") {
         $("noScreen").hidden = !!m.ok; if (!m.ok) pill("Экран ПК недоступен — управление работает", true, 4000);
       } else if (m.t === "net") {
@@ -445,6 +443,12 @@
 
   // ---- volume slider (PC master volume via the agent)
   let volDragging = false, volTimer = null;
+  function applyVolume(v) {
+    if (v.level == null) return;
+    $("volRow").hidden = false;
+    if (!volDragging) { $("volRange").value = v.level; $("volVal").textContent = v.level; }
+    $("volRow").classList.toggle("muted", !!v.mute);
+  }
   $("volRange").addEventListener("input", () => { volDragging = true; $("volVal").textContent = $("volRange").value;
     clearTimeout(volTimer); volTimer = setTimeout(() => send({ t: "volume", level: +$("volRange").value }), 120); });
   $("volRange").addEventListener("change", () => { volDragging = false; send({ t: "volume", level: +$("volRange").value }); buzz(6); });
