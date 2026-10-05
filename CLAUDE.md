@@ -85,10 +85,17 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 сначала найди причину в логах (`%LOCALAPPDATA%\pc-remote\pcapp.log`, отчёт с телефона из
 «Система → Диагностика → Сохранить отчёт на ПК», он попадает в папку загрузок), потом чини.
 
-### Шаг 0. Что уже скачано
-`PC-Remote.exe`, `pcremote.apk` («Мой ПК»), `pcremote-net.apk` («Интернет через ПК») из
-https://github.com/troublefack1-hue/-/releases/latest. Проверь суммы по `SHA256SUMS`:
-`Get-FileHash .\PC-Remote.exe` должен совпасть со строкой в файле.
+### Шаг 0. Что уже скачано (ссылки, если чего-то нет — дай пользователю)
+- Релизы: https://github.com/troublefack1-hue/-/releases/latest
+- ПК: https://github.com/troublefack1-hue/-/releases/latest/download/PC-Remote.exe
+- «Мой ПК»: https://github.com/troublefack1-hue/-/releases/latest/download/pcremote.apk
+- «Интернет через ПК»: https://github.com/troublefack1-hue/-/releases/latest/download/pcremote-net.apk
+- Суммы: https://github.com/troublefack1-hue/-/releases/latest/download/SHA256SUMS
+- Репозиторий: https://github.com/troublefack1-hue/- (`git clone https://github.com/troublefack1-hue/-.git pc-remote`)
+- Claude Code: https://code.claude.com/docs/en/quickstart
+Ссылки `latest` всегда ведут на самый свежий релиз. Проверь суммы: `Get-FileHash .\PC-Remote.exe`
+должен совпасть со строкой в `SHA256SUMS`; на телефон APK удобно отправить с ПК командой
+`phone put pcremote-net.apk /sdcard/Download/` после привязки «Мой ПК».
 
 ### Шаг 1. ПК
 1. Запустить `PC-Remote.exe`. Один запрос UAC — правило брандмауэра для 8443. В окне
