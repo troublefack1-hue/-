@@ -247,6 +247,54 @@ class Backend:
 
 # -------------------------------------------------------------------- GUI ---
 
+BG, PANEL, TEXT, MUTED, ACCENT, OK, WARN, BAD = "#0f1117", "#181b24", "#eef0f5", "#8e94a6", "#4f8cff", "#38d070", "#f5b84a", "#ef5350"
+
+
+def draw_logo(c: tk.Canvas, x: int, y: int, size: int, tag="logo"):
+    """The app icon drawn with canvas primitives (same shape as web/icon.svg)."""
+    k = size / 128
+    c.create_rectangle(x, y, x + size, y + size, fill="#3b6fd8", outline="", tags=tag)
+    c.create_rectangle(x + 22 * k, y + 30 * k, x + 106 * k, y + 84 * k, fill=BG, outline="", tags=tag)
+    c.create_rectangle(x + 28 * k, y + 36 * k, x + 100 * k, y + 78 * k, fill="#1b2a4a", outline="", tags=(tag, tag + "_scr"))
+    c.create_rectangle(x + 52 * k, y + 86 * k, x + 76 * k, y + 92 * k, fill=BG, outline="", tags=tag)
+    c.create_rectangle(x + 40 * k, y + 92 * k, x + 88 * k, y + 98 * k, fill=BG, outline="", tags=tag)
+    c.create_arc(x + 51 * k, y + 46 * k, x + 77 * k, y + 72 * k, start=120, extent=300, style="arc",
+                 outline=OK, width=max(2, int(4 * k)), tags=(tag, tag + "_pwr"))
+    c.create_line(x + 64 * k, y + 46 * k, x + 64 * k, y + 60 * k, fill=OK, width=max(2, int(4 * k)), tags=(tag, tag + "_pwr"))
+
+
+class Splash(tk.Toplevel):
+    """Borderless intro: logo, name, animated dots. Closes when the backend is up."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.overrideredirect(True)
+        self.configure(bg=BG)
+        w, h = 420, 300
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+        self.attributes("-topmost", True)
+        c = tk.Canvas(self, width=w, height=h, bg=BG, highlightthickness=0)
+        c.pack()
+        self.c = c
+        draw_logo(c, (w - 96) // 2, 36, 96)
+        c.create_text(w // 2, 170, text=APP_NAME, fill=TEXT, font=("Segoe UI", 22, "bold"))
+        c.create_text(w // 2, 200, text="домашний компьютер в кармане", fill=MUTED, font=("Segoe UI", 10))
+        self.dots = [c.create_oval(w // 2 - 22 + i * 18, 240, w // 2 - 12 + i * 18, 250, fill=ACCENT, outline="") for i in range(3)]
+        self.msg = c.create_text(w // 2, 275, text="запуск…", fill=MUTED, font=("Segoe UI", 9))
+        self.i = 0
+        self.animate()
+
+    def animate(self):
+        for n, d in enumerate(self.dots):
+            self.c.itemconfigure(d, fill=ACCENT if n == self.i % 3 else "#2a2f3d")
+        self.c.itemconfigure("logo_scr", fill="#2b4a8c" if self.i % 6 < 3 else "#1b2a4a")
+        self.i += 1
+        self.after(220, self.animate)
+
+    def set_msg(self, text):
+        self.c.itemconfigure(self.msg, text=text)
+
 class CastWindow(tk.Toplevel):
     """Full-screen window showing the phone's screen. Esc or close = hide."""
 
@@ -279,16 +327,39 @@ class App(tk.Tk):
         self.cfg, self.backend = cfg, backend
         self.title(APP_NAME)
         self.resizable(False, False)
+        self.configure(bg=BG)
         self.protocol("WM_DELETE_WINDOW", self.iconify)  # close = hide to taskbar, keep running
-        pad = {"padx": 14, "pady": 4}
-        f = ttk.Frame(self, padding=12)
-        f.grid()
+        st = ttk.Style(self)
+        try:
+            st.theme_use("clam")
+        except tk.TclError:
+            pass
+        st.configure(".", background=BG, foreground=TEXT, font=("Segoe UI", 10))
+        st.configure("TFrame", background=BG)
+        st.configure("TLabel", background=BG, foreground=TEXT)
+        st.configure("Muted.TLabel", foreground=MUTED)
+        st.configure("TButton", background=PANEL, foreground=TEXT, borderwidth=0, padding=(12, 7), focuscolor=BG)
+        st.map("TButton", background=[("active", "#222633"), ("disabled", "#15181f")], foreground=[("disabled", "#555b6a")])
+        st.configure("Accent.TButton", background=ACCENT, foreground="#ffffff", font=("Segoe UI", 10, "bold"))
+        st.map("Accent.TButton", background=[("active", "#3b6fd8"), ("disabled", "#2a3a5c")])
+        st.configure("TCheckbutton", background=BG, foreground=TEXT, focuscolor=BG)
+        st.map("TCheckbutton", background=[("active", BG)])
+        st.configure("TEntry", fieldbackground=PANEL, foreground=TEXT, insertcolor=TEXT, borderwidth=0)
 
-        ttk.Label(f, text=APP_NAME, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w", **pad)
-        self.upd_btn = ttk.Button(f, text=f"версия {updater.current_version()}", command=self.update_now)
+        pad = {"padx": 14, "pady": 4}
+        hdr = tk.Canvas(self, width=440, height=64, bg=BG, highlightthickness=0)
+        hdr.grid(row=0, column=0, sticky="we")
+        draw_logo(hdr, 14, 10, 44)
+        hdr.create_text(72, 24, text=APP_NAME, fill=TEXT, anchor="w", font=("Segoe UI", 16, "bold"))
+        hdr.create_text(72, 46, text="домашний компьютер в кармане", fill=MUTED, anchor="w", font=("Segoe UI", 9))
+        f = ttk.Frame(self, padding=(12, 0, 12, 12))
+        f.grid(row=1, column=0, sticky="we")
+
+        self.status = tk.Label(f, text="  запуск…  ", bg=PANEL, fg=MUTED, font=("Segoe UI", 10), padx=8, pady=5)
+        self.status.grid(row=1, column=0, columnspan=2, sticky="we", **pad)
+        self.upd_btn = ttk.Button(f, text="Проверить обновления", command=self.update_now)
         self.upd_btn.grid(row=0, column=1, sticky="e", **pad)
-        self.status = ttk.Label(f, text="запуск…", foreground="#888")
-        self.status.grid(row=1, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Label(f, text=f"версия {updater.current_version()}", style="Muted.TLabel").grid(row=0, column=0, sticky="w", **pad)
 
         ttk.Label(f, text="Адрес для телефона:").grid(row=2, column=0, sticky="w", **pad)
         self.addr = ttk.Entry(f, width=28)
@@ -296,10 +367,10 @@ class App(tk.Tk):
         self.addr.configure(state="readonly")
         self.addr.grid(row=2, column=1, sticky="w", **pad)
 
-        ttk.Button(f, text="Привязать телефон", command=self.show_pair).grid(row=3, column=0, sticky="w", **pad)
-        self.code = ttk.Label(f, text="", font=("Consolas", 22, "bold"), foreground="#1d6fe0")
+        ttk.Button(f, text="Привязать телефон", style="Accent.TButton", command=self.show_pair).grid(row=3, column=0, sticky="w", **pad)
+        self.code = tk.Label(f, text="", font=("Consolas", 26, "bold"), fg=ACCENT, bg=BG)
         self.code.grid(row=3, column=1, sticky="w", **pad)
-        self.code_hint = ttk.Label(f, text="", foreground="#888")
+        self.code_hint = ttk.Label(f, text="", style="Muted.TLabel")
         self.code_hint.grid(row=4, column=0, columnspan=2, sticky="w", **pad)
 
         self.ring_btn = ttk.Button(f, text="Найти телефон 🔔", command=self.ring, state="disabled")
@@ -313,7 +384,7 @@ class App(tk.Tk):
 
         hint = ("На роутере пробросьте TCP-порт %d на этот ПК.\n"
                 "Данные: %s" % (cfg["port"], DATA))
-        ttk.Label(f, text=hint, foreground="#888", justify="left").grid(row=7, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Label(f, text=hint, style="Muted.TLabel", justify="left").grid(row=7, column=0, columnspan=2, sticky="w", **pad)
         ttk.Button(f, text="Выход", command=self.destroy).grid(row=8, column=1, sticky="e", **pad)
 
         self.pair_until = 0
@@ -341,13 +412,16 @@ class App(tk.Tk):
         self.update_info = info
         if not info:
             return
-        self.upd_btn.configure(text=f"Обновить до {info['version']}")
+        self.upd_btn.configure(text=f"Обновить до {info['version']}", style="Accent.TButton")
         if self.cfg.get("auto_update", True):
             self.update_now()
 
     def update_now(self):
         info = self.update_info
         if not info:
+            self.upd_btn.configure(text="Проверяю…")
+            self.after(3000, lambda: self.update_info is None and self.upd_btn.configure(text="Обновлений нет"))
+            self.after(6000, lambda: self.update_info is None and self.upd_btn.configure(text="Проверить обновления"))
             self.check_updates()
             return
         self.upd_btn.configure(text="Загрузка…", state="disabled")
@@ -414,16 +488,15 @@ class App(tk.Tk):
     def tick(self):
         b = self.backend
         if b.error:
-            self.status.configure(text=f"Ошибка: {b.error}", foreground="#d33")
+            self.status.configure(text=f"  ✖ Ошибка: {b.error}  ", fg=BAD)
         elif b.hub is None:
-            self.status.configure(text="запуск…", foreground="#888")
+            self.status.configure(text="  запуск…  ", fg=MUTED)
         else:
             phones = b.phones
-            txt = f"Работает · https://{self.cfg['public_ip']}:{self.cfg['port']}"
-            txt += f" · телефонов на связи: {phones}" if phones else " · ожидает телефон"
+            txt = f"  ● {'телефонов на связи: %d' % phones if phones else 'ожидает телефон'} · https://{self.cfg['public_ip']}:{self.cfg['port']}"
             if b.cast_active:
                 txt += " · идёт трансляция с телефона"
-            self.status.configure(text=txt, foreground="#2a9d4a" if phones else "#b8860b")
+            self.status.configure(text=txt + "  ", fg=OK if phones else WARN)
             self.ring_btn.configure(state="normal" if phones else "disabled")
             self.cast_btn.configure(state="normal" if b.cast_active else "disabled")
         left = int(self.pair_until - time.time())
@@ -458,7 +531,20 @@ def main():
             log.exception("autostart")
     backend = Backend(cfg)
     backend.start()
-    App(cfg, backend, minimized="--minimized" in sys.argv).mainloop()
+    app = App(cfg, backend, minimized=True)
+    splash = Splash(app)
+
+    def finish(tries=0):
+        if backend.hub is not None or backend.error or tries > 40:
+            splash.destroy()
+            if "--minimized" not in sys.argv:
+                app.deiconify()
+                app.lift()
+        else:
+            splash.set_msg("запуск…" if tries < 10 else "создаю сертификаты…")
+            app.after(150, finish, tries + 1)
+    app.after(900, finish)
+    app.mainloop()
 
 
 if __name__ == "__main__":

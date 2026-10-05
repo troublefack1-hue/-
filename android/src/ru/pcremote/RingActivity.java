@@ -43,6 +43,11 @@ public class RingActivity extends Activity {
         stop.setPadding(80, 40, 80, 40); stop.setOnClickListener(v -> finish());
         root.addView(stop);
         setContentView(root);
+        // pulse the title so the screen is unmistakable from across the room
+        android.view.animation.ScaleAnimation pulse = new android.view.animation.ScaleAnimation(1f, 1.08f, 1f, 1.08f,
+                android.view.animation.Animation.RELATIVE_TO_SELF, .5f, android.view.animation.Animation.RELATIVE_TO_SELF, .5f);
+        pulse.setDuration(500); pulse.setRepeatMode(android.view.animation.Animation.REVERSE); pulse.setRepeatCount(-1);
+        t.startAnimation(pulse);
 
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
         savedVolume = am.getStreamVolume(AudioManager.STREAM_ALARM);

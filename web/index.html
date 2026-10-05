@@ -15,8 +15,30 @@
 </head>
 <body>
 
+<!-- splash: shown while connecting, fades into the app -->
+<section id="splash">
+  <div class="bg"><i></i><i></i><i></i></div>
+  <div class="splash-logo">
+    <svg viewBox="0 0 128 128" class="logo-svg">
+      <defs>
+        <linearGradient id="sg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6aa2ff"/><stop offset="1" stop-color="#2c57c4"/></linearGradient>
+        <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <rect width="128" height="128" rx="28" fill="url(#sg)"/>
+      <rect x="22" y="30" width="84" height="54" rx="8" fill="#0f1117"/>
+      <rect x="28" y="36" width="72" height="42" rx="4" fill="#1b2a4a" class="scr"/>
+      <rect x="52" y="86" width="24" height="6" fill="#0f1117"/><rect x="40" y="92" width="48" height="6" rx="3" fill="#0f1117"/>
+      <path class="pwr" d="M64 46v14m9-10.5a12.7 12.7 0 1 1-18 0" fill="none" stroke="#38d070" stroke-width="4" stroke-linecap="round" filter="url(#glow)"/>
+    </svg>
+  </div>
+  <h1 class="splash-title">Мой ПК</h1>
+  <p class="splash-sub">домашний компьютер в кармане</p>
+  <div class="splash-dots"><i></i><i></i><i></i></div>
+</section>
+
 <!-- login -->
-<section id="login" class="screen">
+<section id="login" class="screen" hidden>
+  <div class="bg"><i></i><i></i><i></i></div>
   <div class="card">
     <img class="logo" src="/static/icon.svg" alt="">
     <h1>Мой ПК</h1>
@@ -34,6 +56,7 @@
 <section id="app" hidden>
   <header id="bar">
     <span id="dot" class="dot"></span>
+    <span id="signal" class="signal" title="качество связи"><i></i><i></i><i></i></span>
     <div class="status">
       <div id="state">подключение…</div>
       <div id="sub" class="sub"></div>
@@ -51,19 +74,21 @@
 
   <main id="view">
     <canvas id="screen"></canvas>
+    <div id="ripples"></div>
     <div id="cursor" hidden></div>
     <div id="zoomBadge" hidden></div>
     <div id="ecoBadge" hidden>эконом</div>
 
     <div id="offline" class="center" hidden>
-      <button id="wakeBtn" class="power" title="Включить ПК">
+      <div class="bg"><i></i><i></i><i></i></div>
+      <button id="wakeBtn" class="power" title="Включить ПК"><span class="ring"></span>
         <svg viewBox="0 0 24 24"><path d="M12 3v9m5.66-5.66a8 8 0 1 1-11.32 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
       </button>
       <h2>ПК не в сети</h2>
       <p id="wakeMsg" class="muted">Нажмите, чтобы включить</p>
     </div>
 
-    <div id="connecting" class="center">
+    <div id="connecting" class="center" hidden>
       <div class="spinner"></div>
       <p id="connMsg" class="muted">Подключение…</p>
     </div>

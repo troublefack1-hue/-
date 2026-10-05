@@ -5,6 +5,18 @@
   const view = $("view"), offline = $("offline"), connecting = $("connecting"), connMsg = $("connMsg");
   const dot = $("dot"), stateEl = $("state"), subEl = $("sub"), cursorEl = $("cursor"), zoomBadge = $("zoomBadge");
   const kbPanel = $("kbPanel"), kbInput = $("kbInput"), menu = $("menu"), toast = $("toast");
+  const splash = $("splash"), ripples = $("ripples"), signal = $("signal");
+  const splashShownAt = Date.now();
+  function hideSplash(then) {
+    // keep the intro on screen for at least 1.4 s so the animation completes
+    const wait = Math.max(0, 1400 - (Date.now() - splashShownAt));
+    setTimeout(() => { splash.classList.add("out"); setTimeout(() => (splash.hidden = true), 520); then && then(); }, wait);
+  }
+  function ripple(x, y, right) {
+    const r = document.createElement("div"); r.className = "ripple" + (right ? " r" : "");
+    const b = view.getBoundingClientRect(); r.style.left = (x - b.left) + "px"; r.style.top = (y - b.top) + "px";
+    ripples.appendChild(r); setTimeout(() => r.remove(), 500);
+  }
 
   // The Android app hands the secret over in the URL hash.
   let secret = localStorage.getItem("pcr_secret") || "";
@@ -56,6 +68,7 @@
         authed = true; backoff = 1000;
         localStorage.setItem("pcr_secret", secret);
         login.hidden = true; app.hidden = false; connecting.hidden = true;
+        hideSplash();
         send({ t: "profile", name: document.hidden ? "idle" : profile });
         if (audioOn) send({ t: "audio", on: true });
       }
@@ -91,8 +104,8 @@
     ws.onerror = () => {};
   }
   function failLogin() {
-    login.hidden = false; app.hidden = true; connecting.hidden = true;
-    $("loginErr").textContent = "Не удалось подключиться. Проверьте секрет и адрес.";
+    hideSplash(() => { login.hidden = false; app.hidden = true; connecting.hidden = true; });
+    $("loginErr").textContent = secret ? "Не удалось подключиться. Проверьте секрет и адрес." : "";
   }
   pingTimer = setInterval(() => {
     if (!ws || ws.readyState !== 1) return;
@@ -121,7 +134,7 @@
     if (window.PcRemoteApp) window.PcRemoteApp.repair();  // inside the Android app: re-pair
     else location.reload();
   };
-  if (secret) connect(); else connecting.hidden = true;
+  if (secret) connect(); else hideSplash(() => { login.hidden = false; });
 
   // ------------------------------------------------------ binary frames
   function onBinary(buf) {
@@ -143,12 +156,13 @@
         canvas.width = frameW; canvas.height = frameH; layout();
       }
       ctx.drawImage(img, 0, 0);
+      canvas.classList.add("live");
       frames++; lastFrameAt = Date.now();
       send({ t: "ack" });
     };
     img.src = url;
   }
-  function clearCanvas() { frameW = frameH = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); }
+  function clearCanvas() { frameW = frameH = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.classList.remove("live"); }
   setInterval(() => {
     if (pcOnline) {
       const parts = [pcHost];
@@ -156,6 +170,7 @@
       if (latency) parts.push(`${latency} мс`);
       if (bytes) parts.push(bytes > 1e6 ? `${(bytes / 1e6).toFixed(1)} МБ/с` : `${Math.round(bytes / 1024)} КБ/с`);
       subEl.textContent = parts.join(" · ");
+      signal.className = "signal " + (latency ? (latency < 120 ? "s3" : latency < 350 ? "s2" : "s1") : "s3");
       $("stats").textContent = `Профиль: ${{ eco: "эконом", normal: "обычный", hq: "максимум" }[profile]}` +
         (latency ? ` · задержка ${latency} мс` : "") + ` · трафик ${Math.round(bytes / 1024)} КБ/с`;
     }
@@ -233,7 +248,7 @@
       const t = e.touches[0];
       t0 = { x: t.clientX, y: t.clientY, time: Date.now() }; moved = false; dragging = false;
       if (!trackpad.checked) { cur = toPC(t.clientX, t.clientY); send({ t: "move", ...cur }); }
-      longTimer = setTimeout(() => { longTimer = null; buzz(30); send({ t: "click", b: "right", n: 1, ...cur }); t0 = null; }, 550);
+      longTimer = setTimeout(() => { longTimer = null; buzz(30); send({ t: "click", b: "right", n: 1, ...cur }); ripple(t.clientX, t.clientY, true); t0 = null; }, 550);
     } else if (e.touches.length === 2) {
       clearTimeout(longTimer); longTimer = null; t0 = null;
       if (dragging) { send({ t: "btn", b: "left", down: false }); dragging = false; }
@@ -303,6 +318,7 @@
       clearTimeout(longTimer); longTimer = null;
       const now = Date.now(), dbl = now - lastTap < 350; lastTap = dbl ? 0 : now;
       send({ t: "click", b: "left", n: dbl ? 2 : 1, ...cur }); buzz(8);
+      const t = e.changedTouches[0]; if (t) ripple(t.clientX, t.clientY, false);
     }
     t0 = null;
   }, { passive: false });

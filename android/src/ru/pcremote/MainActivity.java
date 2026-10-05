@@ -150,6 +150,10 @@ public class MainActivity extends Activity {
             }).start();
         });
 
+        // entrance: card rises and fades in
+        card.setAlpha(0f); card.setTranslationY(dp(30));
+        card.animate().alpha(1f).translationY(0).setDuration(450).setStartDelay(80)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
         ScrollView sv = new ScrollView(this); sv.setBackgroundColor(BG);
         root.addView(card, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         sv.addView(root, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -186,7 +190,9 @@ public class MainActivity extends Activity {
             }
         });
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        web.setAlpha(0f);
         setContentView(web);
+        web.animate().alpha(1f).setDuration(350).start();  // the page shows its own splash
         web.loadUrl("http://127.0.0.1:" + tunnel.localPort() + "/#" + prefs.getString("secret", ""));
     }
 
