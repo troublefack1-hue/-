@@ -786,6 +786,10 @@ class Agent:
         return f"{base}/ws/pc"
 
     async def run(self):
+        # the terminal readers and the audio reader block a thread each; the default pool
+        # (cpu+4) starved the screen grabber once a few tabs were open
+        from concurrent.futures import ThreadPoolExecutor
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=16, thread_name_prefix="agent"))
         delay = 2
         while True:
             try:
