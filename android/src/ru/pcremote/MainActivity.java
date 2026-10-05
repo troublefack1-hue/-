@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
                 try {
                     Pairing.Result r = Pairing.pair(h, port, c);
                     prefs.edit().putString("hostport", hp).putString("host", h).putInt("port", port)
-                            .putString("secret", r.secret).putString("pin", r.fingerprint).apply();
+                            .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).apply();
                     runOnUiThread(this::startRemote);
                 } catch (Exception e) {
                     runOnUiThread(() -> { btn.setEnabled(true); err.setTextColor(0xFFEF5350);

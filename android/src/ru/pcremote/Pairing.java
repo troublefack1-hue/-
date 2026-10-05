@@ -16,8 +16,8 @@ import javax.net.ssl.SSLSocket;
 public final class Pairing {
 
     public static final class Result {
-        public final String secret, fingerprint;
-        Result(String s, String f) { secret = s; fingerprint = f; }
+        public final String secret, fingerprint, ntfy;
+        Result(String s, String f, String n) { secret = s; fingerprint = f; ntfy = n == null ? "" : n; }
     }
 
     public static Result pair(String host, int port, String code) throws IOException {
@@ -41,7 +41,7 @@ public final class Pairing {
             while ((line = in.readLine()) != null) body.append(line);
             String secret = jsonString(body.toString(), "secret");
             if (secret == null) throw new IOException("bad pairing response");
-            return new Result(secret, seen[0]);
+            return new Result(secret, seen[0], jsonString(body.toString(), "ntfy"));
         }
     }
 

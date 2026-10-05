@@ -86,6 +86,37 @@ public class RemoteService extends Service {
     }
 
     // ------------------------------------------------------ connection ---
+    private final Object wake = new Object();
+    private Thread nudgeThread;
+
+    /** While our link is down, long-poll the PC's nudge channel: the PC pushes
+     *  "reconnect" when it has repaired its side, and we retry at once. */
+    private void startNudgeListener() {
+        final String url = prefs.getString("ntfy", "");
+        if (url.isEmpty() || (nudgeThread != null && nudgeThread.isAlive())) return;
+        nudgeThread = new Thread(() -> {
+            while (running && ws == null) {
+                try {
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url + "/json?since=10s").openConnection();
+                    c.setConnectTimeout(8000); c.setReadTimeout(0);
+                    try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getInputStream()))) {
+                        String line;
+                        while (running && ws == null && (line = r.readLine()) != null) {
+                            if (line.contains("\"event\":\"message\"") && line.contains("reconnect")) {
+                                synchronized (wake) { wake.notifyAll(); }
+                            }
+                        }
+                    }
+                } catch (Exception e) { sleep(3000); }
+            }
+        }, "nudge-listener");
+        nudgeThread.setDaemon(true); nudgeThread.start();
+    }
+
+    private void waitOrNudge(long ms) {
+        synchronized (wake) { try { wake.wait(ms); } catch (InterruptedException ignored) {} }
+    }
+
     private void keepConnected() {
         int delay = 1000;
         while (running) {
@@ -108,7 +139,8 @@ public class RemoteService extends Service {
                 update("Связь с ПК", "нет связи, повтор…");
             }
             ws = null;
-            sleep(delay); delay = Math.min(delay * 2, 15000);   // VPN flips on the PC: back within seconds
+            startNudgeListener();                               // the PC can wake us up early
+            waitOrNudge(delay); delay = Math.min(delay * 2, 15000);
         }
     }
 

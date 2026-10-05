@@ -73,12 +73,18 @@ def load_config() -> dict:
     # Windows: send replies through the physical LAN adapter even when a VPN
     # owns the default route, so the phone's connection survives VPN on/off.
     cfg.setdefault("pin_interface", True)
+    # push channel to nudge phones when the PC side changed (derived from the wake channel)
+    cfg.setdefault("ntfy_phone_url", (cfg["ntfy_wake_url"] + "-phone") if cfg["ntfy_wake_url"] else "")
     return cfg
+
+
+LAN_IP = {"ip": None}
 
 
 def lan_interface_index() -> int | None:
     """Index of the adapter that carries the real 0.0.0.0/0 route (WireGuard-style
-    VPNs add 0.0.0.0/1 + 128.0.0.0/1 instead, so this stays the physical NIC)."""
+    VPNs add 0.0.0.0/1 + 128.0.0.0/1 instead, so this stays the physical NIC).
+    Also remembers that adapter's IP in LAN_IP for the self-test."""
     if sys.platform != "win32":
         return None
     try:
@@ -89,11 +95,12 @@ def lan_interface_index() -> int | None:
                              creationflags=0x08000000).stdout
         best = None
         for m in re.finditer(r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+)", out, re.M):
-            gw, _ifip, metric = m.group(1), m.group(2), int(m.group(3))
+            gw, ifip, metric = m.group(1), m.group(2), int(m.group(3))
             if best is None or metric < best[1]:
-                best = (gw, metric)
+                best = (gw, metric, ifip)
         if not best:
             return None
+        LAN_IP["ip"] = best[2]
         import socket
         idx = ctypes.c_ulong()
         gw_n = ctypes.c_ulong(int.from_bytes(socket.inet_aton(best[0]), "little"))
@@ -292,7 +299,7 @@ class Hub:
         self.log_event(f"телефон привязан ({ip})")
         if self.on_paired:
             self.on_paired(ip)
-        return web.json_response({"secret": self.cfg["secret"]})
+        return web.json_response({"secret": self.cfg["secret"], "ntfy": self.cfg.get("ntfy_phone_url", "")})
 
     # --- status broadcast ----------------------------------------------
     def status(self) -> dict:
@@ -363,7 +370,7 @@ class Hub:
 
     # --- /ws/phone ------------------------------------------------------
     async def phone_handler(self, request: web.Request):
-        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_CAST)
+        ws = web.WebSocketResponse(heartbeat=5, max_msg_size=MAX_CAST)  # dead phones noticed in ~10 s
         await ws.prepare(request)
         ip = client_ip(request)
         if not await self.ws_auth(ws, ip):
@@ -419,6 +426,8 @@ class Hub:
             self.phones.discard(ws)
             self.phone_names.pop(ws, None)
             self.log_event(f"телефон отключился ({ip})")
+            if self.pc is not None:
+                asyncio.create_task(self.nudge_phones("phone-lost"))  # PC takes the first step
             if casting and self.on_cast:
                 self.on_cast(0, None)
             self.phones_changed()
@@ -433,6 +442,23 @@ class Hub:
         await self.broadcast_phones(json.dumps({"t": "net", "vpn": vpn}))
         if self.on_net:
             self.on_net(dict(self.net))
+        await self.nudge_phones("net")
+
+    _last_nudge = 0.0
+
+    async def nudge_phones(self, reason: str):
+        """PC-initiated reconnect: a push the phone's background service listens
+        for while its own link is down. Rate-limited to one per 10 s."""
+        url = self.cfg.get("ntfy_phone_url")
+        if not url or time.time() - self._last_nudge < 10:
+            return
+        self._last_nudge = time.time()
+        try:
+            async with ClientSession() as s:
+                await s.post(url, data=f"reconnect:{reason}".encode(), timeout=10)
+            log.info("nudged phones via ntfy (%s)", reason)
+        except Exception as e:  # noqa: BLE001
+            log.info("nudge failed: %s", e)
 
     async def ring_phones(self):
         self.log_event("найти телефон")
@@ -690,9 +716,30 @@ async def serve(cfg: dict, app: web.Application | None = None):
             hub.net.update(pinned=False)
             log.info("listening on https://%s:%s", cfg["tls_host"], cfg["tls_port"])
 
+        async def self_test() -> bool:
+            """Connect to our own public port via the LAN address (not loopback)."""
+            ip = LAN_IP.get("ip")
+            if not ip:
+                return True
+            try:
+                cctx = ssl.create_default_context()
+                cctx.check_hostname = False
+                cctx.verify_mode = ssl.CERT_NONE
+                r, w = await asyncio.wait_for(asyncio.open_connection(ip, cfg["tls_port"], ssl=cctx), 3)
+                w.close()
+                return True
+            except Exception as e:  # noqa: BLE001
+                log.warning("self-test failed via %s: %s", ip, e)
+                return False
+
         async def on_net(vpn, lan, old_lan):
             if lan != old_lan and lan:
                 await bind_tls(lan)   # adapter changed (cable <-> Wi-Fi): re-pin
+            if not await self_test():
+                # repair: try the other binding mode once
+                was_pinned = hub.net.get("pinned")
+                await bind_tls(None if was_pinned else lan)
+                hub.log_event("слушатель перезапущен после проверки связи")
             await hub.net_changed(vpn, lan, old_lan)
 
         watcher = NetWatcher(on_net)
