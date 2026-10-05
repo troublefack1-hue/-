@@ -31,6 +31,7 @@ import secrets
 import ssl
 import sys
 import time
+from urllib.parse import unquote
 from pathlib import Path
 
 from aiohttp import ClientSession, WSMsgType, web
@@ -614,11 +615,11 @@ class Hub:
             raise web.HTTPForbidden(headers=CORS)
         if not self.cfg["upload_dir"]:
             return web.json_response({"ok": False, "error": "upload_dir not set"}, headers=CORS)
-        name = Path(request.headers.get("X-Filename", "file")).name or "file"
+        name = Path(unquote(request.headers.get("X-Filename", "file"))).name or "file"
         name = "".join(c for c in name if c not in '<>:"/\\|?*')[:120] or "file"
         dest_dir = Path(self.cfg["upload_dir"])
         # optional: drop the file into the folder currently open on the phone
-        want = request.headers.get("X-Dir", "")
+        want = unquote(request.headers.get("X-Dir", ""))
         if want:
             d = self._safe_path(want)
             if d is not None and d.is_dir():

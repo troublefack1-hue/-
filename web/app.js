@@ -1065,7 +1065,7 @@
     for (const f of files) {
       pr.textContent = `Отправляю ${f.name} (${fmtSize(f.size)})…`;
       try {
-        const r = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "X-Filename": f.name, ...(fPath ? { "X-Dir": fPath } : {}) }, body: f });
+        const r = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "X-Filename": encodeURIComponent(f.name), ...(fPath ? { "X-Dir": encodeURIComponent(fPath) } : {}) }, body: f });
         const j = await r.json(); bytesOut += f.size;
         pr.textContent = j.ok ? `✓ ${j.name}` : "Ошибка: " + j.error;
       } catch (e) { pr.textContent = "Ошибка: " + e; }
