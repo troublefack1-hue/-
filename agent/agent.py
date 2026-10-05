@@ -778,12 +778,7 @@ class Agent:
                         self._ws = ws
                         log.info("connected to relay")
                         delay = 2
-                        await ws.send_str(json.dumps({
-                            "t": "hello", "w": self.screen.size[0], "h": self.screen.size[1], "video": bool(self.ffmpeg),
-                            "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available(),
-                            "monitors": len(self.screen.sct.monitors) - 1, "monitor": self.screen.mon_index,
-                            "term": Term.available(), "shells": list(Term.shells().keys()),
-                            "projects": self.cfg.get("projects", []), **{"volume": self.volume.get()}}))
+                        await ws.send_str(json.dumps(self.hello_msg()))
                         tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws)),
                                  asyncio.create_task(self.watch_clipboard(ws)), asyncio.create_task(self.stream_zone(ws)),
                                  asyncio.create_task(self.watch_notifications(ws))]
@@ -858,6 +853,21 @@ class Agent:
             if int(last_sent) % 3 == 0:
                 self.screen.adapt(self.rtt)
             await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
+
+    def hello_msg(self) -> dict:
+        return {"t": "hello", "w": self.screen.size[0], "h": self.screen.size[1], "video": bool(self.ffmpeg),
+                "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available(),
+                "monitors": len(self.screen.sct.monitors) - 1, "monitor": self.screen.mon_index,
+                "term": Term.available(), "shells": list(Term.shells().keys()),
+                "projects": self.cfg.get("projects", []), "volume": self.volume.get()}
+
+    async def resend_hello(self):
+        """Settings changed on the PC (project folders): tell the phones without reconnecting."""
+        if self._ws is not None:
+            try:
+                await self._ws.send_str(json.dumps(self.hello_msg()))
+            except Exception:  # noqa: BLE001
+                pass
 
     def video_close(self):
         if self.enc:

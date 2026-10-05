@@ -521,6 +521,7 @@ class App(tk.Tk):
         pf.grid(row=3, column=0, sticky="w", **pad)
         ttk.Button(pf, text="Привязать телефон", style="Accent.TButton", command=self.show_pair).pack(side="left")
         ttk.Button(pf, text="Код для гостя", command=lambda: self.show_pair(True)).pack(side="left", padx=(6, 0))
+        ttk.Button(pf, text="Папки проектов…", command=self.add_project).pack(side="left", padx=(6, 0))
         self.code = tk.Label(f, text="", font=("Consolas", 26, "bold"), fg=ACCENT, bg=BG)
         self.code.grid(row=3, column=1, sticky="w", **pad)
         self.code_hint = ttk.Label(f, text="", style="Muted.TLabel")
@@ -692,6 +693,32 @@ class App(tk.Tk):
         self.addr.delete(0, "end")
         self.addr.insert(0, f"{ip}:{self.cfg['port']}")
         self.addr.configure(state="readonly")
+
+    def add_project(self):
+        """Pick a folder for the phone's terminal panel (Claude Code / Git Bash start there)."""
+        from tkinter import filedialog, messagebox
+        folder = filedialog.askdirectory(title="Папка проекта для терминала на телефоне", parent=self)
+        if not folder:
+            return
+        folder = os.path.normpath(folder)
+        projects = [p for p in self.cfg.get("projects", []) if p]
+        if folder not in projects:
+            projects.append(folder)
+        self.cfg["projects"] = projects
+        save_config(self.cfg)
+        agent = self.backend.agent
+        if agent is not None:
+            agent.cfg["projects"] = projects
+            asyncio.run_coroutine_threadsafe(agent.resend_hello(), self.backend.loop)
+        self.code_hint.configure(text="Папки для терминала: " + "; ".join(projects))
+        if len(projects) > 1 and messagebox.askyesno(APP_NAME, "Убрать какие-то папки из списка?", parent=self):
+            keep = [p for p in projects if messagebox.askyesno(APP_NAME, f"Оставить папку?\n{p}", parent=self)]
+            self.cfg["projects"] = keep
+            save_config(self.cfg)
+            if agent is not None:
+                agent.cfg["projects"] = keep
+                asyncio.run_coroutine_threadsafe(agent.resend_hello(), self.backend.loop)
+            self.code_hint.configure(text="Папки для терминала: " + ("; ".join(keep) or "нет"))
 
     def toggle_video(self):
         self.cfg["video"] = self.video_on.get()
