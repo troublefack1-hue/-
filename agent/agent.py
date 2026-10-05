@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import sys
 import time
 from ctypes import wintypes
@@ -377,6 +378,13 @@ def run_command(name: str) -> str:
     if name not in cmds:
         return f"unknown command: {name}"
     try:
+        if name == "sleep" and os.name == "nt":
+            # rundll32 passes its argument as a string pointer, so SetSuspendState sees "hibernate"
+            # as true whenever hibernation is enabled; the direct call sleeps as asked
+            def _sleep():
+                ctypes.WinDLL("powrprof").SetSuspendState(0, 1, 0)
+            threading.Thread(target=_sleep, daemon=True).start()
+            return "ok"
         subprocess.Popen(cmds[name], creationflags=subprocess.CREATE_NO_WINDOW)
         return "ok"
     except Exception as e:  # noqa: BLE001
@@ -929,7 +937,7 @@ class Agent:
     async def stream_audio(self, ws):
         loop = asyncio.get_running_loop()
         while True:
-            if not (self.audio_on and self.viewers and self.screen.profile["fps"]):
+            if not (self.audio_on and self.viewers):   # sound keeps playing while the app is in the background
                 if self.audio.stream:
                     self.audio.stop()
                 await asyncio.sleep(0.3)
