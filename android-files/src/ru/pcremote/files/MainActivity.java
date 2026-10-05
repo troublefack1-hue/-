@@ -274,8 +274,8 @@ public class MainActivity extends Activity {
                 @Override public boolean onFling(android.view.MotionEvent e1, android.view.MotionEvent e2, float vx, float vy) {
                     if (e1 == null || e2 == null) return false;
                     float dx = e2.getX() - e1.getX(), dy = e2.getY() - e1.getY();
-                    // a quick swipe to the left: back to the previous place (the same as the Back key)
-                    if (dx < -dp(90) && Math.abs(dy) < Math.abs(dx) * 0.6f && Math.abs(vx) > 600) { setActive(Pane.this); if (back()) { listView.animate().translationX(-dp(24)).alpha(0.6f).setDuration(80).withEndAction(() -> { listView.setTranslationX(dp(24)); listView.animate().translationX(0).alpha(1f).setDuration(160).start(); }).start(); } return true; }
+                    // a quick swipe from left to right: back to the previous place (the same as the Back key)
+                    if (dx > dp(90) && Math.abs(dy) < Math.abs(dx) * 0.6f && Math.abs(vx) > 600) { setActive(Pane.this); if (back()) { listView.animate().translationX(dp(24)).alpha(0.6f).setDuration(80).withEndAction(() -> { listView.setTranslationX(-dp(24)); listView.animate().translationX(0).alpha(1f).setDuration(160).start(); }).start(); } return true; }
                     return false;
                 }
             });
