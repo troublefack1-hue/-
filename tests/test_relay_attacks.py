@@ -120,8 +120,15 @@ async def main():
         report("ATTACK 9: guest cannot cast to the PC", not seen)
         await owner.send_bytes(b"\x03JPEG-from-owner"); await asyncio.sleep(0.2)
         report("owner can cast", seen == [3])
-        await owner.send_bytes(b"\x03" + b"\x00" * (relay.MAX_FRAME + 1)); m = await owner.receive()
-        report("ATTACK 9b: oversized phone frame closes that phone", m.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED))
+        closed = False
+        try:
+            await owner.send_bytes(b"\x03" + b"\x00" * (relay.MAX_FRAME + 1))
+            m = await asyncio.wait_for(owner.receive(), 5)
+            closed = m.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED)
+        except (ConnectionError, aiohttp.ClientError, asyncio.TimeoutError):
+            closed = True   # the server dropped us mid-send: that is the point
+        await asyncio.sleep(0.2)
+        report("ATTACK 9b: oversized phone frame closes that phone", closed and owner not in hub.phones)
         hub.on_cast = None
         await guest.close(); await pc2.close()
 
