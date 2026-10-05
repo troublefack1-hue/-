@@ -191,10 +191,28 @@ class Screen:
         self.cfg = cfg
         self.sct = mss.mss()
         self.mon = self.sct.monitors[min(cfg["monitor"], len(self.sct.monitors) - 1)]
+        self.quality = cfg["quality"]
+        self.set_width(cfg["max_width"])
+        self._last_hash = b""
+
+    def set_width(self, max_width: int):
         w, h = self.mon["width"], self.mon["height"]
-        scale = min(1.0, cfg["max_width"] / w)
+        scale = min(1.0, max_width / w)
         self.size = (max(2, int(w * scale)), max(2, int(h * scale)))
         self._last_hash = b""
+
+    def adapt(self, rtt: float):
+        """Trade picture quality for speed when the link is slow, and back."""
+        cfg = self.cfg
+        if rtt > 0.6 and self.quality > 25:
+            self.quality = max(25, self.quality - 10)
+        elif rtt > 0.6 and self.size[0] > 640:
+            self.set_width(int(self.size[0] * 0.8))
+        elif rtt < 0.15:
+            if self.size[0] < min(cfg["max_width"], self.mon["width"]):
+                self.set_width(min(cfg["max_width"], int(self.size[0] * 1.25)))
+            elif self.quality < cfg["quality"]:
+                self.quality = min(cfg["quality"], self.quality + 5)
 
     def grab(self) -> bytes | None:
         """Return a JPEG, or None if the screen hasn't changed."""
@@ -207,7 +225,7 @@ class Screen:
         if self.size != shot.size:
             img = img.resize(self.size, Image.BILINEAR)
         buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=self.cfg["quality"], optimize=False)
+        img.save(buf, "JPEG", quality=self.quality, optimize=False)
         return buf.getvalue()
 
 
@@ -219,6 +237,8 @@ class Agent:
         self.viewers = 0
         self.ack = asyncio.Event()
         self.ack.set()
+        self.sent_at = 0.0
+        self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
 
     def ws_url(self) -> str:
         base = self.cfg["relay_url"].rstrip("/")
@@ -269,8 +289,11 @@ class Agent:
                 self.screen._last_hash = b""
                 jpeg = await loop.run_in_executor(None, self.screen.grab)
             self.ack.clear()
+            self.sent_at = time.monotonic()
             await ws.send_bytes(jpeg)
-            last_sent = time.monotonic()
+            last_sent = self.sent_at
+            if int(last_sent) % 3 == 0:
+                self.screen.adapt(self.rtt)
             await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
 
     async def receive(self, ws):
@@ -286,6 +309,9 @@ class Agent:
             t = ev.get("t")
             try:
                 if t == "ack":
+                    if self.sent_at:
+                        sample = time.monotonic() - self.sent_at
+                        self.rtt = sample if not self.rtt else self.rtt * 0.7 + sample * 0.3
                     self.ack.set()
                 elif t == "viewers":
                     self.viewers = int(ev.get("n", 0))

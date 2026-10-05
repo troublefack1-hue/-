@@ -3,37 +3,65 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#111318">
+<meta name="theme-color" content="#0f1117">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Мой ПК</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon.svg">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
-<div id="login" class="panel">
-  <h1>Мой ПК</h1>
-  <p>Введите секрет из настроек ретранслятора.</p>
-  <input id="secret" type="password" autocomplete="current-password" placeholder="секрет">
-  <button id="loginBtn" class="primary">Подключиться</button>
-  <p id="loginErr" class="err"></p>
-</div>
+<!-- login -->
+<section id="login" class="screen">
+  <div class="card">
+    <img class="logo" src="/static/icon.svg" alt="">
+    <h1>Мой ПК</h1>
+    <p class="muted">Удалённый доступ к домашнему компьютеру</p>
+    <label class="field">
+      <span>Секрет</span>
+      <input id="secret" type="password" autocomplete="current-password" placeholder="из настроек сервера">
+    </label>
+    <button id="loginBtn" class="btn primary big">Подключиться</button>
+    <p id="loginErr" class="err"></p>
+  </div>
+</section>
 
-<div id="app" hidden>
+<!-- main -->
+<section id="app" hidden>
   <header id="bar">
-    <span id="dot" class="dot off"></span>
-    <span id="state">подключение…</span>
-    <span class="spacer"></span>
-    <button id="kbBtn" title="Клавиатура">⌨</button>
-    <button id="menuBtn" title="Меню">☰</button>
+    <span id="dot" class="dot"></span>
+    <div class="status">
+      <div id="state">подключение…</div>
+      <div id="sub" class="sub"></div>
+    </div>
+    <button id="kbBtn" class="icon" title="Клавиатура">
+      <svg viewBox="0 0 24 24"><path d="M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm1 2v8h16V8H4zm1 1h2v2H5V9zm3 0h2v2H8V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zM5 12h2v2H5v-2zm3 0h2v2H8v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zM7 15h10v1H7v-1z"/></svg>
+    </button>
+    <button id="menuBtn" class="icon" title="Меню">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
+    </button>
   </header>
 
   <main id="view">
     <canvas id="screen"></canvas>
+    <div id="cursor" hidden></div>
+    <div id="zoomBadge" hidden></div>
+
     <div id="offline" class="center" hidden>
-      <p>ПК не в сети</p>
-      <button id="wakeBtn" class="primary">Включить ПК</button>
-      <p id="wakeMsg" class="muted"></p>
+      <button id="wakeBtn" class="power" title="Включить ПК">
+        <svg viewBox="0 0 24 24"><path d="M12 3v9m5.66-5.66a8 8 0 1 1-11.32 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+      <h2>ПК не в сети</h2>
+      <p id="wakeMsg" class="muted">Нажмите, чтобы включить</p>
+    </div>
+
+    <div id="connecting" class="center">
+      <div class="spinner"></div>
+      <p class="muted">Подключение к серверу…</p>
     </div>
   </main>
 
@@ -44,7 +72,9 @@
     <button data-key="Meta">Win</button>
     <button data-combo="Control,c">Ctrl+C</button>
     <button data-combo="Control,v">Ctrl+V</button>
+    <button data-combo="Control,z">Ctrl+Z</button>
     <button data-combo="Alt,F4">Alt+F4</button>
+    <button data-combo="Meta,d">Рабочий стол</button>
     <button data-key="ArrowUp">↑</button>
     <button data-key="ArrowDown">↓</button>
     <button data-key="ArrowLeft">←</button>
@@ -52,23 +82,41 @@
     <button data-key="Enter">Enter</button>
     <button data-key="Backspace">⌫</button>
     <button data-key="Delete">Del</button>
+    <button data-key="F5">F5</button>
+    <button data-key="F11">F11</button>
   </div>
-  <!-- invisible input that opens the phone keyboard -->
   <input id="kbInput" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
 
+  <!-- menu -->
   <div id="menu" class="sheet" hidden>
-    <button data-cmd="reboot">Перезагрузить ПК</button>
-    <button data-cmd="shutdown">Выключить ПК</button>
-    <button data-cmd="sleep">Спящий режим</button>
-    <button data-cmd="lock">Заблокировать</button>
-    <button data-cmd="cancel" class="muted">Отменить выключение</button>
+    <div class="handle"></div>
+    <div class="grid">
+      <button data-cmd="reboot"><i>⟳</i>Перезагрузить</button>
+      <button data-cmd="shutdown"><i>⏻</i>Выключить</button>
+      <button data-cmd="sleep"><i>☾</i>Сон</button>
+      <button data-cmd="lock"><i>🔒</i>Блокировка</button>
+    </div>
+    <button data-cmd="cancel" class="row muted">Отменить выключение</button>
     <hr>
-    <label><input type="checkbox" id="trackpad"> Режим тачпада</label>
-    <button id="fsBtn">На весь экран</button>
-    <button id="logoutBtn" class="muted">Сменить секрет</button>
+    <label class="row switch"><span>Режим тачпада</span><input type="checkbox" id="trackpad"><i></i></label>
+    <button id="zoomReset" class="row">Сбросить масштаб</button>
+    <button id="fsBtn" class="row">На весь экран</button>
+    <button id="logoutBtn" class="row muted">Сменить секрет</button>
   </div>
+
+  <!-- confirm dialog -->
+  <div id="confirm" class="modal" hidden>
+    <div class="box">
+      <p id="confirmText"></p>
+      <div class="actions">
+        <button id="confirmNo" class="btn">Отмена</button>
+        <button id="confirmYes" class="btn danger">Да</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" hidden></div>
-</div>
+</section>
 
 <script src="/static/app.js"></script>
 </body>
