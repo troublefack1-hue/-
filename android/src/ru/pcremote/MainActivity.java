@@ -5,6 +5,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
+import android.widget.Toast;
 import android.os.Build;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -47,6 +49,32 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
         if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); } else showSetup(null);
+        checkUpdate();
+    }
+
+    // ----------------------------------------------------------- update ---
+    /** Once every 6 h: newer release on GitHub -> download -> system "Install" dialog. */
+    private void checkUpdate() {
+        long last = prefs.getLong("upd_check", 0);
+        if (System.currentTimeMillis() - last < 6 * 3600_000L) return;
+        prefs.edit().putLong("upd_check", System.currentTimeMillis()).apply();
+        new Thread(() -> {
+            try {
+                String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+                Updater.Info info = Updater.check(cur);
+                if (info == null) return;
+                java.io.File apk = Updater.download(info.url, getCacheDir());
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
+                    Intent i = new Intent(Intent.ACTION_VIEW)
+                            .setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"),
+                                    "application/vnd.android.package-archive")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                });
+            } catch (Exception ignored) {
+            }
+        }).start();
     }
 
     // ------------------------------------------------------------- cast ---

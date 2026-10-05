@@ -14,6 +14,7 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- cleartext is only ever used towards 127.0.0.1 (the in-app tunnel) -->
     <application
@@ -44,6 +45,11 @@
             android:name=".RemoteService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+        <provider
+            android:name=".ApkProvider"
+            android:authorities="ru.pcremote.apk"
+            android:exported="false"
+            android:grantUriPermissions="true" />
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

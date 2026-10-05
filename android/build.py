@@ -46,6 +46,10 @@ def run(cmd, **kw):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sdk")
+    ap.add_argument("--version-code", type=int, default=1)
+    ap.add_argument("--version-name", default="1.0")
+    ap.add_argument("--keystore", help="signing keystore (default: out/pcremote.keystore, created if missing)")
+    ap.add_argument("--ks-pass", default="pcremote")
     args = ap.parse_args()
     sdk = find_sdk(args.sdk)
     bt = newest(sdk / "build-tools")
@@ -68,7 +72,9 @@ def main():
     run([aapt2, "compile", "--dir", HERE / "res", "-o", build / "res.zip"])
     run([aapt2, "link", "-o", build / "base.apk", "-I", android_jar,
          "--manifest", HERE / "AndroidManifest.xml", "--java", build / "gen",
-         "--min-sdk-version", "24", "--target-sdk-version", "33", build / "res.zip"])
+         "--min-sdk-version", "24", "--target-sdk-version", "33",
+         "--version-code", str(args.version_code), "--version-name", args.version_name,
+         build / "res.zip"])
 
     # 2. java -> classes
     sources = glob.glob(str(HERE / "src" / "**" / "*.java"), recursive=True) + \
@@ -88,13 +94,14 @@ def main():
     aligned = build / "aligned.apk"
     run([zipalign, "-f", "4", unsigned, aligned])
 
-    ks = out / "pcremote.keystore"
+    ks = Path(args.keystore) if args.keystore else out / "pcremote.keystore"
+    pw = args.ks_pass
     if not ks.exists():
-        run(["keytool", "-genkeypair", "-v", "-keystore", ks, "-storepass", "pcremote", "-keypass", "pcremote",
+        run(["keytool", "-genkeypair", "-v", "-keystore", ks, "-storepass", pw, "-keypass", pw,
              "-alias", "pcremote", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
              "-dname", "CN=pc-remote"])
     apk = out / "pcremote.apk"
-    run([apksigner, "sign", "--ks", ks, "--ks-pass", "pass:pcremote", "--key-pass", "pass:pcremote",
+    run([apksigner, "sign", "--ks", ks, "--ks-pass", f"pass:{pw}", "--key-pass", f"pass:{pw}",
          "--ks-key-alias", "pcremote", "--out", apk, aligned])
     run([apksigner, "verify", apk])
     print(f"\nOK: {apk} ({apk.stat().st_size // 1024} KB)")

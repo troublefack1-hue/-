@@ -1,0 +1,88 @@
+# Builds "PC Remote.exe" and pcremote.apk on every push to main and publishes
+# them as a GitHub release. The apps check /releases/latest to update themselves.
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VERSION: 1.${{ github.run_number }}
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Stamp version
+        run: Set-Content -Path VERSION -Value "${{ env.VERSION }}" -NoNewline
+      - name: Build
+        run: |
+          pip install -r agent/requirements.txt -r relay/requirements.txt cryptography pyinstaller
+          pyinstaller --noconfirm --clean --onefile --windowed --name "PC Remote" `
+            --add-data "relay;relay" --add-data "agent;agent" --add-data "web;web" --add-data "VERSION;." `
+            --hidden-import mss.windows --hidden-import PIL._tkinter_finder `
+            pcapp/main.py
+          Rename-Item "dist/PC Remote.exe" "PC-Remote.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exe
+          path: dist/PC-Remote.exe
+
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # The signing key lives in repository secrets (Settings -> Secrets -> Actions):
+      #   ANDROID_KEYSTORE_B64  - the keystore file, base64
+      #   ANDROID_KEYSTORE_PASS - its password
+      # Without them a throwaway key is used: the APK installs, but self-update
+      # cannot replace an APK signed with a different key.
+      - name: Signing key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.keystore; echo "release key"; else echo "::warning::ANDROID_KEYSTORE_B64 secret not set, using a temporary key"; fi
+      - name: Build
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          if [ -f /tmp/release.keystore ]; then KS="--keystore /tmp/release.keystore --ks-pass $KS_PASS"; else KS=""; fi
+          python3 android/build.py --sdk "$ANDROID_HOME" \
+            --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" $KS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: android/out/pcremote.apk
+
+  release:
+    needs: [exe, apk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: Release notes
+        run: |
+          echo "Сборка ${{ env.VERSION }} из ${{ github.sha }}" > notes.md
+          echo "" >> notes.md
+          echo "${{ github.event.head_commit.message }}" >> notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: PC Remote ${{ env.VERSION }}
+          body_path: notes.md
+          files: |
+            out/exe/PC-Remote.exe
+            out/apk/pcremote.apk

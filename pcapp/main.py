@@ -38,6 +38,8 @@ sys.path[:0] = [str(BASE / "relay"), str(BASE / "agent")]
 import agent as agent_mod  # noqa: E402
 import relay as relay_mod  # noqa: E402
 from certs import ensure_certs  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import updater  # noqa: E402
 
 APP_NAME = "PC Remote"
 DATA = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "pc-remote"
@@ -73,6 +75,7 @@ def load_config() -> dict:
     cfg.setdefault("quality", 55)
     cfg.setdefault("fps", 12)
     cfg.setdefault("monitor", 1)
+    cfg.setdefault("auto_update", True)
     if not cfg.get("public_ip"):
         cfg["public_ip"] = public_ip()
         changed = True
@@ -281,7 +284,9 @@ class App(tk.Tk):
         f = ttk.Frame(self, padding=12)
         f.grid()
 
-        ttk.Label(f, text=APP_NAME, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Label(f, text=APP_NAME, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w", **pad)
+        self.upd_btn = ttk.Button(f, text=f"версия {updater.current_version()}", command=self.update_now)
+        self.upd_btn.grid(row=0, column=1, sticky="e", **pad)
         self.status = ttk.Label(f, text="запуск…", foreground="#888")
         self.status.grid(row=1, column=0, columnspan=2, sticky="w", **pad)
 
@@ -313,10 +318,52 @@ class App(tk.Tk):
 
         self.pair_until = 0
         self.cast_win: CastWindow | None = None
+        self.update_info = None
         self.after(500, self.tick)
         self.after(40, self.pump_cast)
+        self.after(20_000, self.check_updates)
         if minimized:
             self.iconify()
+
+    # --------------------------------------------------------- updates ---
+    def check_updates(self):
+        def worker():
+            try:
+                info = updater.check()
+            except Exception as e:  # noqa: BLE001
+                log.info("update check failed: %s", e)
+                info = None
+            self.after(0, lambda: self.on_update_info(info))
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(24 * 3600 * 1000, self.check_updates)  # once a day
+
+    def on_update_info(self, info):
+        self.update_info = info
+        if not info:
+            return
+        self.upd_btn.configure(text=f"Обновить до {info['version']}")
+        if self.cfg.get("auto_update", True):
+            self.update_now()
+
+    def update_now(self):
+        info = self.update_info
+        if not info:
+            self.check_updates()
+            return
+        self.upd_btn.configure(text="Загрузка…", state="disabled")
+
+        def worker():
+            try:
+                exe = updater.download(info["url"], DATA / "update" / "PC-Remote.exe")
+                if updater.apply(exe):
+                    self.after(0, self.destroy)   # the script restarts us with the new exe
+                else:
+                    self.after(0, lambda: self.upd_btn.configure(text="скачано (не exe)", state="normal"))
+            except Exception as e:  # noqa: BLE001
+                log.exception("update failed")
+                self.after(0, lambda: self.upd_btn.configure(text=f"ошибка обновления", state="normal"))
+                self.after(0, lambda: self.code_hint.configure(text=f"Обновление: {e}"))
+        threading.Thread(target=worker, daemon=True).start()
 
     def show_pair(self):
         try:

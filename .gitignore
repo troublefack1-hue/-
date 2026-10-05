@@ -12,3 +12,4 @@ android/out/
 pcapp/build/
 pcapp/dist/
 *.spec
+*.keystore
