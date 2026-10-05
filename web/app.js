@@ -1286,6 +1286,19 @@
     tidySections();
     if (on) pill("Гостевой режим: только просмотр и питание", true, 4000);
   }
+  // Android "Back": close the top-most thing (viewer, dialog, selector, sheet, keys, page).
+  // Returns true when something was closed; the app then stays open instead of minimizing.
+  window.pcrBack = () => {
+    if (!$("imgView").hidden) { $("imgBack").click(); return true; }
+    const modal = [...document.querySelectorAll(".modal")].find((m) => !m.hidden);
+    if (modal) { const no = modal.querySelector("#confirmNo, #textDlgNo, #macroClose, #logClose, #ccClose, #hintsOk, .btn:not(.primary):not(.danger)"); no ? no.click() : (modal.hidden = true); return true; }
+    if (!$("zoneSel").hidden) { $("zoneSel").hidden = true; return true; }
+    if (!menu.hidden || !$("powerSheet").hidden || !$("winSheet").hidden || !$("zoneSheet").hidden) { hideSheets(); return true; }
+    if (!$("kbPanel").hidden) { $("kbBtn").click(); return true; }
+    if (!$("filesPage").hidden && fSelecting) { $("fCancelSel").click(); return true; }
+    if (pages.some((p) => !$(p).hidden)) { closePages(); return true; }
+    return false;
+  };
   // hide a group heading in "Ещё" when every tile under it is hidden (e.g. guest mode)
   function tidySections() {
     document.querySelectorAll(".tools-wrap .sec").forEach((sec) => {

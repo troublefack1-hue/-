@@ -265,7 +265,9 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (web != null) moveTaskToBack(true); else super.onBackPressed();
+        if (web == null) { super.onBackPressed(); return; }
+        // let the page close its own panel first; only from the main screen does Back minimize
+        web.evaluateJavascript("(window.pcrBack && window.pcrBack()) ? '1' : '0'", v -> { if (!"\"1\"".equals(v)) moveTaskToBack(true); });
     }
 
     @Override protected void onDestroy() { stopRemote(); super.onDestroy(); }
