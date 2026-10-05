@@ -380,6 +380,7 @@
     b.onclick = () => { prefs.capture = b.dataset.capture; savePrefs(); document.querySelectorAll("#capture button").forEach((x) => x.classList.toggle("on", x === b)); send({ t: "capture", mode: prefs.capture }); buzz(8); };
   });
   const sendCapture = () => { if (prefs.capture && prefs.capture !== "auto") send({ t: "capture", mode: prefs.capture }); };
+  $("appUpdate").onclick = () => { if (window.PcRemoteApp && PcRemoteApp.checkUpdate) { PcRemoteApp.checkUpdate(); buzz(8); } else show("Обновления приложения — только в «Мой ПК» на Android; в браузере обновлять нечего"); };
   $("adaptOn").checked = prefs.adapt !== false;
   const sendAdapt = () => send({ t: "adapt", on: prefs.adapt !== false });
   $("adaptOn").onchange = () => { prefs.adapt = $("adaptOn").checked; savePrefs(); sendAdapt(); show(prefs.adapt ? "Качество подстраивается под канал" : "Качество фиксировано: как выбрано в профиле"); };

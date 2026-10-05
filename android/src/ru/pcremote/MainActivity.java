@@ -369,6 +369,25 @@ public class MainActivity extends Activity {
         /** Which road the tunnel took last ("direct 192.168.42.129", "lan …", "public …"), for diagnostics. */
         @JavascriptInterface public String path() { return Paths.lastPath; }
 
+        /** Settings → «Проверить обновления приложения»: check now, say what happened, install if newer. */
+        @JavascriptInterface public void checkUpdate() {
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, "Проверяю обновления…", Toast.LENGTH_SHORT).show());
+            new Thread(() -> {
+                try {
+                    String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+                    Updater.Info info = Updater.check(cur);
+                    if (info == null) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Это последняя версия (" + cur + ")", Toast.LENGTH_SHORT).show()); return; }
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Скачиваю " + info.version + "…", Toast.LENGTH_SHORT).show());
+                    Updater.download(info.url, getCacheDir(), info.sha256);
+                    runOnUiThread(() -> {
+                        Toast.makeText(MainActivity.this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
+                        startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"), "application/vnd.android.package-archive")
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK));
+                    });
+                } catch (Exception e) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Не удалось проверить: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+            }).start();
+        }
+
         @JavascriptInterface public void repair() {
             prefs.edit().remove("secret").apply();
             runOnUiThread(() -> showSetup(null));

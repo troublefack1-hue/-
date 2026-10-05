@@ -458,6 +458,8 @@ public class MainActivity extends Activity {
         Root pcRoot = new Root("ПК", prefs.contains("secret") ? "папки компьютера через PC Remote · " + prefs.getString("hostport", "") : "подключить компьютер с PC Remote", null, R.drawable.ic_sd);
         pcRoot.open = this::openPc; r.add(pcRoot);
         r.add(new Root("Корзина", "удалённое можно вернуть", Fs.trashDir(ext), R.drawable.ic_trash));
+        String ver = "?"; try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) {}
+        Root upd = new Root("Обновить приложение", "версия " + ver + " · нажмите: проверит и установит новую", null, R.drawable.ic_rotate); upd.open = () -> checkUpdate(true); r.add(upd);
         for (String p : favorites()) { File f = new File(p); Root fav = new Root(f.getName(), "избранное · " + f.getParent(), f, R.drawable.ic_folder); r.add(fav); }
         for (String p : recents()) { File f = new File(p); if (!f.exists()) continue; Root rc = new Root(f.getName(), "недавнее · " + Fs.date(f.lastModified()), f, iconFor(Fs.kindOf(f.getName()))); rc.open = () -> { remember(f); openLocal(f); }; r.add(rc); }
         for (Root x : r) if (x.open == null) { final File f = x.file; x.open = () -> { if (!f.exists()) f.mkdirs(); active.open(new LocalLoc(f)); }; }
@@ -735,11 +737,13 @@ public class MainActivity extends Activity {
 
     // ==================================================================== update ===
     private void checkUpdate(boolean manual) {
+        if (manual) toast("Проверяю обновления…");
         new Thread(() -> {
             try {
                 String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
                 Updater.Info info = Updater.check(cur, "pcremote-files.apk");
                 if (info == null) { if (manual) ui.post(() -> toast("Это последняя версия (" + cur + ")")); return; }
+                if (manual) ui.post(() -> toast("Скачиваю " + info.version + "…"));
                 File apk = Updater.download(info.url, getCacheDir(), info.sha256);
                 ui.post(() -> { toast("Обновление " + info.version + " — установите"); startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(FileProvider.uriFor(apk), "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)); });
             } catch (Exception e) { if (manual) ui.post(() -> toast("Не удалось проверить: " + e.getMessage())); }
