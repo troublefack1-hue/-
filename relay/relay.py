@@ -285,7 +285,7 @@ class Hub:
     async def ws_auth(self, ws: web.WebSocketResponse, ip: str) -> bool:
         """First message must be {"t":"auth","token":...} within AUTH_TIMEOUT."""
         if self.lockout.blocked(ip):
-            await ws.close(code=4003, message=b"locked")
+            await ws.close(code=4029, message=b"locked")   # not 4003: a lockout must not make the phone forget its secret
             return False
         try:
             msg = await asyncio.wait_for(ws.receive(), AUTH_TIMEOUT)
