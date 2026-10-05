@@ -261,7 +261,9 @@ class CastWindow(tk.Toplevel):
 
     def show_frame(self, jpeg: bytes):
         img = Image.open(io.BytesIO(jpeg))
-        w, h = self.winfo_width() or 800, self.winfo_height() or 600
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 50 or h < 50:  # not mapped yet: use the whole screen
+            w, h = self.winfo_screenwidth(), self.winfo_screenheight()
         k = min(w / img.width, h / img.height)
         img = img.resize((max(1, int(img.width * k)), max(1, int(img.height * k))), Image.BILINEAR)
         self.photo = ImageTk.PhotoImage(img)
