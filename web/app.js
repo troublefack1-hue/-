@@ -678,7 +678,13 @@
   $("autoProfile").onchange = () => { prefs.autoProfile = $("autoProfile").checked; savePrefs(); autoProfile(); };
   conn && conn.addEventListener && conn.addEventListener("change", autoProfile);
   setTimeout(autoProfile, 1500);
-  $("fsBtn").onclick = () => { document.documentElement.requestFullscreen?.(); menu.hidden = true; };
+  let immersive = false;
+  $("fsBtn").onclick = () => {
+    menu.hidden = true;
+    // inside the app the Fullscreen API is unavailable: ask the activity to hide the system bars
+    if (window.PcRemoteApp && window.PcRemoteApp.fullscreen) { immersive = !immersive; window.PcRemoteApp.fullscreen(immersive); show(immersive ? "Весь экран: свайп от края вернёт панели" : "Обычный режим"); setTimeout(layout, 300); return; }
+    if (document.fullscreenElement) document.exitFullscreen?.(); else document.documentElement.requestFullscreen?.();
+  };
   $("wakeScreenBtn").onclick = () => {
     const b = $("wakeScreenBtn"); b.classList.add("busy"); b.textContent = "Бужу экран…"; buzz(15);
     send({ t: "device", op: "monitor_on" });

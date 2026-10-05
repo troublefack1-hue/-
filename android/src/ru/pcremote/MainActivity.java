@@ -286,6 +286,21 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void download(String url, String name, long size) { Downloader.start(MainActivity.this, url, name, size); }
         /** A screenshot or a photo already shown on the page: write the bytes into Pictures/PC Remote. */
         @JavascriptInterface public void saveImage(String name, String b64, String mime) { Downloader.saveBytes(MainActivity.this, name, android.util.Base64.decode(b64, android.util.Base64.DEFAULT), mime); }
+        /** "Весь экран": hide status and navigation bars (swipe from an edge brings them back). */
+        @JavascriptInterface public void fullscreen(boolean on) {
+            runOnUiThread(() -> {
+                android.view.View dv = getWindow().getDecorView();
+                if (Build.VERSION.SDK_INT >= 30) {
+                    android.view.WindowInsetsController c = getWindow().getInsetsController();
+                    if (c == null) return;
+                    if (on) { c.hide(android.view.WindowInsets.Type.systemBars()); c.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE); }
+                    else c.show(android.view.WindowInsets.Type.systemBars());
+                } else {
+                    dv.setSystemUiVisibility(on ? (android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE) : 0);
+                }
+            });
+        }
         @JavascriptInterface public boolean wakePc() { if (prefs.getString("wake", "").isEmpty()) return false; RemoteService.wake(MainActivity.this); return true; }
         /** Phone files for the PC (Claude): "All files access" on Android 11+, storage permission before. */
         @JavascriptInterface public boolean filesGranted() {
