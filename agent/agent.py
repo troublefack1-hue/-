@@ -563,6 +563,7 @@ class Screen:
         self.sct = mss.mss()
         self.mon_index = min(cfg["monitor"], len(self.sct.monitors) - 1)
         self.mon = self.sct.monitors[self.mon_index]
+        self.view_w = 0   # reported by the phone page ({"t":"view"}); 0 = unknown, no cap. Before set_width runs.
         self.profile = dict(PROFILES["normal"], fps=cfg["fps"], max_width=cfg["max_width"], quality=cfg["quality"])
         self.quality = self.profile["quality"]
         self.set_width(self.profile["max_width"])
@@ -629,6 +630,15 @@ class Screen:
                 out = self.cap.grab(region, force)
             else:
                 raise
+        if out is None and force and self.cap.name == "dxgi" and getattr(self.cap, "last", None) is None:
+            # DXGI hands out changes only: right after a (re)start, with a still or sleeping display, there was no
+            # frame at all and the phone stayed black until something moved on the PC. This one frame via GDI.
+            try:
+                out = capture.MssCapture(self.sct, self.mon).grab(region, True)
+                if region is None and out:
+                    self.cap.last = out
+            except Exception as e:  # noqa: BLE001
+                log.info("first frame via gdi failed: %s", e)
         self.grab_ms = self.cap.last_ms if not self.grab_ms else self.grab_ms * 0.8 + self.cap.last_ms * 0.2
         return out
 
@@ -730,9 +740,14 @@ class Screen:
         log.info("profile %s: %s", name, p)
 
     def set_width(self, max_width: int):
+        # no wider than the phone shows (view_w = device pixels of the picture's width on its screen): an upright
+        # phone shows ~1080 px of a 1920 desktop, the rest was encoded and sent for nothing; 480 px floor
+        if self.view_w:
+            max_width = min(max_width, max(480, self.view_w))
         w, h = self.mon["width"], self.mon["height"]
         scale = min(1.0, max_width / w)
-        self.size = (max(2, int(w * scale)), max(2, int(h * scale)))
+        # even sides: H.264 in yuv420p refuses odd ones, and widths now follow the phone's screen (any number)
+        self.size = (max(2, int(w * scale) // 2 * 2), max(2, int(h * scale) // 2 * 2))
         self._last_hash = b""
 
     def adapt(self, rtt: float):
@@ -1426,6 +1441,12 @@ class Agent:
                 elif t == "download_cancel":
                     self.downloads.cancel(str(ev.get("id", "")))
                     await ws.send_str(json.dumps({"t": "downloads", "items": self.downloads.list()}))
+                elif t == "view":
+                    vw = max(0, min(8192, int(ev.get("w") or 0)))   # 0 = unknown: no cap
+                    if vw != self.screen.view_w:
+                        self.screen.view_w = vw
+                        self.screen.set_width(self.screen.profile["max_width"])   # JPEG path
+                        self._vid_w = None                                        # video path: re-apply on the next frame
                 elif t == "profile":
                     was = self.screen.profile_name
                     self.screen.set_profile(str(ev.get("name", "normal")))
@@ -1440,7 +1461,7 @@ class Agent:
                                                   "encoder": getattr(self.enc, "encoder_name", None) if self.enc else None,
                                                   "enc_fps": self.enc.fps if self.enc else None, "size": list(self.screen.size),
                                                   "profile": self.screen.profile_name, "rtt_ms": int(self.rtt * 1000), "viewers": self.viewers,
-                                                  "zone": bool(self.screen.zone), "terms": len(self.terms), "monitor": self.screen.mon_index,
+                                                  "zone": bool(self.screen.zone), "terms": len(self.terms), "monitor": self.screen.mon_index, "view_w": self.screen.view_w,
                                                   "codecs": self.codecs, "reconnects": self.reconnects, "bw_kbs": round(self.bw / 1024, 1),
                                                   "rung": self.rung, "adaptive": self.adaptive,
                                                   "capture": self.screen.cap.name if self.screen.cap else None, "capture_mode": self.screen.capture_mode,

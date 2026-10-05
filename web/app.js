@@ -196,6 +196,7 @@
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
         sendRules(); sendAudioSrc(); sendAdapt(); sendCapture(); if (m.video) announceCodecs();
+        viewSent = 0; reportView();   // the agent may have restarted and forgotten how wide we show it
         if (!$("termPanel").hidden && !terms.size) renderTermEmpty();   // project folders may have changed on the PC
       } else if (m.t === "cmd_result") {
         const okText = { open_url: "Ссылка открыта на ПК", print: "Отправлено на печать", kill: "Процесс завершён", monitor_off: "Экран выключен", monitor_on: "Экран включён", powerplan: "Схема питания изменена" };
@@ -480,7 +481,18 @@
     base = Math.min(view.clientWidth / frameW, view.clientHeight / frameH);
     applyTransform();
   }
+  // how many device pixels of the PC's width the phone really shows: the PC sends no more than that
+  let viewSent = 0, viewTimer = null;
+  function reportView() {
+    if (!frameW || !frameH) return;
+    const shown = Math.min(view.clientWidth, view.clientHeight * frameW / frameH) * zoom * (window.devicePixelRatio || 1);
+    const w = Math.ceil(shown / 160) * 160;   // steps of 160 px: the encoder restarts only on real changes
+    if (w === viewSent) return;
+    clearTimeout(viewTimer);
+    viewTimer = setTimeout(() => { viewSent = w; send({ t: "view", w }); }, 400);
+  }
   function applyTransform() {
+    reportView();
     const s = base * zoom;
     const vw = view.clientWidth, vh = view.clientHeight, w = frameW * s, h = frameH * s;
     panX = w <= vw ? (vw - w) / 2 : Math.min(0, Math.max(vw - w, panX));
