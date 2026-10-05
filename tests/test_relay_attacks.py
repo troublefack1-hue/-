@@ -201,6 +201,30 @@ async def main():
             except asyncio.TimeoutError: break
             if m.type == aiohttp.WSMsgType.TEXT: got.append(json.loads(m.data).get("t"))
         report("a phone joining later gets the PC's hello", "hello" in got, str(got))
+        # ---------- a real Android phone: "t" last in its answers, files allowed only after it connected ----------
+        for w in list(hub.phones):
+            await w.close()
+        await asyncio.sleep(0.2)
+        hub.fs_phone = None
+        andro = await ws_auth(s, "/ws/phone", token=NT)
+        await andro.send_str(json.dumps({"t": "hello_phone", "model": "Android", "fs": False, "bg": True}))
+        await asyncio.sleep(0.2)
+
+        async def android_side():
+            while True:
+                m = await andro.receive()
+                if m.type != aiohttp.WSMsgType.TEXT:
+                    return
+                ev = json.loads(m.data)
+                if ev.get("t") == "pfs":   # org.json keeps insertion order: PhoneFs used to add "t" and "id" last
+                    await andro.send_str('{"ok":true,"roots":[{"name":"Память","path":"/sdcard"}],"t":"pfs_r","id":"%s"}' % ev["id"])
+                    return
+        side = asyncio.create_task(android_side())
+        r = await s.get(U + "/api/phone", params={"op": "roots"}, headers={"Authorization": "Bearer " + NT})
+        j = await r.json() if r.status == 200 else {"status": r.status, "text": await r.text()}
+        side.cancel()
+        report("a phone's answer with \"t\" last reaches `phone`, and fs:false at connect does not lock files out",
+               r.status == 200 and j.get("ok") is True, str(j)[:120])
 
     await runner.cleanup()
     print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")

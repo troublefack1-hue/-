@@ -94,14 +94,31 @@ def apply(new_exe: Path, version: str = "") -> bool:
         return False
     me = Path(sys.executable)
     script = Path(tempfile.gettempdir()) / "pc-remote-update.cmd"
-    script.write_text(
+    script.write_bytes(b"")   # must exist for its short name
+    # Until 05.10.2026 PC Remote closed for an update and never came back. Three reasons, each checked:
+    # DETACHED_PROCESS makes cmd.exe exit at once with code 1; without a console cmd reads the script in another
+    # code page, so "C:\Users\Николай\..." became garbage (8.3 short paths are ASCII); and `find`/`timeout`
+    # resolved to Git's find (when started from Git Bash) and need a console — system tools by full path, PING to wait.
+    pid, new, cur = os.getpid(), _short(new_exe), _short(me)
+    script.write_bytes((
         "@echo off\r\n"
-        f":wait\r\ntasklist /FI \"PID eq {os.getpid()}\" | find \"{os.getpid()}\" >nul && (timeout /t 1 >nul & goto wait)\r\n"
-        f"copy /y \"{new_exe}\" \"{me}\" >nul && del \"{new_exe}\"\r\n"
-        f"start \"\" \"{me}\" --minimized --updated={version}\r\n"
-        "del \"%~f0\"\r\n", encoding="cp866")
-    subprocess.Popen(["cmd", "/c", str(script)], creationflags=0x00000008 | 0x00000200)  # DETACHED, NEW_PROCESS_GROUP
+        "set S=%SystemRoot%\\System32\r\n"
+        f":wait\r\n\"%S%\\tasklist.exe\" /FI \"PID eq {pid}\" /NH | \"%S%\\find.exe\" \"{pid}\" >nul && (\"%S%\\PING.EXE\" -n 2 127.0.0.1 >nul & goto wait)\r\n"
+        "set N=0\r\n"
+        f":copy\r\ncopy /y \"{new}\" \"{cur}\" >nul && goto copied\r\n"
+        "set /a N+=1\r\nif %N% lss 20 (\"%S%\\PING.EXE\" -n 2 127.0.0.1 >nul & goto copy)\r\n"
+        f":copied\r\ndel \"{new}\" 2>nul\r\n"
+        f"start \"\" \"{cur}\" --minimized --updated={version}\r\n"
+        "del \"%~f0\"\r\n").encode("ascii", "replace"))
+    subprocess.Popen(["cmd", "/c", _short(script)], creationflags=0x08000000 | 0x00000200)  # NO_WINDOW, NEW_PROCESS_GROUP
     return True
+
+
+def _short(path) -> str:
+    """The 8.3 name of an existing path: plain ASCII, safe inside a .cmd whatever the code page."""
+    import ctypes
+    buf = ctypes.create_unicode_buffer(1024)
+    return buf.value if ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, 1024) else str(path)
 
 
 # ------------------------------------------------------------ phone apps ---

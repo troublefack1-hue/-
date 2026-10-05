@@ -93,6 +93,13 @@ def load_config() -> dict:
 GUEST_ALLOW = {"ping", "ack", "profile", "cmd", "hello_phone", "monitor", "sys_get"}
 # agent -> phone message types a guest must NOT receive (terminal, clipboard, notifications,
 # window list, downloads). A guest sees the screen and power results, nothing private.
+def _event_type(data: str):
+    try:
+        return json.loads(data).get("t")
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 GUEST_RECV_BLOCK = {"term_out", "term_exit", "term_open", "pc_clip", "pc_notify", "attention", "diag",
                     "sys", "procs", "timers", "downloads", "dl", "powerplans", "windows"}
 
@@ -508,7 +515,9 @@ class Hub:
                     try:
                         hp = json.loads(msg.data)
                         self.phone_names[ws] = str(hp.get("model", ""))[:40]
-                        if hp.get("fs") and ws not in self.guests:
+                        # the service checks the permission on every request, so a bg link that said fs:false
+                        # (access granted later) still serves files; an fs:true link always wins
+                        if ws not in self.guests and (hp.get("fs") or (hp.get("bg") and self.fs_phone is None)):
                             self.fs_phone = ws
                         if hp.get("bg"):
                             self.bg.add(ws)
@@ -521,7 +530,9 @@ class Hub:
                         pass
                     self.phones_changed()
                     continue
-                if msg.data.startswith('{"t":"pfs_r"') or msg.data.startswith('{"t": "pfs_r"'):
+                # Android's JSONObject keeps insertion order and PhoneFs added "t" last: {"ok":true,…,"t":"pfs_r"}.
+                # Matching only the start sent every real phone's answer to the agent and `phone` timed out.
+                if ('"t":"pfs_r"' in msg.data or '"t": "pfs_r"' in msg.data) and _event_type(msg.data) == "pfs_r":
                     if ws is self.fs_phone:
                         self.pfs_reply(msg.data)
                     continue

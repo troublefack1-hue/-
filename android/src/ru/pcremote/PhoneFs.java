@@ -65,7 +65,10 @@ public final class PhoneFs {
     }
 
     private void reply(String id, JSONObject o) throws Exception {
-        o.put("t", "pfs_r"); o.put("id", id); out.text(o.toString());
+        // "t" and "id" first: JSONObject keeps insertion order, and the relay recognises the answer by its type
+        JSONObject r = new JSONObject().put("t", "pfs_r").put("id", id);
+        for (java.util.Iterator<String> k = o.keys(); k.hasNext(); ) { String key = k.next(); r.put(key, o.get(key)); }
+        out.text(r.toString());
     }
 
     private void error(String id, String msg) {
