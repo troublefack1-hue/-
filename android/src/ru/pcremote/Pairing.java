@@ -32,7 +32,7 @@ public final class Pairing {
             String status = in.readLine();
             if (status == null) throw new IOException("no response");
             if (!status.contains(" 200 ")) {
-                if (status.contains(" 403 ")) throw new IOException("Неверный код или код истёк");
+                if (status.contains(" 403 ")) throw new IOException("Неверный код (проверьте код в окне PC Remote)");
                 throw new IOException("PC answered: " + status);
             }
             String line;

@@ -158,6 +158,13 @@ async def main():
         report("ticket serves the file without a header", r.status == 200 and len(body) == 300_000 and "attachment" in r.headers.get("Content-Disposition", ""))
         r = await s.get(U + "/api/file", params={"ticket": tk}); report("ticket is single-use", r.status == 403)
         r = await s.post(U + "/api/ticket", json={"path": "/etc/passwd"}, headers={"Authorization": "Bearer " + T}); report("ticket for a path outside share -> 403", r.status == 403)
+        # ---------- permanent connection code ----------
+        hub.cfg["pair_code"] = "K7PX-4M2Q"
+        r = await s.get(U + "/api/pair", params={"code": "k7px 4m2q"}); j = await r.json() if r.status == 200 else {}
+        report("permanent code pairs (any case, spaces/dashes ignored)", r.status == 200 and j.get("secret") == T)
+        r = await s.get(U + "/api/pair", params={"code": "K7PX-4M2Q"}); report("permanent code is reusable", r.status == 200)
+        r = await s.get(U + "/api/pair", params={"code": "K7PX-4M2X"}); report("wrong permanent code -> 403", r.status == 403)
+        hub.lockout.failed.clear()
         # ---------- revoke: new secrets, everyone dropped ----------
         victim = await ws_auth(s, "/ws/phone"); await victim.receive()
         await hub.revoke("newsecret-0123456789abcdef", "newguest-0123456789abcdef")

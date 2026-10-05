@@ -78,6 +78,7 @@ def load_config() -> dict:
     cfg.setdefault("ntfy_phone_url", (cfg["ntfy_wake_url"] + "-phone") if cfg["ntfy_wake_url"] else "")
     # a second phone with limited rights: see, wake, power — nothing else
     cfg.setdefault("guest_secret", "")
+    cfg.setdefault("pair_code", "")      # permanent connection code shown in the PC window (8 chars); empty = off
     return cfg
 
 
@@ -314,13 +315,19 @@ class Hub:
         if self.lockout.blocked(ip):
             raise web.HTTPForbidden()
         code = request.query.get("code", "")
-        ok = (self.pair_code is not None and time.time() < self.pair_until
-              and hmac.compare_digest(code, self.pair_code))
-        if not ok:
+        norm = "".join(ch for ch in code.upper() if ch.isalnum())
+        permanent = "".join(ch for ch in str(self.cfg.get("pair_code") or "").upper() if ch.isalnum())
+        temp_ok = (self.pair_code is not None and time.time() < self.pair_until
+                   and hmac.compare_digest(code, self.pair_code))
+        perm_ok = bool(permanent) and len(norm) >= 8 and hmac.compare_digest(norm, permanent)
+        if not (temp_ok or perm_ok):
             self.lockout.fail(ip)
             log.warning("bad pairing code from %s", ip)
             raise web.HTTPForbidden()
-        self.pair_code = None  # single use
+        if temp_ok:
+            self.pair_code = None  # a temporary code is single use; the permanent one stays
+        else:
+            self.pair_guest = False  # the permanent code always gives the owner secret
         log.info("phone paired from %s", ip)
         self.log_event(f"телефон привязан ({ip})")
         if self.on_paired:

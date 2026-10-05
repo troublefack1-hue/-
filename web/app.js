@@ -274,7 +274,18 @@
     return `${(s / 86400) | 0} дн назад`;
   }
 
-  $("loginBtn").onclick = () => { secret = $("secret").value.trim(); if (secret) connect(); };
+  $("loginBtn").onclick = async () => {
+    const v = $("secret").value.trim(); if (!v) return;
+    const code = v.toUpperCase().replace(/[^0-9A-Z]/g, "");
+    if (code.length === 6 || code.length === 8) {   // the connection code from the PC window: exchange it for the secret
+      try {
+        const r = await fetch(`/api/pair?code=${encodeURIComponent(code)}`);
+        if (!r.ok) { $("loginErr").textContent = "Неверный код"; return; }
+        secret = (await r.json()).secret;
+      } catch { $("loginErr").textContent = "ПК не отвечает"; return; }
+    } else secret = v;
+    connect();
+  };
   $("secret").addEventListener("keydown", (e) => { if (e.key === "Enter") $("loginBtn").click(); });
   $("logoutBtn").onclick = () => {
     localStorage.removeItem("pcr_secret");

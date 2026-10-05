@@ -75,6 +75,14 @@ def install_phone_cli() -> Path:
     return dst
 
 
+PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I: easy to read off the screen
+
+
+def new_pair_code() -> str:
+    raw = "".join(secrets.choice(PAIR_ALPHABET) for _ in range(8))
+    return raw[:4] + "-" + raw[4:]
+
+
 def load_config() -> dict:
     DATA.mkdir(parents=True, exist_ok=True)
     first_run = not CONFIG.exists()
@@ -86,6 +94,9 @@ def load_config() -> dict:
     cfg.setdefault("port", 8443)
     if not cfg.get("guest_secret"):
         cfg["guest_secret"] = secrets.token_urlsafe(30)
+        changed = True
+    if not cfg.get("pair_code"):
+        cfg["pair_code"] = new_pair_code()
         changed = True
     cfg.setdefault("ntfy_wake_url", "")
     cfg.setdefault("max_width", 1280)
@@ -232,7 +243,7 @@ class Backend:
         relay_cfg = {
             "secret": self.cfg["secret"], "host": "127.0.0.1", "port": 8787,
             "ntfy_wake_url": self.cfg["ntfy_wake_url"],
-            "tls_host": "0.0.0.0", "tls_port": self.cfg["port"],
+            "tls_host": "0.0.0.0", "tls_port": self.cfg["port"], "pair_code": self.cfg.get("pair_code", ""),
             "tls_cert": str(DATA / "server.crt"), "tls_key": str(DATA / "server.key"),
             "ca_cert": str(DATA / "ca.crt"),
             "upload_dir": self.cfg["upload_dir"], "share_dirs": self.cfg["share_dirs"],
@@ -520,7 +531,7 @@ class App(tk.Tk):
         self.upd_btn.grid(row=0, column=1, sticky="e", **pad)
         ttk.Label(f, text=f"версия {updater.current_version()}", style="Muted.TLabel").grid(row=0, column=0, sticky="w", **pad)
 
-        ttk.Label(f, text="Адрес для телефона:").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Label(f, text="Адрес и код подключения для телефона:").grid(row=2, column=0, sticky="w", **pad)
         self.addr = ttk.Entry(f, width=28)
         self.addr.insert(0, f"{cfg['public_ip'] or '?'}:{cfg['port']}")
         self.addr.configure(state="readonly")
@@ -528,7 +539,7 @@ class App(tk.Tk):
 
         pf = ttk.Frame(f)
         pf.grid(row=3, column=0, sticky="w", **pad)
-        ttk.Button(pf, text="Привязать телефон", style="Accent.TButton", command=self.show_pair).pack(side="left")
+        ttk.Button(pf, text="Новый код", command=self.new_code).pack(side="left")
         ttk.Button(pf, text="Код для гостя", command=lambda: self.show_pair(True)).pack(side="left", padx=(6, 0))
         ttk.Button(pf, text="Папки проектов…", command=self.add_project).pack(side="left", padx=(6, 0))
         ttk.Button(pf, text="Отвязать все", command=self.revoke_all).pack(side="left", padx=(6, 0))
@@ -583,6 +594,8 @@ class App(tk.Tk):
                 self.after(1600, lambda: self.code_hint.configure(text=f"Обновление {upd} не применилось: нет прав на запись в папку программы"))
 
         self.pair_until = 0
+        self.code.configure(text=cfg["pair_code"])
+        self.code_hint.configure(text="Введите адрес и этот код в приложении «Мой ПК» на телефоне. Код постоянный.")
         self.cast_win: CastWindow | None = None
         self.update_info = None
         self.after(500, self.tick)
@@ -657,12 +670,13 @@ class App(tk.Tk):
     def roll_code(self, code: str, step=0):
         """Slot-machine style reveal of the pairing code."""
         import random
+        fmt = (lambda c: f"{c[:3]} {c[3:]}") if (len(code) == 6 and code.isdigit()) else (lambda c: c)
         if step < 12:
-            shown = "".join(c if i < step // 2 else str(random.randrange(10)) for i, c in enumerate(code))
-            self.code.configure(text=f"{shown[:3]} {shown[3:]}", fg=MUTED)
+            shown = "".join(c if (i < step // 2 or c == "-") else random.choice(PAIR_ALPHABET) for i, c in enumerate(code))
+            self.code.configure(text=fmt(shown), fg=MUTED)
             self.after(50, self.roll_code, code, step + 1)
         else:
-            self.code.configure(text=f"{code[:3]} {code[3:]}", fg=ACCENT)
+            self.code.configure(text=fmt(code), fg=ACCENT)
 
     def show_window(self):
         self.bubble.withdraw()
@@ -775,6 +789,17 @@ class App(tk.Tk):
         self.tray.stop()
         super().destroy()
 
+    def new_code(self):
+        """A fresh permanent code (the old one stops working; already paired phones are unaffected)."""
+        self.cfg["pair_code"] = new_pair_code()
+        save_config(self.cfg)
+        if self.backend.hub is not None:
+            self.backend.hub.cfg["pair_code"] = self.cfg["pair_code"]
+        self.pair_until = 0
+        self.backend.paired_ip = ""
+        self.roll_code(self.cfg["pair_code"])
+        self.code_hint.configure(text="Новый постоянный код. Введите адрес и код в приложении на телефоне.")
+
     def show_pair(self, guest: bool = False):
         try:
             code = self.backend.pair_code(guest)
@@ -785,6 +810,7 @@ class App(tk.Tk):
         self.roll_code(code)
         self.backend.paired_ip = ""
         self.pair_kind = "гость (только смотреть, включать и выключать)" if guest else "полный доступ"
+        self.code_hint.configure(text=f"Временный код ({self.pair_kind}), действует 5 минут")
 
     def ring(self):
         try:
@@ -849,13 +875,14 @@ class App(tk.Tk):
             self.cast_btn.configure(state="normal" if b.cast_active else "disabled")
         left = int(self.pair_until - time.time())
         if b.paired_ip:
-            self.code.configure(text="✓")
-            self.code_hint.configure(text=f"Телефон привязан ({b.paired_ip})")
+            self.code.configure(text=self.cfg["pair_code"], fg=OK)
+            self.code_hint.configure(text=f"Телефон привязан ({b.paired_ip}). Код остаётся для других телефонов.")
         elif left > 0:
             self.code_hint.configure(text=f"Введите код в приложении на телефоне ({getattr(self, 'pair_kind', 'полный доступ')}). Действует ещё {left // 60}:{left % 60:02d}")
-        elif self.code.cget("text") not in ("", "✓"):
-            self.code.configure(text="")
-            self.code_hint.configure(text="Код истёк, нажмите ещё раз")
+        elif self.pair_until and self.code.cget("text") != self.cfg["pair_code"]:
+            self.pair_until = 0   # temporary code expired: back to the permanent one
+            self.code.configure(text=self.cfg["pair_code"], fg=ACCENT)
+            self.code_hint.configure(text="Постоянный код подключения. Введите адрес и код в приложении на телефоне.")
         self.after(1000, self.tick)
 
 
