@@ -85,7 +85,7 @@ def main():
     run([aapt2, "link", "-o", build / "base.apk", "-I", android_jar,
          "--manifest", PROJECT / "AndroidManifest.xml", "--java", build / "gen",
          "--min-sdk-version", "24", "--target-sdk-version", "33",
-         "--version-code", str(args.version_code), "--version-name", args.version_name,
+         "--version-code", str(args.version_code), "--version-name", args.version_name, "--replace-version",
          build / "res.zip"])
 
     # 2. java -> classes
@@ -123,6 +123,12 @@ def main():
     run([apksigner, "sign", "--ks", ks, "--ks-pass", f"pass:{pw}", "--key-pass", f"pass:{pw}",
          "--ks-key-alias", "pcremote", "--out", apk, aligned])
     run([apksigner, "verify", apk])
+    # the version must really be inside: the app compares it with the release to offer updates
+    badging = subprocess.run([str(aapt2), "dump", "badging", str(apk)], capture_output=True, text=True).stdout
+    want = f"versionCode='{args.version_code}' versionName='{args.version_name}'"
+    if want not in badging:
+        sys.exit(f"version not stamped into {apk.name}: expected {want}, got: {badging.splitlines()[0] if badging else '?'}")
+    print("version:", want)
     print(f"\nOK: {apk} ({apk.stat().st_size // 1024} KB)")
 
 
