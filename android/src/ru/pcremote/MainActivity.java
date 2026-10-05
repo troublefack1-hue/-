@@ -175,35 +175,15 @@ public class MainActivity extends Activity {
                 if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
                 if (found == null) found = Updater.check(cur);
                 final Updater.Info info = found;
-                if (fromPc) { updateOthersFromPc(); updateSelfFromPc(info); return; }   // from our own PC: just do it
-                updateOthersFromPc();
-                if (info == null) return;
+                if (AutoUpdate.fromPc(this)) {   // from our own PC: just do it, no dialog
+                    runOnUiThread(() -> Toast.makeText(this, "Обновляю с ПК…", Toast.LENGTH_SHORT).show());
+                    return;
+                }
+                if (info == null || fromPc) return;
                 runOnUiThread(() -> offerUpdate(info, cur, false));
             } catch (Exception ignored) {
             }
         }).start();
-    }
-
-    /** «Интернет через ПК» and «Проводник», when installed and the PC has a newer build: silently (Android 12+). */
-    private void updateOthersFromPc() {
-        if (Updater.pc == null) return;
-        for (String[] app : new String[][]{{"ru.pcremote.net", "pcremote-net.apk", "Интернет через ПК"}, {"ru.pcremote.files", "pcremote-files.apk", "Проводник"}}) {
-            try {
-                String v = getPackageManager().getPackageInfo(app[0], 0).versionName;
-                Updater.Info i = Updater.checkPc(v, app[1]);
-                if (i == null) continue;
-                SilentInstaller.install(this, Updater.downloadPc(app[1], getCacheDir(), i.sha256), app[2] + " " + i.version);
-            } catch (Exception ignored) {}   // not installed, or the PC has nothing newer
-        }
-    }
-
-    /** Ourselves last: the update replaces this process. */
-    private void updateSelfFromPc(Updater.Info info) {
-        if (info == null) return;
-        try {
-            SilentInstaller.install(this, Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256), "Мой ПК " + info.version);
-            runOnUiThread(() -> Toast.makeText(this, "Обновляюсь с ПК до " + info.version + "…", Toast.LENGTH_SHORT).show());
-        } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Обновление с ПК не скачалось: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
     }
 
     /** What's new + consent; only then download and hand over to the installer. */

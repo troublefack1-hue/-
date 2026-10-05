@@ -73,6 +73,11 @@ public class RemoteService extends Service {
         startForeground(NOTIF_ID, notification("Связь с ПК", "ожидание команд"));
         keeper = new Thread(this::keepConnected, "ws-keeper");
         Thread pw = new Thread(this::watchPaths, "paths"); pw.setDaemon(true); pw.start();
+        Thread up = new Thread(() -> {   // fixes made on the PC reach the phone by themselves, every 15 minutes
+            sleep(60_000);
+            while (running) { try { AutoUpdate.fromPc(this); } catch (Exception ignored) {} sleep(15 * 60_000); }
+        }, "autoupdate");
+        up.setDaemon(true); up.start();
         keeper.setDaemon(true); keeper.start();
     }
 
