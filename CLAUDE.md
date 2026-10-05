@@ -64,6 +64,20 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 - `firewall_open` при повторном запуске падал (`TypeError: argument of type 'NoneType'`): вывод netsh в OEM-кодировке
   не декодировался, stdout был None. Теперь `encoding="oem", errors="replace"`.
 
+- Ночь 05→06.10.2026 (телефон Xiaomi 23124RA7EO, HyperOS, Android 14; ПК GTX 1660 SUPER, драйвер 591):
+  экран телефона слушал ::1 (`Tunnel`/`Socks5Server` → 127.0.0.1); relay не хранил `hello` — телефон после ПК
+  навсегда оставался на JPEG (3–4 МБ/с); кодер шёл CBR и перезапускался на каждом неподвижном кадре (`key[4]`
+  вместо `key[5]`) — теперь VBR cq 24/26/30, GOP 30 с, ширина кадра по экрану телефона (`{"t":"view"}`);
+  ffmpeg только ветка BtbN 8.1 (master требует драйвер 610+); первый кадр через GDI, если DXGI молчит (спящий
+  монитор); захват под RLock; терминалы — списки argv (pywinpty оставлял кавычки); громкость — pycaw `EndpointVolume`.
+  Автообновление exe не работало никогда: `DETACHED_PROCESS` гасит cmd, кириллица в .cmd, `find` из Git —
+  теперь NO_WINDOW, пути 8.3, системные утилиты, проверка запуска. `refresh_apks` больше не откатывает APK новее релиза.
+  Команда `phone`: ответы `pfs_r` с `t` в конце не узнавались (org.json хранит порядок), `phone.ps1` без BOM не
+  разбирался в PowerShell 5.1, Git Bash портил `/sdcard`. Тесты на Windows все зелёные.
+  Телефон: тихая установка (`USER_ACTION_NOT_REQUIRED`) на HyperOS, похоже, всё равно просит подтверждение —
+  проверить по `Download/PCRemote/log.txt` (PhoneLog, 1.131+). Linux-раннеры GitHub ночью не брали задания:
+  релизы не выходили, приложения для телефона выкладывались локально (`deploy_phone.py`, вне репо).
+
 ## Что ещё НЕ проверялось на живом железе (проверить в первую очередь)
 
 - Захват экрана при масштабе Windows 125–150 % и на двух мониторах; HD-зона; смена разрешения. DXGI через dxcam (`agent/capture.py`): реально ли быстрее GDI на этой видеокарте, откат на GDI при полноэкранной игре, `--collect-all dxcam` в PyInstaller (numpy внутри).
