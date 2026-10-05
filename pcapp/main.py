@@ -178,9 +178,10 @@ def is_admin() -> bool:
 def firewall_open(port: int) -> bool:
     """Add an inbound rule once. Needs admin; otherwise asks for elevation."""
     name = f"PC Remote {port}"
+    # netsh prints in the OEM code page (cp866 on Russian Windows); the default decoder fails and leaves stdout None
     check = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"],
-                           capture_output=True, text=True, creationflags=0x08000000)
-    if check.returncode == 0 and name in check.stdout:
+                           capture_output=True, text=True, encoding="oem", errors="replace", creationflags=0x08000000)
+    if check.returncode == 0 and name in (check.stdout or ""):
         return True
     args = f'advfirewall firewall add rule name="{name}" dir=in action=allow protocol=TCP localport={port}'
     if is_admin():

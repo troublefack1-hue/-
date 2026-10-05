@@ -60,6 +60,8 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 - С включённым VPN окно показывало и вшивало в QR адрес VPN-сервера (77.91.69.203), а `watch_public_ip`
   слал его телефону. `public_ip()` теперь при VPN спрашивает адрес через физический адаптер
   (`relay.lan_interface_index`, сокет с `IP_UNICAST_IF`, HTTP к ipify/icanhazip/ifconfig.me); проверено: 78.29.49.124.
+- `firewall_open` при повторном запуске падал (`TypeError: argument of type 'NoneType'`): вывод netsh в OEM-кодировке
+  не декодировался, stdout был None. Теперь `encoding="oem", errors="replace"`.
 
 ## Что ещё НЕ проверялось на живом железе (проверить в первую очередь)
 
