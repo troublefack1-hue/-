@@ -32,6 +32,8 @@
   let audioOn = false;
 
   // ------------------------------------------------------------ helpers
+  // every string that came from the PC, a phone or a file name goes through esc() before innerHTML
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   function show(msg, ms = 2500) {
     toast.textContent = msg; toast.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(() => (toast.hidden = true), ms);
@@ -824,7 +826,7 @@
     for (const cwd of projects) {
       const row = document.createElement("div");
       const name = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "домашняя папка";
-      row.innerHTML = `<b>${name}</b><br>`;
+      row.innerHTML = `<b>${esc(name)}</b><br>`;
       const shells = pcInfo.shells || ["shell"];
       const options = [["claude", "Claude Code"], ...(shells.includes("bash") ? [["bash", "Git Bash"]] : []), ["shell", "PowerShell"]];
       for (const [kind, label] of options) {
@@ -860,7 +862,7 @@
     for (const [id, t] of terms) {
       const b = document.createElement("button"); b.classList.toggle("on", id === activeTerm);
       const name = { claude: "Claude", bash: "Git Bash", cmd: "cmd" }[t.kind] || "PowerShell";
-      b.innerHTML = `${name}${t.exited ? " <i>·</i>" : ""} <i data-close="${id}">✕</i>`;
+      b.innerHTML = `${esc(name)}${t.exited ? " <i>·</i>" : ""} <i data-close="${esc(id)}">✕</i>`;
       b.onclick = (e) => { if (e.target.dataset.close) closeTerm(e.target.dataset.close); else showTerm(id); };
       tabs.appendChild(b);
     }
@@ -913,7 +915,7 @@
   }
   renderTermQuick();
   $("termRuBtn").onclick = () => { $("ccDlg").hidden = false; const L = $("ccList"); L.innerHTML = "";
-    for (const [en, ru] of window.CC_RU || []) { if (en.length < 4) continue; const d = document.createElement("div"); d.className = "it"; d.innerHTML = `<span class="n"><b>${en}</b><span class="m">${ru}</span></span>`; L.appendChild(d); } };
+    for (const [en, ru] of window.CC_RU || []) { if (en.length < 4) continue; const d = document.createElement("div"); d.className = "it"; d.innerHTML = `<span class="n"><b>${esc(en)}</b><span class="m">${esc(ru)}</span></span>`; L.appendChild(d); } };
   $("ccClose").onclick = () => ($("ccDlg").hidden = true);
   $("termRu").checked = prefs.termRu !== false;
   $("termRu").onchange = () => { prefs.termRu = $("termRu").checked; savePrefs(); show(prefs.termRu ? "Подсказки Claude Code переводятся" : "Перевод выключен"); };
@@ -976,7 +978,7 @@
       } else {
         d.className = "it";
         const icon = it.dir ? "📁" : isImage(it.name) ? "🖼" : /\.(mp4|mkv|avi|mov)$/i.test(it.name) ? "🎬" : /\.(mp3|wav|flac)$/i.test(it.name) ? "🎵" : /\.(zip|rar|7z)$/i.test(it.name) ? "🗜" : /\.(exe|msi)$/i.test(it.name) ? "⚙" : "📄";
-        d.innerHTML = `<i>${icon}</i><span class="n"><b>${it.name}</b><span class="m">${it.dir ? "папка" : fmtSize(it.size)}${it.mtime ? " · " + fmtDate(it.mtime) : ""}</span></span><span class="chk" ${fSelecting ? "" : "hidden"}>✓</span>`;
+        d.innerHTML = `<i>${icon}</i><span class="n"><b>${esc(it.name)}</b><span class="m">${it.dir ? "папка" : fmtSize(it.size)}${it.mtime ? " · " + fmtDate(it.mtime) : ""}</span></span><span class="chk" ${fSelecting ? "" : "hidden"}>✓</span>`;
       }
       d.classList.toggle("sel", fSel.has(it.path));
       let lp = null;
@@ -1127,7 +1129,7 @@
     if (!macros.length) list.innerHTML = `<div class="empty">Пока нет макросов</div>`;
     macros.forEach((m, i) => {
       const d = document.createElement("div"); d.className = "it";
-      d.innerHTML = `<i>⚡</i><span class="n">${m.name}</span><span class="s">${m.steps.length} шаг.</span><i data-del="${i}">🗑</i>`;
+      d.innerHTML = `<i>⚡</i><span class="n">${esc(m.name)}</span><span class="s">${m.steps.length} шаг.</span><i data-del="${i}">🗑</i>`;
       d.onclick = (e) => { if (e.target.dataset.del) { macros.splice(i, 1); saveMacros(); renderMacros(); } else { $("macroEdit").value = [m.name, ...m.steps].join("\n"); } };
       list.appendChild(d);
     });
@@ -1157,7 +1159,7 @@
     for (const w of items) {
       const d = document.createElement("div"); d.className = "w" + (w.active ? " active" : "");
       const label = (w.proc || w.title).slice(0, 1).toUpperCase();
-      d.innerHTML = `<span class="av" style="background:${hue(w.proc || w.title)}">${label}</span><span class="n"><b>${w.title.replace(/</g, "&lt;")}</b><span>${w.proc || ""}${w.min ? " · свёрнуто" : ""}${w.active ? " · активно" : ""}</span></span><button title="Закрыть">✕</button>`;
+      d.innerHTML = `<span class="av" style="background:${hue(w.proc || w.title)}">${esc(label)}</span><span class="n"><b>${esc(w.title)}</b><span>${esc(w.proc || "")}${w.min ? " · свёрнуто" : ""}${w.active ? " · активно" : ""}</span></span><button title="Закрыть">✕</button>`;
       d.querySelector("button").onclick = (e) => { e.stopPropagation(); closeWin(d, w); };
       d.onclick = () => { send({ t: "window", op: "focus", hwnd: w.hwnd }); $("winSheet").hidden = true; buzz(10); };
       // swipe left = close, like Android
@@ -1217,9 +1219,9 @@
 
   const fmtUp = (s) => s >= 86400 ? `${(s / 86400) | 0} д ${((s % 86400) / 3600) | 0} ч` : s >= 3600 ? `${(s / 3600) | 0} ч ${((s % 3600) / 60) | 0} мин` : `${(s / 60) | 0} мин`;
   const fmtRate = (b) => b > 1e6 ? `${(b / 1e6).toFixed(1)} МБ/с` : `${Math.round(b / 1024)} КБ/с`;
-  const gauge = (label, pct, value, sub) => `<div class="gauge"><div class="ring${pct >= 90 ? " hot" : ""}" style="--p:${Math.round(pct)}" data-v="${value}"></div><div class="t"><b>${label}</b><span>${sub || ""}</span></div></div>`;
+  const gauge = (label, pct, value, sub) => `<div class="gauge"><div class="ring${pct >= 90 ? " hot" : ""}" style="--p:${Math.round(pct)}" data-v="${value}"></div><div class="t"><b>${esc(label)}</b><span>${esc(sub || "")}</span></div></div>`;
   function renderSys(m) {
-    if (m.error) { $("gauges").innerHTML = `<div class="empty">${m.error}</div>`; return; }
+    if (m.error) { $("gauges").innerHTML = `<div class="empty">${esc(m.error)}</div>`; return; }
     const ramP = m.ram_total ? m.ram_used / m.ram_total * 100 : 0;
     let g = gauge("Процессор", m.cpu || 0, `${Math.round(m.cpu || 0)}%`, `${m.cpu_cores || "?"} ядер${m.cpu_freq ? " · " + (m.cpu_freq / 1000).toFixed(1) + " ГГц" : ""}${m.cpu_temp ? " · " + m.cpu_temp + "°" : ""}`);
     g += gauge("Память", ramP, `${Math.round(ramP)}%`, `${(m.ram_used / 1e9).toFixed(1)} из ${(m.ram_total / 1e9).toFixed(0)} ГБ`);
@@ -1227,13 +1229,13 @@
     if (m.battery) g += gauge("Батарея", m.battery.percent, `${Math.round(m.battery.percent)}%`, m.battery.plugged ? "от сети" : "от батареи");
     $("gauges").innerHTML = g;
     $("sysDisks").innerHTML = (m.disks || []).map((d) => { const p = d.total ? d.used / d.total * 100 : 0;
-      return `<div class="bar${p >= 92 ? " hot" : ""}"><div class="h"><span>${d.name}</span><span>${(d.used / 1e9).toFixed(0)} / ${(d.total / 1e9).toFixed(0)} ГБ свободно ${((d.total - d.used) / 1e9).toFixed(0)}</span></div><div class="b"><i style="width:${p}%"></i></div></div>`; }).join("");
+      return `<div class="bar${p >= 92 ? " hot" : ""}"><div class="h"><span>${esc(d.name)}</span><span>${(d.used / 1e9).toFixed(0)} / ${(d.total / 1e9).toFixed(0)} ГБ свободно ${((d.total - d.used) / 1e9).toFixed(0)}</span></div><div class="b"><i style="width:${p}%"></i></div></div>`; }).join("");
     $("sysMisc").textContent = `Работает ${fmtUp(m.uptime || 0)} · сеть ПК ↓${fmtRate(m.net_down || 0)} ↑${fmtRate(m.net_up || 0)}`;
   }
   function renderProcs(items) {
     const L = $("procList"); L.innerHTML = items.length ? "" : `<div class="empty">Пусто</div>`;
     for (const p of items) { const d = document.createElement("div"); d.className = "it";
-      d.innerHTML = `<span class="n"><b>${p.name}</b><span class="m">${p.cpu.toFixed(0)}% · ${fmtSize(p.mem)}</span></span><button class="x" title="Завершить">✕</button>`;
+      d.innerHTML = `<span class="n"><b>${esc(p.name)}</b><span class="m">${p.cpu.toFixed(0)}% · ${fmtSize(p.mem)}</span></span><button class="x" title="Завершить">✕</button>`;
       d.querySelector("button").onclick = async () => { if (await ask(`Завершить ${p.name} (${p.pid})?`)) send({ t: "proc_kill", pid: p.pid }); };
       L.appendChild(d); }
   }
@@ -1249,13 +1251,13 @@
   function renderTimers(items) {
     const L = $("timerList"); L.innerHTML = items.length ? "" : `<div class="empty">Нет таймеров</div>`;
     for (const t of items) { const d = document.createElement("div"); d.className = "it";
-      d.innerHTML = `<i>⏱</i><span class="n"><b>${NAMES[t.action] || t.action}</b><span class="m">через ${fmtUp(t.left)} · в ${new Date(t.at * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span></span>`; L.appendChild(d); }
+      d.innerHTML = `<i>⏱</i><span class="n"><b>${esc(NAMES[t.action] || t.action)}</b><span class="m">через ${fmtUp(t.left)} · в ${new Date(t.at * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span></span>`; L.appendChild(d); }
   }
   document.querySelectorAll("#sysDevices button[data-dev]").forEach((b) => (b.onclick = () => { send({ t: "device", op: b.dataset.dev }); buzz(10); }));
   function renderPlans(items) {
     const L = $("planList"); L.innerHTML = items.length ? "" : `<div class="empty">Схемы не найдены</div>`;
     for (const p of items) { const d = document.createElement("div"); d.className = "it" + (p.active ? " sel" : "");
-      d.innerHTML = `<i>${p.active ? "✓" : "○"}</i><span class="n">${p.name}</span>`; d.onclick = () => send({ t: "device", op: "powerplan", value: p.guid }); L.appendChild(d); }
+      d.innerHTML = `<i>${p.active ? "✓" : "○"}</i><span class="n">${esc(p.name)}</span>`; d.onclick = () => send({ t: "device", op: "powerplan", value: p.guid }); L.appendChild(d); }
   }
   $("dlStart").onclick = () => { const u = $("dlUrl").value.trim(); if (!u) return; if (!pcOnline) return show("ПК не в сети"); send({ t: "download", url: u }); $("dlUrl").value = ""; buzz(10); };
   const dlItems = new Map();
@@ -1264,7 +1266,7 @@
   function paintDl() {
     const L = $("dlList"); const items = [...dlItems.values()].reverse(); L.innerHTML = items.length ? "" : `<div class="empty">Пока ничего</div>`;
     for (const it of items) { const d = document.createElement("div"); d.className = "it"; const p = it.total ? Math.min(100, it.done / it.total * 100) : 0;
-      d.innerHTML = `<span class="n"><b>${it.name}</b><span class="m">${it.status} · ${fmtSize(it.done)}${it.total ? " из " + fmtSize(it.total) : ""}</span>${it.status === "идёт" ? `<div class="prog"><i style="width:${p}%"></i></div>` : ""}</span>${it.status === "идёт" ? '<button class="x">✕</button>' : ""}`;
+      d.innerHTML = `<span class="n"><b>${esc(it.name)}</b><span class="m">${esc(it.status)} · ${fmtSize(it.done)}${it.total ? " из " + fmtSize(it.total) : ""}</span>${it.status === "идёт" ? `<div class="prog"><i style="width:${p}%"></i></div>` : ""}</span>${it.status === "идёт" ? '<button class="x">✕</button>' : ""}`;
       const x = d.querySelector("button"); if (x) x.onclick = () => send({ t: "download_cancel", id: it.id });
       L.appendChild(d); }
   }
@@ -1273,7 +1275,7 @@
     const r = await fetch("/api/events", { headers: authHeaders() }); const j = r.ok ? await r.json() : [];
     $("logList").innerHTML = j.length ? "" : `<div class="empty">Пока пусто</div>`;
     for (const e of j) { const d = document.createElement("div"); d.className = "it";
-      d.innerHTML = `<span class="s">${new Date(e.ts * 1000).toLocaleString("ru-RU", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</span><span class="n">${e.text}</span>`; $("logList").appendChild(d); }
+      d.innerHTML = `<span class="s">${new Date(e.ts * 1000).toLocaleString("ru-RU", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</span><span class="n">${esc(e.text)}</span>`; $("logList").appendChild(d); }
   }
   // say: the PC reads text aloud
   $("sayBtn").onclick = () => textDialog("Сказать вслух на ПК", "Текст, который ПК произнесёт", (v) => { send({ t: "say", text: v }); show("ПК говорит…"); });

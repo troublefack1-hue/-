@@ -471,7 +471,9 @@ class Hub:
                 if msg.data.startswith('{"t":"cmd"') or msg.data.startswith('{"t":"term_open"'):
                     try:
                         ev = json.loads(msg.data)
-                        self.log_event(f"{ip}: {ev.get('t')} {ev.get('cmd') or ev.get('kind') or ''}")
+                        what = str(ev.get('cmd') or ev.get('kind') or '')[:32]
+                        what = "".join(c for c in what if c.isalnum() or c in "_-")   # phone-controlled: keep it plain
+                        self.log_event(f"{ip}: {ev.get('t')} {what}")
                     except ValueError:
                         pass
                 if msg.data.startswith('{"t":"cast_stop"'):
