@@ -535,6 +535,13 @@ class Hub:
                     continue
                 # Android's JSONObject keeps insertion order and PhoneFs added "t" last: {"ok":true,…,"t":"pfs_r"}.
                 # Matching only the start sent every real phone's answer to the agent and `phone` timed out.
+                if msg.data.startswith('{"t":"phone_log"') or msg.data.startswith('{"t": "phone_log"'):
+                    # the phone's own trace (updates, installs): the PC log is the only place one can read it
+                    try:
+                        log.info("phone log: %s", "".join(c for c in str(json.loads(msg.data).get("msg", "")) if c.isprintable())[:300])
+                    except ValueError:
+                        pass
+                    continue
                 if ('"t":"pfs_r"' in msg.data or '"t": "pfs_r"' in msg.data) and _event_type(msg.data) == "pfs_r":
                     if ws is self.fs_phone:
                         self.pfs_reply(msg.data)
@@ -677,6 +684,8 @@ class Hub:
             raise web.HTTPForbidden(headers=CORS)
         folder = Path(self.cfg.get("apk_dir") or "")
         name = request.query.get("name", "")
+        # who asks for updates, and what: the only trace on the PC of a phone updating itself in the background
+        log.info("apk request from %s: %s", client_ip(request), "".join(c for c in name if c.isalnum() or c in ".-_")[:40] or "index")
         if not self.cfg.get("apk_dir") or not folder.is_dir():
             return web.json_response({"error": "на ПК ещё нет приложений для телефона"}, status=404, headers=CORS)
         if not name:

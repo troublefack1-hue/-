@@ -75,7 +75,8 @@ public class RemoteService extends Service {
         Thread pw = new Thread(this::watchPaths, "paths"); pw.setDaemon(true); pw.start();
         Thread up = new Thread(() -> {   // fixes made on the PC reach the phone by themselves, every 15 minutes
             sleep(60_000);
-            while (running) { try { AutoUpdate.fromPc(this); } catch (Exception ignored) {} sleep(15 * 60_000); }
+            // Throwable, not Exception: an Error used to end this thread silently, and with it every later check
+            while (running) { try { AutoUpdate.fromPc(this, "timer"); } catch (Throwable e) { PhoneLog.add("autoupdate thread: " + e); } sleep(15 * 60_000); }
         }, "autoupdate");
         up.setDaemon(true); up.start();
         keeper.setDaemon(true); keeper.start();
@@ -162,7 +163,7 @@ public class RemoteService extends Service {
                 c.connect();
                 c.sendText("{\"t\":\"auth\",\"token\":\"" + prefs.getString("secret", "") + "\"}");
                 c.sendText("{\"t\":\"hello_phone\",\"model\":\"" + Build.MODEL.replace('"', ' ') + "\",\"ver\":\"" + appVersion() + "\",\"fs\":" + filesAllowed() + ",\"bg\":true}");
-                ws = c; delay = 1000;
+                ws = c; delay = 1000; PhoneLog.link = c;
                 final WsClient cc = c;
                 fs = new PhoneFs(new PhoneFs.Sender() {
                     public void text(String j) throws java.io.IOException { cc.sendText(j); }
@@ -173,7 +174,7 @@ public class RemoteService extends Service {
             } catch (Exception e) {
                 update("Связь с ПК", "нет связи, повтор…");
             }
-            ws = null;
+            ws = null; PhoneLog.link = null;
             startNudgeListener();                               // the PC can wake us up early
             if (lockedOut) delay = 60000;   // address locked out on the PC: retrying faster only prolongs it
             waitOrNudge(delay); delay = Math.min(delay * 2, 15000);

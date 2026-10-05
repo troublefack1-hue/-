@@ -175,7 +175,7 @@ public class MainActivity extends Activity {
                 if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
                 if (found == null) found = Updater.check(cur);
                 final Updater.Info info = found;
-                if (AutoUpdate.fromPc(this)) {   // from our own PC: just do it, no dialog
+                if (AutoUpdate.fromPc(this, "open")) {   // from our own PC: just do it, no dialog
                     runOnUiThread(() -> Toast.makeText(this, "Обновляю с ПК…", Toast.LENGTH_SHORT).show());
                     return;
                 }

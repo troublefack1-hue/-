@@ -41,6 +41,7 @@ final class SilentInstaller {
             // mutable: the system adds the status and, when it wants the owner's consent, the screen to show
             int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
             s.commit(PendingIntent.getBroadcast(ctx, id, result, flags).getIntentSender());
+            PhoneLog.add("install " + label + ": session " + id + " committed (" + apk.length() + " bytes, sdk " + Build.VERSION.SDK_INT + ")");
         } catch (IOException | RuntimeException e) {
             try { pi.abandonSession(id); } catch (Exception ignored) {}
             throw e;

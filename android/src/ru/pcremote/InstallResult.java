@@ -18,6 +18,7 @@ public final class InstallResult extends BroadcastReceiver {
         int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
         String label = intent.getStringExtra("label");
         if (label == null) label = "приложение";
+        PhoneLog.add("install " + label + ": status " + status + " " + intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE));
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             // not silent this time (first install, or the app came from elsewhere): Android's own screen, once
             Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
