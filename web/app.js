@@ -28,6 +28,7 @@
   let base = 1, zoom = 1, panX = 0, panY = 0;
   let toastTimer = null, frames = 0, bytes = 0, lastFrameAt = 0, latency = 0, pendingWake = false;
   let profile = localStorage.getItem("pcr_profile") || "normal";
+  let pcInfo = { term: false, projects: [], monitors: 1, monitor: 1 }, pcClip = "";
   let audioOn = false;
 
   // ------------------------------------------------------------ helpers
@@ -173,11 +174,19 @@
       } else if (m.t === "hello") {
         pcHost = `${m.host || "ПК"} · ${m.w}×${m.h}`; pcAudio = !!m.audio;
         pill(`${m.host || "ПК"} · ${m.w}×${m.h}`);
+        pcInfo = { term: !!m.term, projects: m.projects || [], monitors: m.monitors || 1, monitor: m.monitor || 1 };
+        $("termBtn").hidden = false;
+        renderMonitors();
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
       } else if (m.t === "cmd_result") {
         show(m.result === "ok" ? (m.cmd === "open_url" ? "Ссылка открыта на ПК" : "Команда отправлена на ПК") : "Ошибка: " + m.result);
         sfx(m.result === "ok" ? "ok" : "offline");
+      } else if (m.t === "term_out") { termOut(m.id, m.data);
+      } else if (m.t === "term_exit") { termExit(m.id);
+      } else if (m.t === "pc_clip") {
+        pcClip = m.s; $("pcClipBtn").hidden = false; $("pcClipText").textContent = m.s.slice(0, 40).replace(/\s+/g, " ");
+        show("Скопировано на ПК · нажмите, чтобы взять", 3500);
       } else if (m.t === "audio" && m.on === false) {
         audioOn = false; $("audioBtn").classList.remove("active"); if (m.error) show("Звук недоступен: " + m.error, 4000);
       }
@@ -462,13 +471,26 @@
     if (b.dataset.cmd !== "cancel" && !(await ask(names[b.dataset.cmd]))) return;
     send({ t: "cmd", cmd: b.dataset.cmd }); buzz(20);
   });
-  function setProfile(name) {
+  function setProfile(name, auto = false) {
     profile = name; localStorage.setItem("pcr_profile", name);
+    if (!auto) localStorage.setItem("pcr_profile_manual", name);
     document.querySelectorAll("#profile button").forEach((b) => b.classList.toggle("on", b.dataset.profile === name));
     $("ecoBadge").hidden = name !== "eco";
     send({ t: "profile", name });
   }
   setProfile(profile);
+  // auto profile: cellular -> eco, otherwise the chosen one
+  const conn = navigator.connection;
+  function autoProfile() {
+    if (!$("autoProfile").checked || !conn) return;
+    const cellular = conn.type === "cellular" || /2g|3g/.test(conn.effectiveType || "");
+    const want = cellular ? "eco" : (localStorage.getItem("pcr_profile_manual") || "normal");
+    if (want !== profile) { setProfile(want, true); show(cellular ? "Мобильная сеть: эконом" : "Wi-Fi: обычное качество"); }
+  }
+  $("autoProfile").checked = prefs.autoProfile === true;
+  $("autoProfile").onchange = () => { prefs.autoProfile = $("autoProfile").checked; savePrefs(); autoProfile(); };
+  conn && conn.addEventListener && conn.addEventListener("change", autoProfile);
+  setTimeout(autoProfile, 1500);
   $("fsBtn").onclick = () => { document.documentElement.requestFullscreen?.(); menu.hidden = true; };
 
   // ---- perks: accent, sounds, haptics, screenshot, paste, link, hints, clock
@@ -553,4 +575,236 @@
       else { btn.classList.remove("busy"); $("wakeMsg").textContent = "Ошибка: " + j.error; }
     } catch (e) { btn.classList.remove("busy"); $("wakeMsg").textContent = "Ошибка: " + e; }
   };
+
+  // ================================================================
+  // Monitors
+  // ================================================================
+  function renderMonitors() {
+    const seg = $("monitors");
+    seg.hidden = pcInfo.monitors < 2;
+    [...seg.querySelectorAll("button")].forEach((b) => b.remove());
+    for (let i = 1; i <= pcInfo.monitors; i++) {
+      const b = document.createElement("button"); b.textContent = String(i); b.dataset.mon = i;
+      b.classList.toggle("on", i === pcInfo.monitor); seg.appendChild(b);
+    }
+    const all = document.createElement("button"); all.textContent = "Все"; all.dataset.mon = 0; all.classList.toggle("on", pcInfo.monitor === 0); seg.appendChild(all);
+  }
+  $("monitors").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mon]"); if (!b) return;
+    pcInfo.monitor = +b.dataset.mon; send({ t: "monitor", n: pcInfo.monitor }); renderMonitors(); menu.hidden = true; zoom = 1; panX = panY = 0;
+  });
+
+  // ================================================================
+  // PC clipboard -> phone
+  // ================================================================
+  $("pcClipBtn").onclick = async () => {
+    try { await navigator.clipboard.writeText(pcClip); show("Скопировано в буфер телефона"); }
+    catch { textDialog("Буфер ПК", "", () => {}); $("textDlgInput").value = pcClip; }
+    menu.hidden = true;
+  };
+
+  // ================================================================
+  // Terminal: Claude Code / PowerShell on the PC, streamed over the link
+  // ================================================================
+  const terms = new Map();   // id -> {term, fit, kind, cwd, exited}
+  let activeTerm = null, termSeq = 0;
+  const termPanel = $("termPanel"), termHost = $("termHost");
+  function termTheme() {
+    const cs = getComputedStyle(document.documentElement);
+    return { background: "#0b0d12", foreground: "#e6e9f0", cursor: cs.getPropertyValue("--accent").trim(), selectionBackground: "#4f8cff55" };
+  }
+  function openTermPanel() {
+    termPanel.hidden = false; menu.hidden = true;
+    if (!terms.size) renderTermEmpty(); else showTerm(activeTerm);
+  }
+  function renderTermEmpty() {
+    termHost.innerHTML = "";
+    const d = document.createElement("div"); d.className = "term-empty";
+    const projects = pcInfo.projects.length ? pcInfo.projects : [""];
+    d.innerHTML = `<div>Запустить на ПК:</div>`;
+    for (const cwd of projects) {
+      const row = document.createElement("div");
+      const name = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "домашняя папка";
+      row.innerHTML = `<b>${name}</b><br>`;
+      for (const [kind, label] of [["claude", "Claude Code"], ["shell", "PowerShell"]]) {
+        const b = document.createElement("button"); b.textContent = label; b.onclick = () => newTerm(kind, cwd); row.appendChild(b);
+      }
+      d.appendChild(row);
+    }
+    if (!pcInfo.term) d.innerHTML += `<p class="err">На ПК нет pywinpty: в PC Remote это уже есть, для скриптов — pip install pywinpty</p>`;
+    termHost.appendChild(d);
+    renderTabs();
+  }
+  function newTerm(kind, cwd) {
+    const id = "t" + (++termSeq);
+    const term = new Terminal({ fontSize: 13, fontFamily: "ui-monospace, Consolas, monospace", cursorBlink: true, theme: termTheme(),
+      scrollback: 3000, convertEol: false, allowProposedApi: true });
+    const fit = new FitAddon.FitAddon(); term.loadAddon(fit);
+    term.onData((data) => send({ t: "term_in", id, data }));
+    terms.set(id, { term, fit, kind, cwd, exited: false });
+    activeTerm = id; showTerm(id);
+    const dims = fit.proposeDimensions() || { cols: 80, rows: 24 };
+    send({ t: "term_open", id, kind, cwd: cwd || undefined, cols: dims.cols, rows: dims.rows });
+    buzz(10);
+  }
+  function showTerm(id) {
+    const t = terms.get(id); if (!t) { renderTermEmpty(); return; }
+    activeTerm = id; termHost.innerHTML = "";
+    const box = document.createElement("div"); box.style.height = "100%"; termHost.appendChild(box);
+    t.term.open(box); setTimeout(() => { t.fit.fit(); send({ t: "term_resize", id, cols: t.term.cols, rows: t.term.rows }); }, 30);
+    renderTabs();
+  }
+  function renderTabs() {
+    const tabs = $("termTabs"); tabs.innerHTML = "";
+    for (const [id, t] of terms) {
+      const b = document.createElement("button"); b.classList.toggle("on", id === activeTerm);
+      const name = t.kind === "claude" ? "Claude" : t.kind === "cmd" ? "cmd" : "PowerShell";
+      b.innerHTML = `${name}${t.exited ? " <i>·</i>" : ""} <i data-close="${id}">✕</i>`;
+      b.onclick = (e) => { if (e.target.dataset.close) closeTerm(e.target.dataset.close); else showTerm(id); };
+      tabs.appendChild(b);
+    }
+  }
+  function termOut(id, data) { const t = terms.get(id); if (t) t.term.write(data); }
+  function termExit(id) { const t = terms.get(id); if (!t) return; t.exited = true; t.term.write("\r\n\x1b[90m[сессия завершена]\x1b[0m\r\n"); renderTabs(); }
+  function closeTerm(id) {
+    const t = terms.get(id); if (!t) return;
+    send({ t: "term_close", id }); t.term.dispose(); terms.delete(id);
+    if (activeTerm === id) activeTerm = terms.keys().next().value || null;
+    terms.size ? showTerm(activeTerm) : renderTermEmpty();
+  }
+  function termSend(data) { if (!activeTerm) return show("Сначала запустите сессию"); send({ t: "term_in", id: activeTerm, data }); }
+  $("termBtn").onclick = openTermPanel;
+  $("termMenuBtn").onclick = openTermPanel;
+  $("termBack").onclick = () => (termPanel.hidden = true);
+  $("termNew").onclick = () => renderTermEmpty();
+  $("termQuick").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-send]"); if (!b) return;
+    termSend(JSON.parse('"' + b.dataset.send + '"')); buzz(8);
+  });
+  $("termGit").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-cmd]"); if (!b) return;
+    if (!activeTerm) { const p = pcInfo.projects[0]; newTerm("shell", p); setTimeout(() => termSend(b.dataset.cmd + "\r"), 1200); }
+    else termSend(b.dataset.cmd + "\r");
+    buzz(8);
+  });
+  const sendLine = () => { const v = $("termLine").value; if (!v) return termSend("\r"); termSend(v + "\r"); $("termLine").value = ""; };
+  $("termSend").onclick = sendLine;
+  $("termLine").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); sendLine(); } });
+  window.addEventListener("resize", () => { const t = terms.get(activeTerm); if (t && !termPanel.hidden) { t.fit.fit(); send({ t: "term_resize", id: activeTerm, cols: t.term.cols, rows: t.term.rows }); } });
+  // custom quick buttons for the terminal (stored on the phone)
+  function renderTermQuick() {
+    const custom = prefs.termQuick || [];
+    $("termQuick").querySelectorAll("button.custom").forEach((b) => b.remove());
+    for (const c of custom) {
+      const b = document.createElement("button"); b.className = "custom"; b.textContent = c; b.dataset.send = JSON.stringify(c + "\r").slice(1, -1);
+      $("termQuick").insertBefore(b, $("termQuickEdit"));
+    }
+  }
+  renderTermQuick();
+  $("termQuickEdit").onclick = () => textDialog("Свои кнопки терминала (по одной в строке)", "/rc\n/status\ngit pull", (v) => {
+    prefs.termQuick = v.split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 20); savePrefs(); renderTermQuick();
+  });
+  setTimeout(() => { if (prefs.termQuick) $("textDlgInput").value = ""; }, 0);
+
+  // ================================================================
+  // Files: browse share folders, download to the phone, upload from the phone
+  // ================================================================
+  let filesPath = "";
+  async function loadFiles(path) {
+    filesPath = path;
+    const r = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
+    if (!r.ok) { $("filesList").innerHTML = `<div class="empty">Нет доступа</div>`; return; }
+    const j = await r.json(); const list = $("filesList"); list.innerHTML = "";
+    $("filesTitle").textContent = j.path ? j.path.split(/[\\/]/).filter(Boolean).pop() : "Файлы на ПК";
+    if (!j.items.length) list.innerHTML = `<div class="empty">Пусто</div>`;
+    for (const it of j.items) {
+      const d = document.createElement("div"); d.className = "it";
+      const size = it.dir ? "" : it.size > 1e6 ? `${(it.size / 1e6).toFixed(1)} МБ` : `${Math.round(it.size / 1024)} КБ`;
+      d.innerHTML = `<i>${it.dir ? "📁" : "📄"}</i><span class="n">${it.name}</span><span class="s">${size}</span>`;
+      d.onclick = () => it.dir ? loadFiles(it.path) : downloadFile(it);
+      list.appendChild(d);
+    }
+  }
+  async function downloadFile(it) {
+    show(`Скачиваю ${it.name}…`, 6000);
+    const r = await fetch(`/api/file?path=${encodeURIComponent(it.path)}`, { headers: authHeaders() });
+    if (!r.ok) return show("Не удалось скачать");
+    const blob = await r.blob(); const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = it.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    show("Сохранено на телефон"); sfx("ok");
+  }
+  $("filesBtn").onclick = () => { menu.hidden = true; $("filesDlg").hidden = false; loadFiles(""); };
+  $("filesClose").onclick = () => ($("filesDlg").hidden = true);
+  $("filesUp").onclick = () => { const parts = filesPath.split(/[\\/]/); parts.pop(); loadFiles(parts.length > 1 ? parts.join("\\") : ""); };
+  $("fileInput").onchange = async () => {
+    const files = [...$("fileInput").files]; $("fileInput").value = "";
+    for (const f of files) {
+      $("filesProgress").textContent = `Отправляю ${f.name} (${Math.round(f.size / 1024)} КБ)…`;
+      try {
+        const r = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "X-Filename": f.name }, body: f });
+        const j = await r.json();
+        $("filesProgress").textContent = j.ok ? `✓ ${j.name} на ПК (папка «PC Remote» в Загрузках)` : "Ошибка: " + j.error;
+      } catch (e) { $("filesProgress").textContent = "Ошибка: " + e; }
+    }
+    sfx("ok");
+  };
+
+  // ================================================================
+  // Macros: named step lists, shown as buttons in the keyboard panel
+  // ================================================================
+  const defaultMacros = [{ name: "Блокнот", steps: ["keys: Meta,r", "wait: 400", "text: notepad", "key: Enter"] },
+                         { name: "Диспетчер", steps: ["keys: Control,Shift,Escape"] }];
+  let macros = JSON.parse(localStorage.getItem("pcr_macros") || "null") || defaultMacros;
+  const saveMacros = () => localStorage.setItem("pcr_macros", JSON.stringify(macros));
+  async function runMacro(m) {
+    show(`▶ ${m.name}`); buzz(10);
+    for (const raw of m.steps) {
+      const [op, ...rest] = raw.split(":"); const arg = rest.join(":").trim();
+      switch (op.trim()) {
+        case "keys": send({ t: "combo", keys: arg.split(",").map((k) => k.trim()) }); break;
+        case "key": send({ t: "key", k: arg, down: true }); send({ t: "key", k: arg, down: false }); break;
+        case "text": send({ t: "text", s: arg }); break;
+        case "clip": send({ t: "clip", s: arg }); break;
+        case "wait": await new Promise((r) => setTimeout(r, Math.min(5000, +arg || 300))); break;
+        case "url": send({ t: "open_url", url: arg }); break;
+        case "cmd": send({ t: "cmd", cmd: arg }); break;
+        case "shell": if (!activeTerm) { newTerm("shell", pcInfo.projects[0]); await new Promise((r) => setTimeout(r, 1200)); } termSend(arg + "\r"); break;
+      }
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+  function renderMacros() {
+    const row = $("macroRow"); row.innerHTML = ""; row.hidden = !macros.length;
+    macros.forEach((m) => { const b = document.createElement("button"); b.textContent = "⚡ " + m.name; b.onclick = () => runMacro(m); row.appendChild(b); });
+    const list = $("macroList"); list.innerHTML = "";
+    if (!macros.length) list.innerHTML = `<div class="empty">Пока нет макросов</div>`;
+    macros.forEach((m, i) => {
+      const d = document.createElement("div"); d.className = "it";
+      d.innerHTML = `<i>⚡</i><span class="n">${m.name}</span><span class="s">${m.steps.length} шаг.</span><i data-del="${i}">🗑</i>`;
+      d.onclick = (e) => { if (e.target.dataset.del) { macros.splice(i, 1); saveMacros(); renderMacros(); } else { $("macroEdit").value = [m.name, ...m.steps].join("\n"); } };
+      list.appendChild(d);
+    });
+  }
+  renderMacros();
+  $("macrosBtn").onclick = () => { menu.hidden = true; $("macrosDlg").hidden = false; };
+  $("macroClose").onclick = () => ($("macrosDlg").hidden = true);
+  $("macroSave").onclick = () => {
+    const lines = $("macroEdit").value.split("\n").map((x) => x.trim()).filter(Boolean);
+    if (lines.length < 2) return show("Нужны название и хотя бы один шаг");
+    const [name, ...steps] = lines; const i = macros.findIndex((m) => m.name === name);
+    i >= 0 ? (macros[i].steps = steps) : macros.push({ name, steps });
+    saveMacros(); renderMacros(); $("macroEdit").value = ""; show("Макрос сохранён");
+  };
+
+  // ================================================================
+  // Event log
+  // ================================================================
+  $("logBtn").onclick = async () => {
+    menu.hidden = true; $("logDlg").hidden = false; $("logList").innerHTML = `<div class="empty">Загружаю…</div>`;
+    const r = await fetch("/api/events", { headers: authHeaders() }); const j = r.ok ? await r.json() : [];
+    $("logList").innerHTML = j.length ? "" : `<div class="empty">Пока пусто</div>`;
+    for (const e of j) { const d = document.createElement("div"); d.className = "it";
+      d.innerHTML = `<span class="s">${new Date(e.ts * 1000).toLocaleString("ru-RU", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</span><span class="n">${e.text}</span>`; $("logList").appendChild(d); }
+  };
+  $("logClose").onclick = () => ($("logDlg").hidden = true);
 })();

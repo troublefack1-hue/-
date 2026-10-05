@@ -4,5 +4,6 @@
   "max_width": 1280,
   "quality": 55,
   "fps": 12,
-  "monitor": 1
+  "monitor": 1,
+  "projects": ["D:\\Claude\\pc-remote"]
 }

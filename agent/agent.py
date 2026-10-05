@@ -57,6 +57,7 @@ def load_config() -> dict:
     cfg.setdefault("quality", 55)
     cfg.setdefault("fps", 12)
     cfg.setdefault("monitor", 1)
+    cfg.setdefault("projects", [])   # folders offered in the terminal panel
     return cfg
 
 
@@ -188,6 +189,9 @@ class Input:
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 CF_UNICODETEXT, GMEM_MOVEABLE = 13, 0x0002
+user32.GetClipboardData.restype = ctypes.c_void_p
+kernel32.GlobalLock.restype = ctypes.c_void_p
+kernel32.GlobalAlloc.restype = ctypes.c_void_p
 
 
 def set_clipboard(text: str) -> bool:
@@ -204,6 +208,23 @@ def set_clipboard(text: str) -> bool:
         kernel32.GlobalUnlock(h)
         user32.SetClipboardData(CF_UNICODETEXT, h)
         return True
+    finally:
+        user32.CloseClipboard()
+
+
+def get_clipboard() -> str | None:
+    """Current clipboard text (≤ 10 KB) or None."""
+    if not user32.OpenClipboard(None):
+        return None
+    try:
+        h = user32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            return None
+        p = kernel32.GlobalLock(h)
+        try:
+            return ctypes.wstring_at(p)[:10_000]
+        finally:
+            kernel32.GlobalUnlock(h)
     finally:
         user32.CloseClipboard()
 
@@ -233,17 +254,75 @@ def run_command(name: str) -> str:
         return str(e)
 
 
+# ------------------------------------------------------------ terminal ---
+
+class Term:
+    """One console on the PC (PowerShell or the Claude Code CLI), streamed to the phone."""
+
+    SHELLS = {
+        "shell": "powershell.exe -NoLogo",
+        "cmd": "cmd.exe",
+        "claude": "cmd.exe /c claude",          # Claude Code CLI must be on PATH
+    }
+
+    @staticmethod
+    def available() -> bool:
+        try:
+            import winpty  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def __init__(self, kind: str, cwd: str | None, cols: int, rows: int):
+        import winpty
+        cmd = self.SHELLS.get(kind, self.SHELLS["shell"])
+        if cwd and not os.path.isdir(cwd):
+            cwd = None
+        self.proc = winpty.PtyProcess.spawn(cmd, cwd=cwd or os.path.expanduser("~"),
+                                            dimensions=(max(5, min(rows, 200)), max(20, min(cols, 400))))
+
+    def write(self, data: str):
+        self.proc.write(data[:4096])
+
+    def resize(self, cols: int, rows: int):
+        self.proc.setwinsize(max(5, min(rows, 200)), max(20, min(cols, 400)))
+
+    def read(self) -> str | None:
+        """Blocking read of one chunk; None when the process has exited."""
+        try:
+            return self.proc.read(4096)
+        except EOFError:
+            return None
+
+    def alive(self) -> bool:
+        return self.proc.isalive()
+
+    def close(self):
+        try:
+            self.proc.terminate(force=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # ----------------------------------------------------------- streaming ---
 
 class Screen:
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self.sct = mss.mss()
-        self.mon = self.sct.monitors[min(cfg["monitor"], len(self.sct.monitors) - 1)]
+        self.mon_index = min(cfg["monitor"], len(self.sct.monitors) - 1)
+        self.mon = self.sct.monitors[self.mon_index]
         self.profile = dict(PROFILES["normal"], fps=cfg["fps"], max_width=cfg["max_width"], quality=cfg["quality"])
         self.quality = self.profile["quality"]
         self.set_width(self.profile["max_width"])
         self._last_hash = b""
+
+    def set_monitor(self, index: int):
+        """0 = all monitors as one picture, 1..n = a single monitor."""
+        index = max(0, min(int(index), len(self.sct.monitors) - 1))
+        self.mon_index = index
+        self.mon = self.sct.monitors[index]
+        self.set_width(self.profile["max_width"])
 
     def set_profile(self, name: str):
         p = PROFILES.get(name)
@@ -359,6 +438,7 @@ class Agent:
         self.ack.set()
         self.sent_at = 0.0
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
+        self.terms: dict[str, Term] = {}
 
     def ws_url(self) -> str:
         base = self.cfg["relay_url"].rstrip("/")
@@ -376,13 +456,19 @@ class Agent:
                         delay = 2
                         await ws.send_str(json.dumps({
                             "t": "hello", "w": self.screen.size[0], "h": self.screen.size[1],
-                            "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available()}))
-                        tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws))]
+                            "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available(),
+                            "monitors": len(self.screen.sct.monitors) - 1, "monitor": self.screen.mon_index,
+                            "term": Term.available(), "projects": self.cfg.get("projects", [])}))
+                        tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws)),
+                                 asyncio.create_task(self.watch_clipboard(ws))]
                         try:
                             await self.receive(ws)
                         finally:
                             for t in tasks:
                                 t.cancel()
+                            for term in self.terms.values():
+                                term.close()
+                            self.terms.clear()
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -439,6 +525,41 @@ class Agent:
             chunk = await loop.run_in_executor(None, self.audio.read)
             await ws.send_bytes(chunk)
 
+    async def watch_clipboard(self, ws):
+        """PC clipboard -> phone, whenever it changes while someone is watching."""
+        loop = asyncio.get_running_loop()
+        last_seq = user32.GetClipboardSequenceNumber()
+        while True:
+            await asyncio.sleep(1.0)
+            if not self.viewers:
+                continue
+            seq = user32.GetClipboardSequenceNumber()
+            if seq == last_seq:
+                continue
+            last_seq = seq
+            text = await loop.run_in_executor(None, get_clipboard)
+            if text and text.strip():
+                await ws.send_str(json.dumps({"t": "pc_clip", "s": text}))
+
+    async def term_pump(self, ws, tid: str, term: Term):
+        """Reads console output in a thread and ships it to the phone."""
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                chunk = await loop.run_in_executor(None, term.read)
+                if chunk is None:
+                    break
+                await ws.send_str(json.dumps({"t": "term_out", "id": tid, "data": chunk}))
+        except Exception as e:  # noqa: BLE001
+            log.info("term %s ended: %s", tid, e)
+        finally:
+            self.terms.pop(tid, None)
+            term.close()
+            try:
+                await ws.send_str(json.dumps({"t": "term_exit", "id": tid}))
+            except Exception:  # noqa: BLE001
+                pass
+
     async def receive(self, ws):
         async for msg in ws:
             if msg.type != aiohttp.WSMsgType.TEXT:
@@ -486,6 +607,32 @@ class Agent:
                 elif t == "open_url":
                     res = open_url(str(ev.get("url", "")))
                     await ws.send_str(json.dumps({"t": "cmd_result", "cmd": "open_url", "result": res}))
+                elif t == "monitor":
+                    self.screen.set_monitor(int(ev.get("n", 1)))
+                elif t == "term_open":
+                    tid = str(ev.get("id", "t1"))[:16]
+                    if tid in self.terms or len(self.terms) >= 4:
+                        continue
+                    if not Term.available():
+                        await ws.send_str(json.dumps({"t": "term_out", "id": tid,
+                                                      "data": "\r\nНа ПК не установлен pywinpty (pip install pywinpty)\r\n"}))
+                        await ws.send_str(json.dumps({"t": "term_exit", "id": tid}))
+                        continue
+                    term = Term(str(ev.get("kind", "shell")), ev.get("cwd"), int(ev.get("cols", 80)), int(ev.get("rows", 24)))
+                    self.terms[tid] = term
+                    asyncio.create_task(self.term_pump(ws, tid, term))
+                elif t == "term_in":
+                    term = self.terms.get(str(ev.get("id", "")))
+                    if term:
+                        term.write(str(ev.get("data", "")))
+                elif t == "term_resize":
+                    term = self.terms.get(str(ev.get("id", "")))
+                    if term:
+                        term.resize(int(ev.get("cols", 80)), int(ev.get("rows", 24)))
+                elif t == "term_close":
+                    term = self.terms.pop(str(ev.get("id", "")), None)
+                    if term:
+                        term.close()
                 elif t == "combo":
                     self.input.combo([str(k) for k in ev["keys"]])
                 elif t == "cmd":

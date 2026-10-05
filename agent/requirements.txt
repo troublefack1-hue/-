@@ -2,3 +2,4 @@ aiohttp>=3.9
 mss>=9
 Pillow>=10
 PyAudioWPatch>=0.2.12; sys_platform == "win32"
+pywinpty>=2.0; sys_platform == "win32"

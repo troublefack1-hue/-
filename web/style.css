@@ -232,3 +232,42 @@ textarea:focus { border-color: var(--accent); }
 
 @media (orientation: landscape) { #bar { padding-top: 6px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* ===================== terminal panel ===================== */
+#termPanel { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); animation: fadeIn .2s; }
+.tbar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; padding-top: calc(6px + env(safe-area-inset-top));
+  background: var(--glass); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); }
+.tabs { flex: 1; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.tabs button { padding: 7px 12px; border-radius: 10px; font-size: 13px; white-space: nowrap; display: flex; gap: 8px; align-items: center; }
+.tabs button.on { background: var(--accent); color: #fff; border-color: transparent; }
+.tabs button i { font-style: normal; opacity: .7; }
+#termHost { flex: 1; min-height: 0; background: #0b0d12; padding: 6px; }
+#termHost .xterm { height: 100%; }
+.trow { display: flex; gap: 6px; padding: 6px 8px 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none; background: var(--panel); }
+.trow::-webkit-scrollbar { display: none; }
+.trow button { flex: 0 0 auto; padding: 8px 12px; border-radius: 10px; font-size: 13px; font-family: ui-monospace, Consolas, monospace; }
+#termGit button { color: var(--ok); }
+#termGit button[data-cmd=claude] { color: var(--accent); font-weight: 700; }
+.tinput { display: flex; gap: 8px; padding: 8px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--border); }
+.tinput input { flex: 1; font: 14px ui-monospace, Consolas, monospace; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); outline: none; }
+.tinput input:focus { border-color: var(--accent); }
+.tinput .btn { padding: 8px 16px; }
+.term-empty { color: var(--muted); padding: 24px; text-align: center; line-height: 1.6; }
+.term-empty button { margin: 6px; }
+
+/* ===================== files / macros / log ===================== */
+.box.files { max-width: 420px; }
+.frow { display: flex; gap: 8px; margin-bottom: 10px; }
+.frow .btn { flex: 1; text-align: center; padding: 10px; }
+label.btn { display: block; }
+.flist { max-height: 46vh; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); margin-bottom: 10px; }
+.flist .it { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.flist .it:last-child { border-bottom: 0; }
+.flist .it i { font-style: normal; width: 22px; text-align: center; }
+.flist .it .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flist .it .s { color: var(--muted); font-size: 12px; }
+.flist .it:active { background: var(--panel2); }
+.flist.mono .it { font: 12px ui-monospace, Consolas, monospace; }
+.flist .empty { padding: 18px; text-align: center; color: var(--muted); }
+#macroRow button { color: var(--warn); }

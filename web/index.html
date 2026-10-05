@@ -11,6 +11,7 @@
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/vendor/xterm.css">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -63,6 +64,9 @@
     </div>
     <button id="audioBtn" class="icon" title="Звук с ПК" hidden>
       <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
+    </button>
+    <button id="termBtn" class="icon" title="Терминал и Claude Code" hidden>
+      <svg viewBox="0 0 24 24"><path d="M3 4h18a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v12h16V6H4zm2 2.5 4 3.5-4 3.5V8.5zM11 15h6v1.5h-6V15z"/></svg>
     </button>
     <button id="kbBtn" class="icon" title="Клавиатура">
       <svg viewBox="0 0 24 24"><path d="M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm1 2v8h16V8H4zm1 1h2v2H5V9zm3 0h2v2H8V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zM5 12h2v2H5v-2zm3 0h2v2H8v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zM7 15h10v1H7v-1z"/></svg>
@@ -129,6 +133,7 @@
       <button data-key="F5">F5</button>
       <button data-key="F11">F11</button>
     </div>
+    <div class="row" id="macroRow" hidden></div>
     <div class="row" id="quick">
       <button data-combo="Alt,Tab">Alt+Tab</button>
       <button data-combo="Meta,d">Рабочий стол</button>
@@ -168,12 +173,23 @@
       <button data-profile="normal" class="on">Обычное</button>
       <button data-profile="hq">Макс.</button>
     </div>
+    <div class="seg" id="monitors" hidden>
+      <span class="lbl">Монитор</span>
+    </div>
+    <div class="grid tools">
+      <button id="termMenuBtn"><i>&gt;_</i>Claude / git</button>
+      <button id="filesBtn"><i>📁</i>Файлы</button>
+      <button id="macrosBtn"><i>⚡</i>Макросы</button>
+      <button id="logBtn"><i>📜</i>Журнал</button>
+    </div>
     <div class="grid tools">
       <button id="shotBtn"><i>📷</i>Снимок</button>
       <button id="pasteBtn"><i>📋</i>Вставить текст</button>
       <button id="linkBtn"><i>🔗</i>Открыть ссылку</button>
       <button id="hintsBtn"><i>👆</i>Жесты</button>
     </div>
+    <button id="pcClipBtn" class="row" hidden>📋 Буфер ПК: <span id="pcClipText" class="muted"></span></button>
+    <label class="row switch"><span>Качество по сети: Wi-Fi — обычное, мобильная — эконом</span><input type="checkbox" id="autoProfile"><i></i></label>
     <div id="castBox" hidden>
       <button id="castBtn" class="row accent">📱 Транслировать экран телефона на ПК</button>
       <label class="row switch" id="muteRow" hidden><span>Заглушить телефон на время трансляции</span><input type="checkbox" id="phoneMute"><i></i></label>
@@ -201,6 +217,84 @@
     <label class="row switch"><span>Вибрация</span><input type="checkbox" id="haptic"><i></i></label>
     <button id="logoutBtn" class="row muted">Сменить секрет</button>
     <div class="stats"><span id="stats"></span><canvas id="spark" width="220" height="52"></canvas></div>
+  </div>
+
+  <!-- terminal: Claude Code / PowerShell with quick buttons and git -->
+  <section id="termPanel" hidden>
+    <header class="tbar">
+      <button id="termBack" class="icon" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>
+      <div class="tabs" id="termTabs"></div>
+      <button id="termNew" class="icon" title="Новая сессия">＋</button>
+    </header>
+    <div id="termHost"></div>
+    <div class="trow" id="termQuick">
+      <button data-send="/rc\r">/rc</button>
+      <button data-send="/help\r">/help</button>
+      <button data-send="/clear\r">/clear</button>
+      <button data-send="\r">Enter</button>
+      <button data-send="\x1b">Esc</button>
+      <button data-send="\x03">Ctrl+C</button>
+      <button data-send="\x1b[A">↑</button>
+      <button data-send="\x1b[B">↓</button>
+      <button data-send="\t">Tab</button>
+      <button data-send="y\r">y</button>
+      <button data-send="n\r">n</button>
+      <button id="termQuickEdit" title="Свои кнопки">✎</button>
+    </div>
+    <div class="trow" id="termGit">
+      <button data-cmd="git status">status</button>
+      <button data-cmd="git pull">pull</button>
+      <button data-cmd="git push">push</button>
+      <button data-cmd="git log --oneline -15">log</button>
+      <button data-cmd="git diff --stat">diff</button>
+      <button data-cmd="git add -A && git commit -m &quot;update&quot;">commit</button>
+      <button data-cmd="git stash">stash</button>
+      <button data-cmd="claude">claude</button>
+    </div>
+    <div class="tinput">
+      <input id="termLine" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="команда или сообщение для Claude… (Enter — отправить)">
+      <button id="termSend" class="btn primary">➤</button>
+    </div>
+  </section>
+
+  <!-- files -->
+  <div id="filesDlg" class="modal" hidden>
+    <div class="box files">
+      <p id="filesTitle">Файлы на ПК</p>
+      <div class="frow">
+        <button id="filesUp" class="btn">↑ Вверх</button>
+        <label class="btn primary" for="fileInput">⬆ Отправить на ПК</label>
+        <input id="fileInput" type="file" multiple hidden>
+      </div>
+      <div id="filesList" class="flist"></div>
+      <div id="filesProgress" class="muted"></div>
+      <div class="actions"><button id="filesClose" class="btn">Закрыть</button></div>
+    </div>
+  </div>
+
+  <!-- macros -->
+  <div id="macrosDlg" class="modal" hidden>
+    <div class="box">
+      <p>Макросы</p>
+      <div id="macroList" class="flist"></div>
+      <textarea id="macroEdit" rows="6" placeholder="Название в первой строке, затем шаги:
+keys: Meta,r
+text: notepad
+key: Enter
+wait: 500
+url: https://youtube.com
+shell: git pull"></textarea>
+      <div class="actions"><button id="macroSave" class="btn primary">Сохранить</button><button id="macroClose" class="btn">Закрыть</button></div>
+    </div>
+  </div>
+
+  <!-- event log -->
+  <div id="logDlg" class="modal" hidden>
+    <div class="box">
+      <p>Журнал событий</p>
+      <div id="logList" class="flist mono"></div>
+      <div class="actions"><button id="logClose" class="btn">Закрыть</button></div>
+    </div>
   </div>
 
   <!-- paste / link dialog -->
@@ -245,6 +339,8 @@
   <div id="toast" hidden></div>
 </section>
 
+<script src="/static/vendor/xterm.js"></script>
+<script src="/static/vendor/addon-fit.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

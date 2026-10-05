@@ -67,6 +67,9 @@ def load_config() -> dict:
     cfg.setdefault("tls_cert", "")
     cfg.setdefault("tls_key", "")
     cfg.setdefault("ca_cert", "")
+    # file transfer: phone uploads land in upload_dir; share_dirs can be browsed/downloaded
+    cfg.setdefault("upload_dir", "")
+    cfg.setdefault("share_dirs", [])
     return cfg
 
 
@@ -129,6 +132,11 @@ class Hub:
         self.on_cast = None    # callback(kind, data): phone screen (0x03 jpeg) / sound (0x04 pcm) -> PC app; (0, None) = stopped
         self.on_phones = None  # callback(count, names) for the PC app's UI
         self.phone_names: dict = {}
+        self.events: list = []  # last 200 events: (time, text)
+
+    def log_event(self, text: str):
+        self.events.append((time.time(), text))
+        del self.events[:-200]
 
     # --- auth -----------------------------------------------------------
     def token_ok(self, token: str) -> bool:
@@ -184,6 +192,7 @@ class Hub:
             raise web.HTTPForbidden()
         self.pair_code = None  # single use
         log.info("phone paired from %s", ip)
+        self.log_event(f"телефон привязан ({ip})")
         if self.on_paired:
             self.on_paired(ip)
         return web.json_response({"secret": self.cfg["secret"]})
@@ -233,6 +242,7 @@ class Hub:
             await old.close(code=4000, message=b"replaced")
         self.pc_since = time.time()
         log.info("pc connected from %s", ip)
+        self.log_event("ПК подключился")
         await self.broadcast_phones(json.dumps(self.status()))
         await self.tell_pc_viewers()
         try:
@@ -250,6 +260,7 @@ class Hub:
                 self.pc = None
                 self.last_frame = None
                 await self.broadcast_phones(json.dumps(self.status()))
+                self.log_event("ПК отключился")
             log.info("pc disconnected")
         return ws
 
@@ -265,6 +276,7 @@ class Hub:
             return ws
         self.phones.add(ws)
         log.info("phone connected from %s (%d)", ip, len(self.phones))
+        self.log_event(f"телефон подключился ({ip})")
         self.phones_changed()
         await ws.send_str(json.dumps(self.status()))
         await self.tell_pc_viewers()
@@ -291,6 +303,12 @@ class Hub:
                         pass
                     self.phones_changed()
                     continue
+                if msg.data.startswith('{"t":"cmd"') or msg.data.startswith('{"t":"term_open"'):
+                    try:
+                        ev = json.loads(msg.data)
+                        self.log_event(f"{ip}: {ev.get('t')} {ev.get('cmd') or ev.get('kind') or ''}")
+                    except ValueError:
+                        pass
                 if msg.data.startswith('{"t":"cast_stop"'):
                     casting = False
                     if self.on_cast:
@@ -303,6 +321,7 @@ class Hub:
         finally:
             self.phones.discard(ws)
             self.phone_names.pop(ws, None)
+            self.log_event(f"телефон отключился ({ip})")
             if casting and self.on_cast:
                 self.on_cast(0, None)
             self.phones_changed()
@@ -311,6 +330,7 @@ class Hub:
         return ws
 
     async def ring_phones(self):
+        self.log_event("найти телефон")
         """PC app -> every connected phone: make noise (find my phone)."""
         await self.broadcast_phones(json.dumps({"t": "ring"}))
 
@@ -337,6 +357,82 @@ class Hub:
     async def options_handler(self, _request):
         return web.Response(headers=CORS)
 
+    async def events_handler(self, request: web.Request):
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        return web.json_response([{"ts": t, "text": x} for t, x in reversed(self.events)], headers=CORS)
+
+    # --- file transfer (only when the relay runs on the PC: upload_dir / share_dirs set)
+    def _safe_path(self, raw: str) -> Path | None:
+        """Resolve a user path and make sure it stays inside one of share_dirs."""
+        roots = [Path(d).resolve() for d in self.cfg["share_dirs"] if d]
+        try:
+            p = Path(raw).resolve()
+        except (OSError, ValueError):
+            return None
+        for r in roots:
+            if p == r or r in p.parents:
+                return p
+        return None
+
+    async def upload_handler(self, request: web.Request):
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        if not self.cfg["upload_dir"]:
+            return web.json_response({"ok": False, "error": "upload_dir not set"}, headers=CORS)
+        name = Path(request.headers.get("X-Filename", "file")).name or "file"
+        name = "".join(c for c in name if c not in '<>:"/\\|?*')[:120] or "file"
+        dest_dir = Path(self.cfg["upload_dir"])
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / name
+        n = 1
+        while dest.exists():
+            dest = dest_dir / f"{Path(name).stem} ({n}){Path(name).suffix}"
+            n += 1
+        size = 0
+        with open(dest, "wb") as f:
+            async for chunk in request.content.iter_chunked(1 << 16):
+                size += len(chunk)
+                if size > 2 * 1024 ** 3:
+                    f.close()
+                    dest.unlink(missing_ok=True)
+                    return web.json_response({"ok": False, "error": "file too large"}, headers=CORS)
+                f.write(chunk)
+        self.log_event(f"файл с телефона: {dest.name} ({size // 1024} КБ)")
+        return web.json_response({"ok": True, "name": dest.name, "size": size}, headers=CORS)
+
+    async def files_handler(self, request: web.Request):
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        raw = request.query.get("path", "")
+        if not raw:
+            roots = [{"name": Path(d).name or d, "path": d, "dir": True} for d in self.cfg["share_dirs"] if d]
+            return web.json_response({"path": "", "items": roots}, headers=CORS)
+        p = self._safe_path(raw)
+        if p is None or not p.is_dir():
+            raise web.HTTPForbidden(headers=CORS)
+        items = []
+        try:
+            for child in sorted(p.iterdir(), key=lambda c: (not c.is_dir(), c.name.lower()))[:500]:
+                try:
+                    st = child.stat()
+                except OSError:
+                    continue
+                items.append({"name": child.name, "path": str(child), "dir": child.is_dir(),
+                              "size": st.st_size, "mtime": st.st_mtime})
+        except OSError:
+            raise web.HTTPForbidden(headers=CORS)
+        return web.json_response({"path": str(p), "items": items}, headers=CORS)
+
+    async def file_handler(self, request: web.Request):
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        p = self._safe_path(request.query.get("path", ""))
+        if p is None or not p.is_file():
+            raise web.HTTPForbidden(headers=CORS)
+        self.log_event(f"файл на телефон: {p.name}")
+        return web.FileResponse(p, headers={**CORS, "Content-Disposition": f'attachment; filename="{p.name}"'})
+
 
 async def index(_request):
     return web.FileResponse(WEB_DIR / "index.html")
@@ -344,13 +440,17 @@ async def index(_request):
 
 def make_app(cfg: dict) -> web.Application:
     hub = Hub(cfg)
-    app = web.Application()
+    app = web.Application(client_max_size=2 * 1024 ** 3)
     app.router.add_get("/", index)
     app.router.add_get("/ws/pc", hub.pc_handler)
     app.router.add_get("/ws/phone", hub.phone_handler)
     app.router.add_post("/api/wake", hub.wake_handler)
     app.router.add_get("/api/status", hub.status_handler)
     app.router.add_get("/api/pair", hub.pair_handler)
+    app.router.add_get("/api/events", hub.events_handler)
+    app.router.add_post("/api/upload", hub.upload_handler)
+    app.router.add_get("/api/files", hub.files_handler)
+    app.router.add_get("/api/file", hub.file_handler)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", hub.options_handler)
     app.router.add_static("/static", WEB_DIR)
     if cfg["ca_cert"]:

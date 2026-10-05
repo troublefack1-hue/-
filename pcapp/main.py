@@ -76,6 +76,11 @@ def load_config() -> dict:
     cfg.setdefault("fps", 12)
     cfg.setdefault("monitor", 1)
     cfg.setdefault("auto_update", True)
+    home = Path.home()
+    cfg.setdefault("projects", [])                                   # folders for the terminal panel
+    cfg.setdefault("upload_dir", str(home / "Downloads" / "PC Remote"))  # files from the phone
+    cfg.setdefault("share_dirs", [str(home / "Downloads"), str(home / "Desktop"),
+                                  str(home / "Pictures"), str(home / "Documents")])
     if not cfg.get("public_ip"):
         cfg["public_ip"] = public_ip()
         changed = True
@@ -205,6 +210,7 @@ class Backend:
             "tls_host": "0.0.0.0", "tls_port": self.cfg["port"],
             "tls_cert": str(DATA / "server.crt"), "tls_key": str(DATA / "server.key"),
             "ca_cert": str(DATA / "ca.crt"),
+            "upload_dir": self.cfg["upload_dir"], "share_dirs": self.cfg["share_dirs"],
         }
         app = relay_mod.make_app(relay_cfg)
         self.hub = app["hub"]
@@ -213,7 +219,7 @@ class Backend:
         self.hub.on_cast = self._on_cast
         agent_cfg = {"relay_url": "http://127.0.0.1:8787", "secret": self.cfg["secret"],
                      "max_width": self.cfg["max_width"], "quality": self.cfg["quality"],
-                     "fps": self.cfg["fps"], "monitor": self.cfg["monitor"]}
+                     "fps": self.cfg["fps"], "monitor": self.cfg["monitor"], "projects": self.cfg["projects"]}
         self.agent = agent_mod.Agent(agent_cfg)
         await asyncio.gather(relay_mod.serve(relay_cfg, app), self.agent.run())
 
