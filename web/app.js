@@ -185,6 +185,11 @@
       } else if (m.t === "cmd_result") {
         show(m.result === "ok" ? (m.cmd === "open_url" ? "Ссылка открыта на ПК" : "Команда отправлена на ПК") : "Ошибка: " + m.result);
         sfx(m.result === "ok" ? "ok" : "offline");
+      } else if (m.t === "net") {
+        // the PC just toggled its VPN: probe now, reconnect in 1.5 s if it went quiet
+        pill(m.vpn ? "VPN на ПК включён" : "VPN на ПК выключен", m.vpn);
+        pingSentAt = Date.now(); send({ t: "ping" });
+        setTimeout(() => { if (Date.now() - lastMsgAt > 1400 && ws && ws.readyState === 1) { backoff = 300; ws.close(); } }, 1500);
       } else if (m.t === "term_out") { termOut(m.id, m.data);
       } else if (m.t === "term_exit") { termExit(m.id);
       } else if (m.t === "pc_clip") {

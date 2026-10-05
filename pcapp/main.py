@@ -218,6 +218,8 @@ class Backend:
         self.hub.on_paired = lambda ip: setattr(self, "paired_ip", ip)
         self.hub.on_phones = lambda n, names: (setattr(self, "phones", n), setattr(self, "phone_names", names))
         self.hub.on_cast = self._on_cast
+        self.hub.on_net = lambda n: setattr(self, "net", n)
+        self.net = {}
         agent_cfg = {"relay_url": "http://127.0.0.1:8787", "secret": self.cfg["secret"],
                      "max_width": self.cfg["max_width"], "quality": self.cfg["quality"],
                      "fps": self.cfg["fps"], "monitor": self.cfg["monitor"], "projects": self.cfg["projects"]}
@@ -594,7 +596,13 @@ class App(tk.Tk):
             txt = f"  ● {who} · https://{self.cfg['public_ip']}:{self.cfg['port']}"
             if b.cast_active:
                 txt += " · идёт трансляция с телефона"
+            net = getattr(b, "net", None) or b.hub.net
+            if net.get("vpn"):
+                txt += " · VPN включён" + (", связь через кабель" if net.get("pinned") else "")
             self.status.configure(text=txt + "  ", fg=OK if phones else WARN)
+            # phones vanished right after VPN came up and did not return: almost always a kill switch
+            if net.get("vpn") and self.last_phones and not phones:
+                self.code_hint.configure(text="Телефоны отвалились после включения VPN: выключите Kill Switch в VPN-клиенте.")
             if phones > self.last_phones:
                 self.tray.notify("Телефон подключился")
             self.last_phones = phones

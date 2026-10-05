@@ -104,6 +104,56 @@ def lan_interface_index() -> int | None:
     return None
 
 
+def internet_interface_index() -> int | None:
+    """Adapter Windows would use for the internet right now (VPN when it is on)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import socket
+        idx = ctypes.c_ulong()
+        dest = ctypes.c_ulong(int.from_bytes(socket.inet_aton("8.8.8.8"), "little"))
+        if ctypes.windll.iphlpapi.GetBestInterface(dest, ctypes.byref(idx)) == 0:
+            return int(idx.value)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+class NetWatcher:
+    """Polls the routing table every 2 s; reports VPN on/off and LAN adapter changes."""
+
+    def __init__(self, on_change):
+        self.on_change = on_change
+        self.lan = lan_interface_index()
+        self.vpn = self._vpn_now(self.lan)
+        self.changed_at = 0.0
+
+    @staticmethod
+    def _vpn_now(lan):
+        inet = internet_interface_index()
+        return bool(lan and inet and inet != lan)
+
+    async def run(self):
+        if sys.platform != "win32":
+            return
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(2)
+            try:
+                lan = await loop.run_in_executor(None, lan_interface_index)
+                vpn = await loop.run_in_executor(None, self._vpn_now, lan)
+            except Exception:  # noqa: BLE001
+                continue
+            if lan != self.lan or vpn != self.vpn:
+                old_lan, self.lan, self.vpn, self.changed_at = self.lan, lan, vpn, time.time()
+                log.info("network change: vpn=%s lan_if=%s (was %s)", vpn, lan, old_lan)
+                try:
+                    await self.on_change(vpn, lan, old_lan)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("net change handler: %s", e)
+
+
 def pinned_socket(host: str, port: int, if_index: int):
     """Listening socket whose accepted connections reply via the given interface."""
     import socket
@@ -178,6 +228,8 @@ class Hub:
         self.on_phones = None  # callback(count, names) for the PC app's UI
         self.phone_names: dict = {}
         self.events: list = []  # last 200 events: (time, text)
+        self.net = {"vpn": False, "lan": None, "pinned": False}
+        self.on_net = None      # callback(dict) for the PC app's UI
 
     def log_event(self, text: str):
         self.events.append((time.time(), text))
@@ -373,6 +425,14 @@ class Hub:
             await self.tell_pc_viewers()
             log.info("phone disconnected (%d left)", len(self.phones))
         return ws
+
+    async def net_changed(self, vpn: bool, lan, old_lan):
+        """VPN toggled or the LAN adapter changed: tell the phones right away."""
+        self.net.update(vpn=vpn, lan=lan)
+        self.log_event("VPN включён" if vpn else "VPN выключен")
+        await self.broadcast_phones(json.dumps({"t": "net", "vpn": vpn}))
+        if self.on_net:
+            self.on_net(dict(self.net))
 
     async def ring_phones(self):
         self.log_event("найти телефон")
@@ -608,18 +668,37 @@ async def serve(cfg: dict, app: web.Application | None = None):
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(cfg["tls_cert"], cfg["tls_key"])
-        if_index = lan_interface_index() if cfg.get("pin_interface") else None
-        if if_index:
-            try:
-                sock = pinned_socket(cfg["tls_host"], cfg["tls_port"], if_index)
-                await web.SockSite(runner, sock, ssl_context=ctx).start()
-                log.info("listening on https://%s:%s (pinned to LAN adapter %d, VPN-proof)", cfg["tls_host"], cfg["tls_port"], if_index)
-            except Exception as e:  # noqa: BLE001
-                log.warning("interface pinning failed (%s), listening normally", e)
-                if_index = None
-        if not if_index:
-            await web.TCPSite(runner, cfg["tls_host"], cfg["tls_port"], ssl_context=ctx).start()
+        hub = (app or runner.app)["hub"]
+        site = {"obj": None}
+
+        async def bind_tls(if_index):
+            if site["obj"] is not None:
+                await site["obj"].stop()
+                site["obj"] = None
+            if if_index and cfg.get("pin_interface"):
+                try:
+                    sock = pinned_socket(cfg["tls_host"], cfg["tls_port"], if_index)
+                    site["obj"] = web.SockSite(runner, sock, ssl_context=ctx)
+                    await site["obj"].start()
+                    hub.net.update(pinned=True, lan=if_index)
+                    log.info("listening on https://%s:%s (pinned to LAN adapter %d, VPN-proof)", cfg["tls_host"], cfg["tls_port"], if_index)
+                    return
+                except Exception as e:  # noqa: BLE001
+                    log.warning("interface pinning failed (%s), listening normally", e)
+            site["obj"] = web.TCPSite(runner, cfg["tls_host"], cfg["tls_port"], ssl_context=ctx)
+            await site["obj"].start()
+            hub.net.update(pinned=False)
             log.info("listening on https://%s:%s", cfg["tls_host"], cfg["tls_port"])
+
+        async def on_net(vpn, lan, old_lan):
+            if lan != old_lan and lan:
+                await bind_tls(lan)   # adapter changed (cable <-> Wi-Fi): re-pin
+            await hub.net_changed(vpn, lan, old_lan)
+
+        watcher = NetWatcher(on_net)
+        hub.net.update(vpn=watcher.vpn, lan=watcher.lan)
+        await bind_tls(watcher.lan)
+        asyncio.create_task(watcher.run())
     while True:
         await asyncio.sleep(3600)
 

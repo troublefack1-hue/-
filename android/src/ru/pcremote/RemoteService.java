@@ -87,7 +87,7 @@ public class RemoteService extends Service {
 
     // ------------------------------------------------------ connection ---
     private void keepConnected() {
-        int delay = 2000;
+        int delay = 1000;
         while (running) {
             if (!prefs.contains("secret")) { sleep(5000); continue; }
             try {
@@ -101,7 +101,7 @@ public class RemoteService extends Service {
                 c.sendText("{\"t\":\"auth\",\"token\":\"" + prefs.getString("secret", "") + "\"}");
                 c.sendText("{\"t\":\"profile\",\"name\":\"idle\"}");   // no video for the background link
                 c.sendText("{\"t\":\"hello_phone\",\"model\":\"" + Build.MODEL.replace('"', ' ') + "\"}");
-                ws = c; delay = 2000;
+                ws = c; delay = 1000;
                 update("Связь с ПК", casting ? "трансляция экрана" : "подключено");
                 c.run();  // blocks until closed
             } catch (Exception e) {
