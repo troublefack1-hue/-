@@ -1,6 +1,7 @@
 package ru.pcremote;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -157,18 +158,25 @@ public class MainActivity extends Activity {
                 if (found == null) found = Updater.check(cur);
                 final Updater.Info info = found;
                 if (info == null) return;
-                java.io.File apk = fromPc ? Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
-                runOnUiThread(() -> {
-                    Toast.makeText(this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
-                    Intent i = new Intent(Intent.ACTION_VIEW)
-                            .setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"),
-                                    "application/vnd.android.package-archive")
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(i);
-                });
+                final boolean fp = fromPc;
+                runOnUiThread(() -> offerUpdate(info, cur, fp));
             } catch (Exception ignored) {
             }
         }).start();
+    }
+
+    /** What's new + consent; only then download and hand over to the installer. */
+    private void offerUpdate(Updater.Info info, String cur, boolean fromPc) {
+        String notes = info.notes == null || info.notes.trim().isEmpty() ? "Описание релиза пустое." : info.notes.trim();
+        new AlertDialog.Builder(this).setTitle("Обновление " + info.version + (fromPc ? " (с ПК)" : " (с GitHub)"))
+                .setMessage("У вас " + cur + ".\n\nЧто нового:\n" + notes + "\n\nСкачать и установить? Android покажет свой запрос.")
+                .setPositiveButton("Обновить", (d, w) -> new Thread(() -> {
+                    try {
+                        if (fromPc) Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256); else Updater.download(info.url, getCacheDir(), info.sha256);
+                        runOnUiThread(() -> startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"), "application/vnd.android.package-archive")
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)));
+                    } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Не удалось скачать: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+                }).start()).setNegativeButton("Позже", null).show();
     }
 
     // ------------------------------------------------------------- cast ---
@@ -409,15 +417,9 @@ public class MainActivity extends Activity {
                     if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
                     if (found == null) found = Updater.check(cur);
                     final Updater.Info info = found;
-                    if (info == null) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Это последняя версия (" + cur + ")", Toast.LENGTH_SHORT).show()); return; }
-                    final String src = fromPc ? " с ПК" : " с GitHub";
-                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Скачиваю " + info.version + src + "…", Toast.LENGTH_SHORT).show());
-                    if (fromPc) Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256); else Updater.download(info.url, getCacheDir(), info.sha256);
-                    runOnUiThread(() -> {
-                        Toast.makeText(MainActivity.this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
-                        startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"), "application/vnd.android.package-archive")
-                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK));
-                    });
+                    if (info == null) { runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this).setTitle("Обновлений нет").setMessage("У вас последняя версия: " + cur + ".").setPositiveButton("Ок", null).show()); return; }
+                    final boolean fp = fromPc;
+                    runOnUiThread(() -> offerUpdate(info, cur, fp));
                 } catch (Exception e) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Не удалось проверить: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
             }).start();
         }

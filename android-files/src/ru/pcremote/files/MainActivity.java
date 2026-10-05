@@ -87,6 +87,8 @@ public class MainActivity extends Activity {
     private TextView title, subtitle, pasteText;
     private ImageButton viewBtn, panesBtn;
     private View fab;
+    private LinearLayout banner; private TextView bannerText;
+    private Updater.Info pending;          // an update we know about but the person has not accepted yet
     private final Pane[] panes = new Pane[2];
     private Pane active;
 
@@ -171,6 +173,13 @@ public class MainActivity extends Activity {
         HorizontalScrollView hs = new HorizontalScrollView(this); hs.setHorizontalScrollBarEnabled(false); hs.setBackgroundColor(PANEL);
         crumbs = new LinearLayout(this); crumbs.setOrientation(LinearLayout.HORIZONTAL); crumbs.setPadding(dp(8), 0, dp(8), dp(6));
         hs.addView(crumbs); root.addView(hs);
+        // update banner: visible only when a newer version exists; nothing downloads until "Обновить"
+        banner = new LinearLayout(this); banner.setOrientation(LinearLayout.HORIZONTAL); banner.setGravity(Gravity.CENTER_VERTICAL);
+        banner.setBackgroundColor(0xFF2A2410); banner.setPadding(dp(14), dp(8), dp(6), dp(8)); banner.setVisibility(View.GONE);
+        bannerText = text("", 13, TEXT); banner.addView(bannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button upd = button("Обновить"); upd.setOnClickListener(v -> offerUpdate(pending)); banner.addView(upd);
+        banner.addView(icon(R.drawable.ic_close, v -> { banner.setVisibility(View.GONE); prefs.edit().putString("skip_ver", pending == null ? "" : pending.version).apply(); }));
+        root.addView(banner);
 
         FrameLayout stage = new FrameLayout(this); root.addView(stage, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         panesBox = new LinearLayout(this); stage.addView(panesBox, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -461,7 +470,8 @@ public class MainActivity extends Activity {
         r.add(new Root("Документы", "", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), R.drawable.ic_doc));
         r.add(new Root("Корзина", "удалённое можно вернуть", Fs.trashDir(ext), R.drawable.ic_trash));
         String ver = "?"; try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) {}
-        Root upd = new Root("Обновить приложение", "версия " + ver + " · нажмите: проверит и установит новую", null, R.drawable.ic_rotate); upd.open = () -> checkUpdate(true); r.add(upd);
+        Root upd = new Root(pending != null ? "Доступно обновление " + pending.version : "Проверить обновления", pending != null ? "у вас " + ver + " · нажмите, чтобы посмотреть, что нового, и обновить" : "версия " + ver + " · проверка идёт и при запуске; ничего не ставится без вашего согласия", null, R.drawable.ic_rotate);
+        upd.open = () -> { if (pending != null) offerUpdate(pending); else checkUpdate(true); }; r.add(upd);
         for (String p : favorites()) { File f = new File(p); Root fav = new Root(f.getName(), "избранное · " + f.getParent(), f, R.drawable.ic_folder); r.add(fav); }
         for (String p : recents()) { File f = new File(p); if (!f.exists()) continue; Root rc = new Root(f.getName(), "недавнее · " + Fs.date(f.lastModified()), f, iconFor(Fs.kindOf(f.getName()))); rc.open = () -> { remember(f); openLocal(f); }; r.add(rc); }
         for (Root x : r) if (x.open == null) { final File f = x.file; x.open = () -> { if (!f.exists()) f.mkdirs(); active.open(new LocalLoc(f)); }; }
@@ -707,17 +717,62 @@ public class MainActivity extends Activity {
     @Override public void onBackPressed() { if (!active.back()) super.onBackPressed(); }
 
     // ==================================================================== update ===
+    /** Looks for a newer release. Never downloads on its own: it shows a banner (or, when the person
+     *  asked, a dialog) and waits for "Обновить". */
     private void checkUpdate(boolean manual) {
         if (manual) toast("Проверяю обновления…");
         new Thread(() -> {
+            String cur = version();
             try {
-                String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
                 Updater.Info info = Updater.check(cur, "pcremote-files.apk");
-                if (info == null) { if (manual) ui.post(() -> toast("Это последняя версия (" + cur + ")")); return; }
-                if (manual) ui.post(() -> toast("Скачиваю " + info.version + "…"));
-                File apk = Updater.download(info.url, getCacheDir(), info.sha256);
-                ui.post(() -> { toast("Обновление " + info.version + " — установите"); startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(FileProvider.uriFor(apk), "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)); });
-            } catch (Exception e) { if (manual) ui.post(() -> toast("Не удалось проверить: " + e.getMessage())); }
+                ui.post(() -> {
+                    if (info == null) {
+                        pending = null; banner.setVisibility(View.GONE);
+                        if (manual) new AlertDialog.Builder(this).setTitle("Обновлений нет").setMessage("У вас последняя версия: " + cur + ".").setPositiveButton("Ок", null).show();
+                        return;
+                    }
+                    pending = info;
+                    if (manual || !info.version.equals(prefs.getString("skip_ver", ""))) showBanner(info);
+                    if (manual) offerUpdate(info);
+                    for (Pane p : panes) if (p.rootsMode) p.showRoots();
+                });
+            } catch (Exception e) {
+                if (manual) ui.post(() -> new AlertDialog.Builder(this).setTitle("Не удалось проверить").setMessage(String.valueOf(e.getMessage())).setPositiveButton("Ок", null).show());
+            }
+        }).start();
+    }
+
+    private String version() { try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "?"; } }
+
+    private void showBanner(Updater.Info info) {
+        bannerText.setText("Доступна версия " + info.version + " (у вас " + version() + ")");
+        if (banner.getVisibility() != View.VISIBLE) { banner.setVisibility(View.VISIBLE); banner.setAlpha(0f); banner.animate().alpha(1f).setDuration(200).start(); }
+    }
+
+    /** What's new + explicit consent; only then download (with progress) and hand over to the installer. */
+    private void offerUpdate(Updater.Info info) {
+        if (info == null) { checkUpdate(true); return; }
+        String notes = info.notes == null || info.notes.trim().isEmpty() ? "Описание релиза пустое." : info.notes.trim();
+        new AlertDialog.Builder(this).setTitle("Обновление " + info.version)
+                .setMessage("У вас " + version() + ", доступна " + info.version + ".\n\nЧто нового:\n" + notes + "\n\nСкачать " + "и установить? Android покажет свой запрос на установку.")
+                .setPositiveButton("Обновить", (d, w) -> downloadUpdate(info))
+                .setNegativeButton("Позже", null)
+                .setNeutralButton("Пропустить эту версию", (d, w) -> { prefs.edit().putString("skip_ver", info.version).apply(); banner.setVisibility(View.GONE); }).show();
+    }
+
+    private void downloadUpdate(Updater.Info info) {
+        LinearLayout box = column(); int p = dp(20); box.setPadding(p, p, p, p);
+        TextView cur = text("Скачиваю " + info.version + "…", 13, MUTED); box.addView(cur);
+        ProgressBar pb = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); pb.setMax(1000); pb.setProgressTintList(ColorStateList.valueOf(ACCENT)); box.addView(pb);
+        AlertDialog d = new AlertDialog.Builder(this).setTitle("Обновление").setView(box).setCancelable(false).show();
+        new Thread(() -> {
+            try {
+                File apk = Updater.download(info.url, getCacheDir(), info.sha256, (done, total) -> ui.post(() -> { if (total > 0) { pb.setProgress((int) (done * 1000 / total)); cur.setText("Скачиваю " + info.version + "… " + Fs.size(done) + " из " + Fs.size(total)); } else cur.setText("Скачиваю " + info.version + "… " + Fs.size(done)); }));
+                ui.post(() -> { try { d.dismiss(); } catch (Exception ignored) {} banner.setVisibility(View.GONE);
+                    startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(FileProvider.uriFor(apk), "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)); });
+            } catch (Exception e) {
+                ui.post(() -> { try { d.dismiss(); } catch (Exception ignored) {} new AlertDialog.Builder(this).setTitle("Не удалось скачать").setMessage(String.valueOf(e.getMessage())).setPositiveButton("Ок", null).show(); });
+            }
         }).start();
     }
 

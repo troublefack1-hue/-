@@ -75,8 +75,17 @@ public final class Updater {
     }
 
     public static final class Info {
-        public final String version, url, sha256;
+        public final String version, url, sha256; public String notes = "";
         Info(String v, String u, String h) { version = v; url = u; sha256 = h; }
+    }
+    public interface Progress { void on(long done, long total); }
+
+    /** The release's description ("body"), with JSON escapes undone, trimmed to a readable length. */
+    static String notesOf(String json) {
+        String b = Pairing.jsonString(json, "body");
+        if (b == null) return "";
+        b = b.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\\"", "\"").replace("\\t", " ").trim();
+        return b.length() > 1500 ? b.substring(0, 1500) + "…" : b;
     }
 
     /** Published checksum of {@code asset} from the release's SHA256SUMS, or null. */
@@ -111,19 +120,22 @@ public final class Updater {
         if (i < 0) return null;
         int u = json.indexOf("browser_download_url", i);
         String url = u < 0 ? null : Pairing.jsonString(json.substring(u - 1), "browser_download_url");
-        return url == null ? null : new Info(version, url, publishedSha256(json, asset));
+        if (url == null) return null;
+        Info info = new Info(version, url, publishedSha256(json, asset)); info.notes = notesOf(json); return info;
     }
 
     public static File download(String url, File dir) throws IOException { return download(url, dir, null); }
+    public static File download(String url, File dir, String sha256) throws IOException { return download(url, dir, sha256, null); }
 
-    public static File download(String url, File dir, String sha256) throws IOException {
+    public static File download(String url, File dir, String sha256, Progress progress) throws IOException {
         File out = new File(dir, "update.apk");
         HttpURLConnection c = open(url);
         java.security.MessageDigest md;
         try { md = java.security.MessageDigest.getInstance("SHA-256"); } catch (Exception e) { throw new IOException(e); }
+        long total = c.getContentLengthLong(), done = 0;
         try (InputStream in = c.getInputStream(); FileOutputStream f = new FileOutputStream(out)) {
             byte[] buf = new byte[65536]; int n;
-            while ((n = in.read(buf)) > 0) { f.write(buf, 0, n); md.update(buf, 0, n); }
+            while ((n = in.read(buf)) > 0) { f.write(buf, 0, n); md.update(buf, 0, n); done += n; if (progress != null) progress.on(done, total); }
         }
         if (out.length() < 20_000) { out.delete(); throw new IOException("bad apk"); }
         if (sha256 != null) {

@@ -214,14 +214,19 @@ public class MainActivity extends Activity {
                     if (manual) runOnUiThread(() -> { Toast.makeText(this, "Это последняя версия (" + cur + ")", Toast.LENGTH_SHORT).show(); if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("версия " + cur + " · это последняя"); });
                     return;
                 }
-                if (manual) runOnUiThread(() -> { if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("скачиваю " + info.version + "…"); });
-                java.io.File apk = fromPc ? Updater.downloadPc("pcremote-net.apk", getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
                 final String src = fromPc ? " (с ПК)" : " (с GitHub)";
+                final boolean fp = fromPc;
                 runOnUiThread(() -> {
-                    Toast.makeText(this, "Обновление " + info.version + src + " — установите", Toast.LENGTH_LONG).show();
-                    if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("версия " + cur + " → " + info.version + ": установите");
-                    startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"),
-                            "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK));
+                    if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("доступна " + info.version + src + " · у вас " + cur);
+                    String notes = info.notes == null || info.notes.trim().isEmpty() ? "Описание релиза пустое." : info.notes.trim();
+                    new AlertDialog.Builder(this).setTitle("Обновление " + info.version + src).setMessage("У вас " + cur + ".\n\nЧто нового:\n" + notes + "\n\nСкачать и установить?")
+                        .setPositiveButton("Обновить", (d, w) -> new Thread(() -> {
+                            try {
+                                java.io.File apk = fp ? Updater.downloadPc("pcremote-net.apk", getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
+                                runOnUiThread(() -> startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"),
+                                        "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)));
+                            } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Не удалось скачать: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+                        }).start()).setNegativeButton("Позже", null).show();
                 });
             } catch (Exception e) {
                 if (manual) runOnUiThread(() -> { Toast.makeText(this, "Не удалось проверить: " + e.getMessage(), Toast.LENGTH_LONG).show(); if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("не удалось проверить, попробуйте позже"); });
