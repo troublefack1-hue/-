@@ -318,6 +318,10 @@
       <div class="flist mono" id="diagList"><div class="empty">Запрашиваю…</div></div>
       <h3>Последние ошибки</h3>
       <div class="flist mono" id="diagErrors"><div class="empty">Ошибок не было</div></div>
+      <h3>Порты до ПК</h3>
+      <div class="flist mono" id="portList"><div class="empty">Нажмите «Замерить»: телефон подключится к ПК по каждому открытому порту и покажет задержку и скорость</div></div>
+      <button id="portProbe" class="btn">Замерить порты</button>
+      <p class="muted small">Дополнительные порты задаются на ПК в <code>config.json</code> (<code>extra_ports</code>) и должны быть проброшены на роутере. Обычно цифры совпадают: порт на скорость не влияет, если оператор не режет трафик по портам.</p>
       <button id="diagReport" class="btn primary">Сохранить отчёт на ПК</button>
       <p class="muted small">Отчёт (эти данные + журнал ПК) сохраняется в папку загрузок ПК, его удобно показать Claude Code.</p>
     </div>

@@ -74,6 +74,7 @@ def load_config() -> dict:
     cfg.setdefault("upload_dir", "")
     cfg.setdefault("share_dirs", [])
     # the phone's internet through this PC (second phone app): see netproxy.py
+    cfg.setdefault("extra_ports", [])      # more TLS listeners (same app) for the phone's "which port is faster" probe
     cfg.setdefault("net_proxy", True)
     cfg.setdefault("net_block_ads", True)
     # Windows: send replies through the physical LAN adapter even when a VPN
@@ -345,7 +346,8 @@ class Hub:
     def status(self) -> dict:
         return {"t": "status", "pc_online": self.pc is not None,
                 "pc_since": self.pc_since, "phones": len(self.phones), "lan": LAN_IP.get("ip"),
-                "net": self.netproxy.stats() if getattr(self, "netproxy", None) else None}
+                "net": self.netproxy.stats() if getattr(self, "netproxy", None) else None,
+                "ports": [self.cfg.get("tls_port")] + [int(p) for p in self.cfg.get("extra_ports") or [] if int(p) != self.cfg.get("tls_port")]}
 
     async def broadcast_phones(self, data, binary=False):
         dead = []
@@ -618,6 +620,16 @@ class Hub:
         if not self.check_header(request, owner_only=False):
             raise web.HTTPForbidden(headers=CORS)
         return web.json_response(self.status(), headers=CORS)
+
+    async def ping_handler(self, request: web.Request):
+        """n bytes of incompressible data for the phone's link probe (RTT = time to first byte, then throughput)."""
+        if not self.check_header(request, owner_only=False):
+            raise web.HTTPForbidden(headers=CORS)
+        try:
+            n = max(0, min(int(request.query.get("n", "0")), 4 * 1024 * 1024))
+        except ValueError:
+            n = 0
+        return web.Response(body=os.urandom(n), headers={**CORS, "Cache-Control": "no-store", "Content-Type": "application/octet-stream"})
 
     async def options_handler(self, _request):
         return web.Response(headers=CORS)
@@ -988,6 +1000,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_get("/ws/net", hub.netproxy.handler)
     app.router.add_post("/api/wake", hub.wake_handler)
     app.router.add_get("/api/status", hub.status_handler)
+    app.router.add_get("/api/ping", hub.ping_handler)
     app.router.add_get("/api/pair", hub.pair_handler)
     app.router.add_get("/api/events", hub.events_handler)
     app.router.add_post("/api/upload", hub.upload_handler)
@@ -1083,6 +1096,13 @@ async def serve(cfg: dict, app: web.Application | None = None):
         watcher = NetWatcher(on_net)
         hub.net.update(vpn=watcher.vpn, lan=watcher.lan)
         await bind_tls(watcher.lan)
+        for extra in cfg.get("extra_ports") or []:
+            try:
+                if int(extra) != cfg["tls_port"]:
+                    await web.TCPSite(runner, cfg["tls_host"], int(extra), ssl_context=ctx).start()
+                    log.info("also listening on https://%s:%s", cfg["tls_host"], extra)
+            except Exception as e:  # noqa: BLE001
+                log.warning("extra port %s: %s", extra, e)
         asyncio.create_task(watcher.run())
     asyncio.create_task((app or runner.app)["hub"].keep_calling())
     while True:

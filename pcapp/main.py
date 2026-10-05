@@ -103,6 +103,7 @@ def load_config() -> dict:
         cfg["pair_code"] = new_pair_code()
         changed = True
     cfg.setdefault("ntfy_wake_url", "")
+    cfg.setdefault("extra_ports", [])   # more TLS ports for the phone's port probe; forward them on the router too
     cfg.setdefault("max_width", 1280)
     cfg.setdefault("quality", 55)
     cfg.setdefault("fps", 12)
@@ -252,6 +253,7 @@ class Backend:
             "ca_cert": str(DATA / "ca.crt"),
             "upload_dir": self.cfg["upload_dir"], "share_dirs": self.cfg["share_dirs"],
             "guest_secret": self.cfg["guest_secret"],
+            "extra_ports": self.cfg.get("extra_ports", []),
             "net_proxy": self.cfg.get("net_proxy", True), "net_block_ads": self.cfg.get("net_block_ads", True),
             "net_dir": str(DATA / "net"),
         }
@@ -986,6 +988,8 @@ def main():
         log.exception("phone cli")
     try:
         firewall_open(cfg["port"])
+        for extra in cfg.get("extra_ports") or []:    # the phone's port probe needs each one reachable
+            firewall_open(int(extra))
     except Exception:  # noqa: BLE001
         log.exception("firewall")
     if cfg["_first_run"]:

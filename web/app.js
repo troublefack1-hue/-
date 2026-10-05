@@ -167,6 +167,7 @@
         send({ t: "profile", name: isHidden() ? "idle" : profile });
         if (audioOn) send({ t: "audio", on: true });
       }
+      if (m.t === "status" && Array.isArray(m.ports)) pcPorts = m.ports;
       if (m.t === "status" || m.t === "pong") {
         if (m.t === "pong") { latency = Date.now() - pingSentAt; latHist.push(latency); if (latHist.length > 40) latHist.shift(); drawSpark(); }
         const was = pcOnline; pcOnline = !!m.pc_online;
@@ -1344,6 +1345,32 @@
     const E = $("diagErrors"); E.innerHTML = diagErrors.length ? "" : `<div class="empty">Ошибок не было</div>`;
     for (const e of diagErrors.slice().reverse()) { const r = document.createElement("div"); r.className = "it"; r.innerHTML = `<span class="s">${new Date(e.ts).toLocaleTimeString("ru-RU")}</span><span class="n">${esc(e.text)}</span>`; E.appendChild(r); }
   }
+  // ---- which port to the PC is faster: measured natively by the app (the WebView cannot pin our certificate)
+  let pcPorts = [];
+  function renderPorts(items) {
+    const L = $("portList"); L.innerHTML = "";
+    if (!items || !items.length) { L.innerHTML = `<div class="empty">Нет данных</div>`; return; }
+    const okItems = items.filter((p) => p.ok);
+    const best = okItems.length ? okItems.reduce((a, b) => (b.kbs > a.kbs ? b : a)) : null;
+    for (const p of items) {
+      const r = document.createElement("div"); r.className = "it";
+      const text = p.ok ? `TLS ${p.connect_ms} мс · ответ ${p.ttfb_ms} мс · ${p.kbs} КБ/с` : `недоступен${p.error ? ": " + p.error : ""}`;
+      r.innerHTML = `<span class="s">${esc(String(p.port))}${p.current ? " · сейчас" : ""}${best && p.port === best.port ? " · быстрее всех" : ""}</span><span class="n">${esc(text)}</span>`;
+      if (p.ok && !p.current && window.PcRemoteApp && PcRemoteApp.usePort) {
+        const b = document.createElement("button"); b.className = "btn small"; b.textContent = "Использовать";
+        b.onclick = () => { PcRemoteApp.usePort(p.port); show(`Переключаюсь на порт ${p.port}…`); };
+        r.appendChild(b);
+      }
+      L.appendChild(r);
+    }
+  }
+  window.pcrPorts = (items) => { try { renderPorts(typeof items === "string" ? JSON.parse(items) : items); } catch (e) { pcrError("ports: " + e.message); } };
+  $("portProbe").onclick = () => {
+    if (!(window.PcRemoteApp && PcRemoteApp.probePorts)) { show("Замер по портам работает только в приложении «Мой ПК»"); return; }
+    if (!pcPorts.length) { show("ПК ещё не сообщил свои порты"); return; }
+    $("portList").innerHTML = `<div class="empty">Замеряю ${pcPorts.length} порт(а)…</div>`;
+    PcRemoteApp.probePorts(JSON.stringify(pcPorts)); buzz(8);
+  };
   $("diagReport").onclick = async () => {
     const body = { client: Object.fromEntries(diagRows()), errors: diagErrors, agent: lastDiag, ua: navigator.userAgent, prefs: { video: prefs.video, theme: prefs.theme } };
     const r = await fetch("/api/report", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify(body) });

@@ -316,6 +316,51 @@ public class MainActivity extends Activity {
 
     /** Called from the page: window.PcRemoteApp.* */
     private class Bridge {
+        /** The diagnostics page asks: connect to the PC by each listed port, measure TLS handshake,
+         *  time to first byte and download speed of 256 KB from /api/ping. Result -> window.pcrPorts(json). */
+        @JavascriptInterface public void probePorts(String portsJson) {
+            new Thread(() -> {
+                StringBuilder out = new StringBuilder("[");
+                int current = prefs.getInt("port", 8443);
+                for (String tok : portsJson.replaceAll("[\\[\\]\\s]", "").split(",")) {
+                    int port; try { port = Integer.parseInt(tok); } catch (NumberFormatException e) { continue; }
+                    if (out.length() > 1) out.append(',');
+                    out.append(probeOne(port, current));
+                }
+                final String json = out.append(']').toString();
+                runOnUiThread(() -> { if (web != null) web.evaluateJavascript("window.pcrPorts && window.pcrPorts(" + json.replace("\\", "\\\\").replace("'", "\\'") + ")", null); });
+            }).start();
+        }
+
+        private String probeOne(int port, int current) {
+            String host = prefs.getString("host", ""), pin = prefs.getString("pin", "");
+            long t0 = System.nanoTime();
+            try (javax.net.ssl.SSLSocket s = Pinned.connect(host, port, pin, null, 6000)) {
+                long tConn = System.nanoTime();
+                s.setSoTimeout(10000);
+                java.io.OutputStream o = s.getOutputStream();
+                o.write(("GET /api/ping?n=262144 HTTP/1.1\r\nHost: " + host + "\r\nAuthorization: Bearer " + prefs.getString("secret", "") + "\r\nConnection: close\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                o.flush();
+                java.io.InputStream in = s.getInputStream();
+                byte[] buf = new byte[65536]; long total = 0, tFirst = 0; int r;
+                while ((r = in.read(buf)) > 0) { if (tFirst == 0) tFirst = System.nanoTime(); total += r; }
+                long tEnd = System.nanoTime();
+                double secs = Math.max(1e-3, (tEnd - tFirst) / 1e9);
+                return "{\"port\":" + port + ",\"ok\":true,\"current\":" + (port == current) + ",\"connect_ms\":" + (tConn - t0) / 1_000_000
+                        + ",\"ttfb_ms\":" + (tFirst - tConn) / 1_000_000 + ",\"kbs\":" + Math.round(total / 1024.0 / secs) + "}";
+            } catch (Exception e) {
+                String m = String.valueOf(e.getMessage()).replace("\"", "'").replaceAll("[\\r\\n]", " ");
+                return "{\"port\":" + port + ",\"ok\":false,\"current\":" + (port == current) + ",\"error\":\"" + m.substring(0, Math.min(60, m.length())) + "\"}";
+            }
+        }
+
+        /** Switch the tunnel to another of the PC's ports (chosen from the probe). */
+        @JavascriptInterface public void usePort(int port) {
+            if (port <= 0 || port > 65535) return;
+            prefs.edit().putInt("port", port).putString("hostport", prefs.getString("host", "") + ":" + port).apply();
+            runOnUiThread(() -> { stopRemote(); startRemote(); });
+        }
+
         @JavascriptInterface public void repair() {
             prefs.edit().remove("secret").apply();
             runOnUiThread(() -> showSetup(null));

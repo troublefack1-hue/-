@@ -49,7 +49,7 @@ async def main():
     await loop.create_datagram_endpoint(FakeDns, local_addr=("127.0.0.1", 8789))
     cfg = {"secret": T, "host": "127.0.0.1", "port": PORT, "ntfy_wake_url": "", "tls_host": "127.0.0.1", "tls_port": TLS,
            "tls_cert": str(tmp / "server.crt"), "tls_key": str(tmp / "server.key"), "ca_cert": str(tmp / "ca.crt"),
-           "share_dirs": [], "upload_dir": str(tmp / "up"), "net_dir": str(tmp / "net"), "net_block_lists": [], "dns_upstream": ["127.0.0.1:8789"]}
+           "share_dirs": [], "upload_dir": str(tmp / "up"), "net_dir": str(tmp / "net"), "net_block_lists": [], "dns_upstream": ["127.0.0.1:8789"], "extra_ports": [8793]}
     app = relay.make_app(cfg)
     app["hub"].netproxy.is_local = staticmethod(lambda h: False)   # test servers live on loopback
     serve = asyncio.ensure_future(relay.serve(cfg, app)); await asyncio.sleep(1.0)
@@ -88,6 +88,14 @@ async def main():
     report("DNS over SOCKS5 UDP ASSOCIATE answered by the PC", ans[-4:] == bytes([203, 0, 113, 7]) and ans[:2] == b"\x42\x42", ans.hex())
     ans = await loop.run_in_executor(None, socks_udp_dns, sport, "ads.example.com")
     report("blocked name -> 0.0.0.0 through the phone path", ans[-4:] == b"\x00\x00\x00\x00", ans.hex())
+    # extra TLS port + /api/ping (what the phone's port probe uses)
+    def ping(port): return subprocess.run(["curl", "-sS", "-m", "10", "-k", "-o", "/dev/null", "-w", "%{http_code} %{size_download}", "-H", "Authorization: Bearer " + T, f"https://127.0.0.1:{port}/api/ping?n=262144"], capture_output=True, text=True, env=NOPROXY)
+    r1, r2 = await asyncio.gather(loop.run_in_executor(None, ping, TLS), loop.run_in_executor(None, ping, 8793))
+    report("/api/ping 256 KB on the main and the extra TLS port", r1.stdout == "200 262144" and r2.stdout == "200 262144", f"{r1.stdout} / {r2.stdout} {r2.stderr[:80]}")
+    r3 = await loop.run_in_executor(None, lambda: subprocess.run(["curl", "-sS", "-m", "10", "-k", "-o", "/dev/null", "-w", "%{http_code}", f"https://127.0.0.1:8793/api/ping?n=10"], capture_output=True, text=True, env=NOPROXY))
+    report("/api/ping needs a token", r3.stdout == "403", r3.stdout)
+    st = await loop.run_in_executor(None, lambda: subprocess.run(["curl", "-sS", "-m", "10", "-k", "-H", "Authorization: Bearer " + T, f"https://127.0.0.1:{TLS}/api/status"], capture_output=True, text=True, env=NOPROXY))
+    report("status lists the ports", json.loads(st.stdout).get("ports") == [TLS, 8793], st.stdout[:100])
     java.terminate(); await loop.run_in_executor(None, java.wait, 5)
     await asyncio.sleep(0.3)
     report("session gone after the phone disconnects", not app["hub"].netproxy.sessions)
