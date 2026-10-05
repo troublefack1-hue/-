@@ -192,6 +192,15 @@ async def main():
         try: m = await asyncio.wait_for(pc.receive(), 1); late = m.data
         except asyncio.TimeoutError: late = None
         report("profile from a known bg link is dropped", late is None or '"profile"' not in late, str(late))
+        # ---------- a phone that comes after the PC still gets its hello (and so offers its video codecs) ----------
+        await pc.send_str(json.dumps({"t": "hello", "w": 1920, "h": 1080, "video": True, "host": "PC"}))
+        await asyncio.sleep(0.2)
+        late_phone = await ws_auth(s, "/ws/phone", token=NT); got = []
+        while True:
+            try: m = await asyncio.wait_for(late_phone.receive(), 1)
+            except asyncio.TimeoutError: break
+            if m.type == aiohttp.WSMsgType.TEXT: got.append(json.loads(m.data).get("t"))
+        report("a phone joining later gets the PC's hello", "hello" in got, str(got))
 
     await runner.cleanup()
     print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")

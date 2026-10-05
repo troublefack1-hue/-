@@ -261,6 +261,9 @@ class Hub:
         self.pc_since: float = 0
         self.phones: set[web.WebSocketResponse] = set()
         self.last_frame: bytes | None = None
+        # the agent says hello once, when it connects: a phone that comes later never heard it, never offered
+        # its video codecs and was stuck on JPEG (~4 MB/s on «максимум»), with no host name and no sound button
+        self.pc_hello: str | None = None
         self.lockout = Lockout()
         # pairing: the PC app sets a 6-digit code that is valid for 5 minutes;
         # the phone app exchanges it once for the secret
@@ -443,6 +446,8 @@ class Hub:
                         self.last_frame = msg.data
                     await self.broadcast_phones(msg.data, binary=True)
                 elif msg.type == WSMsgType.TEXT:
+                    if msg.data.startswith('{"t": "hello",') or msg.data.startswith('{"t":"hello",'):
+                        self.pc_hello = msg.data
                     await self.broadcast_agent_text(msg.data)
                 elif msg.type == WSMsgType.ERROR:
                     break
@@ -450,6 +455,7 @@ class Hub:
             if self.pc is ws:
                 self.pc = None
                 self.last_frame = None
+                self.pc_hello = None
                 await self.broadcast_phones(json.dumps(self.status()))
                 self.log_event("ПК отключился")
             log.info("pc disconnected")
@@ -473,6 +479,8 @@ class Hub:
         await ws.send_str(json.dumps(self.status()))
         if ws in self.guests:
             await ws.send_str(json.dumps({"t": "role", "guest": True}))
+        if self.pc_hello and self.pc is not None:
+            await ws.send_str(self.pc_hello)
         await self.tell_pc_viewers()
         if self.last_frame:
             await ws.send_bytes(self.last_frame)
