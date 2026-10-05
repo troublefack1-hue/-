@@ -93,6 +93,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: out
+      - name: Checksums
+        run: |
+          (cd out/exe && sha256sum PC-Remote.exe) > out/SHA256SUMS
+          (cd out/apk && sha256sum pcremote.apk) >> out/SHA256SUMS
+          cat out/SHA256SUMS
       - name: Release notes
         run: |
           echo "Сборка ${{ env.VERSION }} из ${{ github.sha }}" > notes.md
@@ -106,3 +111,4 @@ jobs:
           files: |
             out/exe/PC-Remote.exe
             out/apk/pcremote.apk
+            out/SHA256SUMS

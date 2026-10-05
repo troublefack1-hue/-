@@ -40,22 +40,44 @@ def check() -> dict | None:
         rel = json.load(r)
     tag = rel.get("tag_name", "")
     url = next((a["browser_download_url"] for a in rel.get("assets", []) if a.get("name") == ASSET), None)
+    sums = next((a["browser_download_url"] for a in rel.get("assets", []) if a.get("name") == "SHA256SUMS"), None)
     cur = current_version()
     if not url or cur == "dev" or _tuple(tag) <= _tuple(cur):
         return None
-    return {"version": tag.lstrip("v"), "url": url, "notes": rel.get("body", "")}
+    return {"version": tag.lstrip("v"), "url": url, "notes": rel.get("body", ""), "sums": sums}
 
 
-def download(url: str, dest: Path) -> Path:
+def expected_sha256(sums_url: str | None, name: str) -> str | None:
+    """The published checksum for `name`, or None when the release has no SHA256SUMS."""
+    if not sums_url:
+        return None
+    try:
+        with urllib.request.urlopen(urllib.request.Request(sums_url, headers={"User-Agent": "pc-remote"}), timeout=15) as r:
+            for line in r.read().decode("utf-8", "replace").splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1].lstrip("*") == name:
+                    return parts[0].lower()
+    except Exception as e:  # noqa: BLE001
+        log.info("SHA256SUMS unavailable: %s", e)
+    return None
+
+
+def download(url: str, dest: Path, sha256: str | None = None) -> Path:
+    import hashlib
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(".part")
     req = urllib.request.Request(url, headers={"User-Agent": "pc-remote"})
+    h = hashlib.sha256()
     with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
         while chunk := r.read(1 << 16):
             f.write(chunk)
+            h.update(chunk)
     if part.stat().st_size < 1_000_000 or part.read_bytes()[:2] != b"MZ":
         part.unlink(missing_ok=True)
         raise RuntimeError("downloaded file is not a valid exe")
+    if sha256 and h.hexdigest() != sha256:
+        part.unlink(missing_ok=True)
+        raise RuntimeError("checksum mismatch: the download does not match the published SHA256SUMS")
     part.replace(dest)
     return dest
 

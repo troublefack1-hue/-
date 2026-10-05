@@ -520,10 +520,18 @@ class Hub:
         """Long outage: while the PC is up and no phone is on the link, keep
         nudging every 60 s, forever. The phone's background service listens
         for exactly this while its own connection is down."""
+        # backoff: every 60 s for 10 min, then every 5 min for an hour, then every 15 min —
+        # keeps the free ntfy.sh daily quota safe during a long outage (~100 posts/day, not 1440)
+        waiting = 0
         while True:
             await asyncio.sleep(60)
             if self.pc is not None and not self.phones and self.had_phone:
-                await self.nudge_phones("still-waiting")
+                waiting += 1
+                step = 1 if waiting <= 10 else 5 if waiting <= 70 else 15
+                if waiting % step == 0:
+                    await self.nudge_phones("still-waiting")
+            else:
+                waiting = 0
 
     async def nudge_phones(self, reason: str):
         """PC-initiated reconnect: a push the phone's background service listens
@@ -848,8 +856,17 @@ class Hub:
         if p is None or not p.is_file():
             raise web.HTTPForbidden(headers=CORS)
         self.log_event(f"файл на телефон: {p.name}")
-        disp = "inline" if request.query.get("inline") else "attachment"
-        return web.FileResponse(p, headers={**CORS, "Content-Disposition": f'{disp}; filename="{p.name}"'})
+        # inline only for media that cannot run code; everything else downloads. An .html from
+        # the PC rendered inside the app's origin could read the secret from localStorage.
+        import mimetypes
+        mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        safe_inline = mime.startswith(("image/", "video/", "audio/")) or mime in ("application/pdf", "text/plain")
+        if mime == "image/svg+xml":
+            safe_inline = False
+        disp = "inline" if request.query.get("inline") and safe_inline else "attachment"
+        headers = {**CORS, "Content-Disposition": f'{disp}; filename="{p.name}"', "X-Content-Type-Options": "nosniff",
+                   "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self'; media-src 'self'"}
+        return web.FileResponse(p, headers=headers)
 
 
 async def index(_request):

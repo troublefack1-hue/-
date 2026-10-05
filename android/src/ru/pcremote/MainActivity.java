@@ -64,7 +64,7 @@ public class MainActivity extends Activity {
                 String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
                 Updater.Info info = Updater.check(cur);
                 if (info == null) return;
-                java.io.File apk = Updater.download(info.url, getCacheDir());
+                java.io.File apk = Updater.download(info.url, getCacheDir(), info.sha256);
                 runOnUiThread(() -> {
                     Toast.makeText(this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
                     Intent i = new Intent(Intent.ACTION_VIEW)

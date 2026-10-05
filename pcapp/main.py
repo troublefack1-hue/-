@@ -595,7 +595,8 @@ class App(tk.Tk):
 
         def worker():
             try:
-                exe = updater.download(info["url"], DATA / "update" / "PC-Remote.exe")
+                exe = updater.download(info["url"], DATA / "update" / "PC-Remote.exe",
+                                       updater.expected_sha256(info.get("sums"), updater.ASSET))
                 if updater.apply(exe):
                     self.after(0, self.destroy)   # the script restarts us with the new exe
                 else:
