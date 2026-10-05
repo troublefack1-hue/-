@@ -198,11 +198,8 @@ public class MainActivity extends Activity {
     // ----------------------------------------------------------- update ---
     private void checkUpdate() { checkUpdate(false); }
 
-    /** Automatic: once in 6 h, silently. Manual (the row): always, with a word back either way. */
+    /** At every launch, silently (one small request to GitHub); from the row, with a word back either way. */
     private void checkUpdate(boolean manual) {
-        long last = prefs.getLong("upd_check", 0);
-        if (!manual && System.currentTimeMillis() - last < 6 * 3600_000L) return;
-        prefs.edit().putLong("upd_check", System.currentTimeMillis()).apply();
         if (manual && updRow != null) ((TextView) updRow.getChildAt(1)).setText("проверяю…");
         new Thread(() -> {
             try {

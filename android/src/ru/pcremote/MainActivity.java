@@ -121,11 +121,8 @@ public class MainActivity extends Activity {
     }
 
     // ----------------------------------------------------------- update ---
-    /** Once every 6 h: newer release on GitHub -> download -> system "Install" dialog. */
+    /** At every launch: newer release on GitHub -> download -> system "Install" dialog. */
     private void checkUpdate() {
-        long last = prefs.getLong("upd_check", 0);
-        if (System.currentTimeMillis() - last < 6 * 3600_000L) return;
-        prefs.edit().putLong("upd_check", System.currentTimeMillis()).apply();
         new Thread(() -> {
             try {
                 String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
