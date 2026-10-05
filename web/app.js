@@ -195,7 +195,7 @@
         renderMonitors();
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
-        sendRules(); sendAudioSrc(); sendAdapt(); if (m.video) announceCodecs();
+        sendRules(); sendAudioSrc(); sendAdapt(); sendCapture(); if (m.video) announceCodecs();
         if (!$("termPanel").hidden && !terms.size) renderTermEmpty();   // project folders may have changed on the PC
       } else if (m.t === "cmd_result") {
         const okText = { open_url: "Ссылка открыта на ПК", print: "Отправлено на печать", kill: "Процесс завершён", monitor_off: "Экран выключен", monitor_on: "Экран включён", powerplan: "Схема питания изменена" };
@@ -375,6 +375,11 @@
     try { vdec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: pts, data: buf.slice(11) })); }
     catch (e) { waitKey = true; }
   }
+  document.querySelectorAll("#capture button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.capture === (prefs.capture || "auto"));
+    b.onclick = () => { prefs.capture = b.dataset.capture; savePrefs(); document.querySelectorAll("#capture button").forEach((x) => x.classList.toggle("on", x === b)); send({ t: "capture", mode: prefs.capture }); buzz(8); };
+  });
+  const sendCapture = () => { if (prefs.capture && prefs.capture !== "auto") send({ t: "capture", mode: prefs.capture }); };
   $("adaptOn").checked = prefs.adapt !== false;
   const sendAdapt = () => send({ t: "adapt", on: prefs.adapt !== false });
   $("adaptOn").onchange = () => { prefs.adapt = $("adaptOn").checked; savePrefs(); sendAdapt(); show(prefs.adapt ? "Качество подстраивается под канал" : "Качество фиксировано: как выбрано в профиле"); };
@@ -1332,6 +1337,8 @@
     return [["Связь", pcOnline ? "ПК в сети" : "ПК не в сети"], ["Задержка", latency ? latency + " мс" : "—"], ["Кадров/с (факт)", String(fpsShown)],
       ["Картинка", kind], ["Размер кадра", d.size ? `${d.size[0]}×${d.size[1]}` : (frameW ? `${frameW}×${frameH}` : "—")],
       ["Профиль", d.profile || profile], ["RTT по ack на ПК", d.rtt_ms != null ? d.rtt_ms + " мс" : "—"], ["Канал по оценке ПК", d.bw_kbs ? d.bw_kbs + " КБ/с" : "—"],
+      ["Захват экрана", d.capture ? `${d.capture === "dxgi" ? "DXGI" : "GDI"} · ${d.grab_ms} мс/кадр` + (d.capture_switches ? ` · переключений ${d.capture_switches}` : "") : "—"],
+      ["Путь до ПК", (window.PcRemoteApp && PcRemoteApp.path && PcRemoteApp.path()) || "браузер"],
       ["Адаптация", d.adaptive === false ? "выкл" : (d.rung ? `ступень ${d.rung} из 7` + (d.bitrate ? ` · ${d.bitrate}бит/с` : "") : "полное качество профиля")],
       ["Звук", d.audio ? `${d.audio} · ${d.audio_codec || "?"}` : "выкл"], ["HD-зона", d.zone ? "вкл" : "выкл"],
       ["Зрителей", d.viewers ?? "—"], ["Терминалов", d.terms ?? "—"], ["Переподключений ПК↔relay", d.reconnects ?? "—"], ["Переподключений телефона", String(phoneReconnects)],
@@ -1364,6 +1371,7 @@
       L.appendChild(r);
     }
   }
+  window.pcrReconnect = () => { backoff = 300; if (ws) { try { ws.close(); } catch {} } };   // the app found a shorter road to the PC
   window.pcrPorts = (items) => { try { renderPorts(typeof items === "string" ? JSON.parse(items) : items); } catch (e) { pcrError("ports: " + e.message); } };
   $("portProbe").onclick = () => {
     if (!(window.PcRemoteApp && PcRemoteApp.probePorts)) { show("Замер по портам работает только в приложении «Мой ПК»"); return; }

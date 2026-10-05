@@ -39,6 +39,13 @@ public class MainActivity extends Activity {
     private static final int REQ_CAST = 7, REQ_FILE = 9;
     private android.webkit.ValueCallback<android.net.Uri[]> fileCallback;
     public static volatile boolean visible = false;
+    private static volatile MainActivity live;
+
+    /** The service found a shorter road to the PC: make the page reconnect so it uses it too. */
+    static void reconnectWeb() {
+        MainActivity a = live;
+        if (a != null) a.runOnUiThread(() -> { if (a.web != null) a.web.evaluateJavascript("window.pcrReconnect && window.pcrReconnect()", null); });
+    }
     private SharedPreferences prefs;
     private WebView web;
     private Tunnel tunnel;
@@ -146,7 +153,8 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onResume() {
-        super.onResume(); visible = true;
+        super.onResume(); visible = true; live = this;
+        Paths.pcAddrs = prefs.getString("addrs", "");
         if (web != null) web.evaluateJavascript("window.pcrVisible && window.pcrVisible(true)", null);
     }
     @Override protected void onPause() {
@@ -360,6 +368,9 @@ public class MainActivity extends Activity {
             prefs.edit().putInt("port", port).putString("hostport", prefs.getString("host", "") + ":" + port).apply();
             runOnUiThread(() -> { stopRemote(); startRemote(); });
         }
+
+        /** Which road the tunnel took last ("direct 192.168.42.129", "lan …", "public …"), for diagnostics. */
+        @JavascriptInterface public String path() { return Paths.lastPath; }
 
         @JavascriptInterface public void repair() {
             prefs.edit().remove("secret").apply();

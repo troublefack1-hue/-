@@ -33,6 +33,7 @@ import mss
 from PIL import Image
 
 import audio_out
+import capture
 import extras
 import notify_watch
 import opus
@@ -567,17 +568,69 @@ class Screen:
         self.zone = None          # {"x","y","w","h"} fractions of the monitor: streamed in full resolution
         self._zone_hash = b""
         self.profile_name = "normal"
+        # capture backend: "auto" prefers DXGI and falls back to GDI on failure (retrying later)
+        self.capture_mode = str(cfg.get("capture", "auto"))
+        self.cap = None
+        self.cap_retry_at = 0.0
+        self.cap_switches = 0
+        self.grab_ms = 0.0
+        self._make_capture()
+
+    def _make_capture(self, prefer_gdi: bool = False):
+        if self.cap is not None:
+            self.cap.close()
+            self.cap = None
+        want_dxgi = self.capture_mode in ("auto", "dxgi") and not prefer_gdi and self.mon_index >= 1
+        if want_dxgi and capture.dxgi_available():
+            try:
+                self.cap = capture.DxgiCapture(self.mon_index - 1, self.mon)
+            except Exception as e:  # noqa: BLE001
+                log.info("dxgi capture unavailable (%s): using gdi", e)
+                self.cap_retry_at = time.monotonic() + 60
+        if self.cap is None:
+            self.cap = capture.MssCapture(self.sct, self.mon)
+        log.info("capture: %s (monitor %d)", self.cap.name, self.mon_index)
+
+    def set_capture_mode(self, mode: str):
+        mode = mode if mode in ("auto", "dxgi", "gdi") else "auto"
+        if mode != self.capture_mode:
+            self.capture_mode = mode
+            self.cap_retry_at = 0.0
+            self._make_capture()
+
+    def _grab(self, region=None, force=False):
+        """One frame from the current backend; a DXGI failure flips to GDI and schedules a retry."""
+        now = time.monotonic()
+        if self.cap.name == "gdi" and self.capture_mode in ("auto", "dxgi") and self.cap_retry_at and now > self.cap_retry_at and self.mon_index >= 1:
+            self.cap_retry_at = 0.0
+            self._make_capture()            # try DXGI again
+        try:
+            out = self.cap.grab(region, force)
+        except Exception as e:  # noqa: BLE001
+            if self.cap.name == "dxgi" and self.capture_mode != "dxgi":
+                log.warning("dxgi capture failed (%s): gdi for the next minute", e)
+                self.cap_switches += 1
+                self.cap_retry_at = now + 60
+                self._make_capture(prefer_gdi=True)
+                out = self.cap.grab(region, force)
+            else:
+                raise
+        self.grab_ms = self.cap.last_ms if not self.grab_ms else self.grab_ms * 0.8 + self.cap.last_ms * 0.2
+        return out
 
     def grab_raw(self):
         """Raw pixels for the video encoder: (bytes, pix_fmt, (w, h)); None if unchanged."""
-        shot = self.sct.grab(self.mon)
-        digest = hashlib.blake2b(shot.raw, digest_size=8).digest()
+        got = self._grab(force=not self._last_hash)
+        if got is None:
+            return None
+        raw, size = got
+        digest = hashlib.blake2b(raw, digest_size=8).digest()
         if digest == self._last_hash:
             return None
         self._last_hash = digest
-        if self.size == shot.size:
-            return bytes(shot.raw), "bgra", shot.size
-        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX").resize(self.size, Image.BILINEAR)
+        if self.size == size:
+            return raw, "bgra", size
+        img = Image.frombytes("RGB", size, raw, "raw", "BGRX").resize(self.size, Image.BILINEAR)
         return img.tobytes(), "rgb24", self.size
 
     def set_zone(self, rect):
@@ -596,14 +649,16 @@ class Screen:
         if not z:
             return None
         mw, mh = self.mon["width"], self.mon["height"]
-        box = {"left": self.mon["left"] + int(z["x"] * mw), "top": self.mon["top"] + int(z["y"] * mh),
-               "width": max(2, int(z["w"] * mw)), "height": max(2, int(z["h"] * mh))}
-        shot = self.sct.grab(box)
-        digest = hashlib.blake2b(shot.raw, digest_size=8).digest()
+        region = (int(z["x"] * mw), int(z["y"] * mh), max(2, int(z["w"] * mw)), max(2, int(z["h"] * mh)))
+        got = self._grab(region)
+        if got is None:
+            return None
+        raw, size = got
+        digest = hashlib.blake2b(raw, digest_size=8).digest()
         if digest == self._zone_hash:
             return None
         self._zone_hash = digest
-        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        img = Image.frombytes("RGB", size, raw, "raw", "BGRX")
         if img.width > 1920:
             img = img.resize((1920, int(img.height * 1920 / img.width)), Image.BILINEAR)
         buf = io.BytesIO()
@@ -645,6 +700,8 @@ class Screen:
         self.mon_index = index
         self.mon = self.sct.monitors[index]
         self.set_width(self.profile["max_width"])
+        if self.cap is not None:
+            self._make_capture()
 
     def set_profile(self, name: str):
         p = PROFILES.get(name)
@@ -699,13 +756,16 @@ class Screen:
 
     def grab(self) -> bytes | None:
         """Return a JPEG, or None if the screen hasn't changed. Raises on capture failure."""
-        shot = self.sct.grab(self.mon)
-        digest = hashlib.blake2b(shot.raw, digest_size=8).digest()
+        got = self._grab(force=not self._last_hash)
+        if got is None:
+            return None
+        raw, size = got
+        digest = hashlib.blake2b(raw, digest_size=8).digest()
         if digest == self._last_hash:
             return None
         self._last_hash = digest
-        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-        if self.size != shot.size:
+        img = Image.frombytes("RGB", size, raw, "raw", "BGRX")
+        if self.size != size:
             img = img.resize(self.size, Image.BILINEAR)
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=self.quality, optimize=False)
@@ -1281,6 +1341,8 @@ class Agent:
                     self.audio_only = only
                     if self.audio.stream and changed:
                         self.audio.stop()  # restarts with the new source/device on the next loop
+                elif t == "capture":
+                    self.screen.set_capture_mode(str(ev.get("mode", "auto")))
                 elif t == "adapt":
                     self.adaptive = bool(ev.get("on", True))
                     self.rung, self.rung_at = 0, time.monotonic()
@@ -1351,7 +1413,9 @@ class Agent:
                                                   "profile": self.screen.profile_name, "rtt_ms": int(self.rtt * 1000), "viewers": self.viewers,
                                                   "zone": bool(self.screen.zone), "terms": len(self.terms), "monitor": self.screen.mon_index,
                                                   "codecs": self.codecs, "reconnects": self.reconnects, "bw_kbs": round(self.bw / 1024, 1),
-                                                  "rung": self.rung, "adaptive": self.adaptive, "bitrate": getattr(self.enc, "bitrate", None) if self.enc else None,
+                                                  "rung": self.rung, "adaptive": self.adaptive,
+                                                  "capture": self.screen.cap.name if self.screen.cap else None, "capture_mode": self.screen.capture_mode,
+                                                  "grab_ms": round(self.screen.grab_ms, 1), "capture_switches": self.screen.cap_switches, "bitrate": getattr(self.enc, "bitrate", None) if self.enc else None,
                                                   "audio": self.audio.device_name if self.audio.stream else None,
                                                   "audio_codec": ("opus " + self.audio.enc.bitrate) if (self.audio.stream and self.audio.enc) else ("pcm" if self.audio.stream else None),
                                                   "idle_s": int(time.monotonic() - self.last_input)}))

@@ -71,6 +71,7 @@ public class RemoteService extends Service {
         nm.createNotificationChannel(new NotificationChannel(CHANNEL_PC, "Уведомления с ПК", NotificationManager.IMPORTANCE_DEFAULT));
         startForeground(NOTIF_ID, notification("Связь с ПК", "ожидание команд"));
         keeper = new Thread(this::keepConnected, "ws-keeper");
+        Thread pw = new Thread(this::watchPaths, "paths"); pw.setDaemon(true); pw.start();
         keeper.setDaemon(true); keeper.start();
     }
 
@@ -175,6 +176,39 @@ public class RemoteService extends Service {
     }
 
     /** Wi-Fi right now? Only then is the PC's LAN address worth a try. */
+    /** "key": ["a", "b"] -> "a,b" (flat JSON only). */
+    static String jsonStringArray(String json, String key) {
+        int k = json.indexOf("\"" + key + "\"");
+        if (k < 0) return null;
+        int a = json.indexOf('[', k), b = json.indexOf(']', a);
+        if (a < 0 || b < 0) return null;
+        return json.substring(a + 1, b).replace("\"", "").replace(" ", "");
+    }
+
+    /** Every 5 s: is there a better road to the PC than the one in use (cable plugged in, back on
+     *  home Wi-Fi)? If so, drop the link; the reconnect takes the better one, and the page follows. */
+    private void watchPaths() {
+        Paths.pcAddrs = prefs.getString("addrs", "");
+        while (running) {
+            sleep(5000);
+            WsClient c = ws;
+            if (c == null || !c.isOpen()) continue;
+            try {
+                java.util.List<Paths.Candidate> cands = Paths.candidates(Paths.pcAddrs, prefs.getString("lan", ""), onWifi(this), prefs.getString("host", ""));
+                if (cands.isEmpty()) continue;
+                String peer = c.peer();
+                int curRank = Paths.PUBLIC;
+                for (Paths.Candidate cd : cands) if (cd.host.equals(peer)) curRank = cd.rank;
+                Paths.Candidate best = cands.get(0);
+                if (best.rank < curRank && !best.host.equals(peer)) {
+                    update("Связь с ПК", "найден путь короче: " + best.host);
+                    c.close();                              // keepConnected() reconnects at once, best path first
+                    MainActivity.reconnectWeb();
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
     public static boolean onWifi(Context ctx) {
         try {
             android.net.ConnectivityManager cm = (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -188,6 +222,9 @@ public class RemoteService extends Service {
         if (s.startsWith("{\"t\": \"status\"") || s.startsWith("{\"t\":\"status\"")) {   // the PC's LAN address may change (Wi-Fi <-> cable)
             String lan = Pairing.jsonString(s, "lan");
             if (lan != null && !lan.isEmpty() && !lan.equals(prefs.getString("lan", ""))) prefs.edit().putString("lan", lan).apply();
+            String addrs = jsonStringArray(s, "addrs");   // every address of the PC: USB tethering / hotspot / LAN are one hop away
+            if (addrs != null && !addrs.equals(prefs.getString("addrs", ""))) prefs.edit().putString("addrs", addrs).apply();
+            Paths.pcAddrs = prefs.getString("addrs", "");
             return;
         }
         if (s.contains("\"t\":\"ring\"") || s.contains("\"t\": \"ring\"")) {

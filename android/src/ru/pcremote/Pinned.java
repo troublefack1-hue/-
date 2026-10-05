@@ -46,10 +46,22 @@ public final class Pinned {
      *  then the public one. Same certificate, same pin either way. */
     public static SSLSocket connectPreferLan(String lan, String host, int port, String pin, String[] seen, int timeoutMs, boolean tryLan)
             throws IOException {
-        if (tryLan && lan != null && !lan.isEmpty() && !lan.equals(host)) {
-            try { return connect(lan, port, pin, seen, 1500); } catch (IOException viaLan) { /* not at home, or the PC is elsewhere */ }
+        java.util.List<Paths.Candidate> cands = Paths.candidates(Paths.pcAddrs, lan, tryLan, host);
+        IOException last = null;
+        for (int i = 0; i < cands.size(); i++) {
+            Paths.Candidate c = cands.get(i);
+            boolean lastOne = i == cands.size() - 1;
+            try {
+                SSLSocket s = connect(c.host, port, pin, seen, lastOne ? timeoutMs : 1500);   // near paths get a short try
+                Paths.lastPath = c.kind() + " " + c.host;
+                return s;
+            } catch (Mismatch m) {
+                throw m;                                   // a different certificate is never "try the next address"
+            } catch (IOException e) {
+                last = e;
+            }
         }
-        return connect(host, port, pin, seen, timeoutMs);
+        throw last != null ? last : new IOException("no address for the PC");
     }
 
     public static SSLSocket connect(String host, int port, final String pin, final String[] seen, int timeoutMs)

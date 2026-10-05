@@ -45,6 +45,8 @@ public final class WsClient implements Runnable {
     }
 
     public boolean isOpen() { return open; }
+    /** The PC address this connection actually uses (the chosen path). */
+    public String peer() { try { return sock == null ? "" : sock.getInetAddress().getHostAddress(); } catch (Exception e) { return ""; } }
 
     /** Connects and performs the handshake; then call start() to read. */
     public void connect() throws IOException {

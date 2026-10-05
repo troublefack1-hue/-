@@ -46,7 +46,8 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 
 ## Что ещё НЕ проверялось на живом железе (проверить в первую очередь)
 
-- Захват экрана при масштабе Windows 125–150 % и на двух мониторах; HD-зона; смена разрешения.
+- Захват экрана при масштабе Windows 125–150 % и на двух мониторах; HD-зона; смена разрешения. DXGI через dxcam (`agent/capture.py`): реально ли быстрее GDI на этой видеокарте, откат на GDI при полноэкранной игре, `--collect-all dxcam` в PyInstaller (numpy внутри).
+- Путь до ПК (`android/src/ru/pcremote/Paths.java`): USB-модем и точка доступа телефона — что ПК попадает в `status.addrs` и телефон переключается на короткий путь сам (`RemoteService.watchPaths`).
 - Звук WASAPI loopback и микрофон ПК (`agent.Audio`, PyAudioWPatch) на реальной карте.
 - Терминалы pywinpty: Git Bash, `claude` через `claude-phone.sh`, кодировка вывода.
 - ffmpeg: докачка (`deps.py`, ~100 МБ с gyan.dev), `h264_nvenc`/`libx264`, декодирование на телефоне (WebCodecs в WebView).

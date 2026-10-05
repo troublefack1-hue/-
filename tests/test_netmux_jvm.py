@@ -56,7 +56,7 @@ async def main():
 
     # compile the phone classes (no Android in them) + the harness
     out = tmp / "classes"; out.mkdir()
-    src = [ROOT / "android" / "src" / "ru" / "pcremote" / n for n in ("Pinned.java", "Pairing.java", "WsClient.java")]
+    src = [ROOT / "android" / "src" / "ru" / "pcremote" / n for n in ("Pinned.java", "Pairing.java", "WsClient.java", "Paths.java")]
     src += [ROOT / "android-net" / "src" / "ru" / "pcremote" / "net" / n for n in ("NetMux.java", "Socks5Server.java")]
     src += [ROOT / "android-net" / "test" / "SocksTest.java"]
     r = subprocess.run(["javac", "-encoding", "UTF-8", "-nowarn", "-d", str(out), *map(str, src)], capture_output=True, text=True, env={**os.environ, "JAVA_TOOL_OPTIONS": ""})
@@ -96,6 +96,11 @@ async def main():
     report("/api/ping needs a token", r3.stdout == "403", r3.stdout)
     st = await loop.run_in_executor(None, lambda: subprocess.run(["curl", "-sS", "-m", "10", "-k", "-H", "Authorization: Bearer " + T, f"https://127.0.0.1:{TLS}/api/status"], capture_output=True, text=True, env=NOPROXY))
     report("status lists the ports", json.loads(st.stdout).get("ports") == [TLS, 8793], st.stdout[:100])
+    # path ordering (Paths.java) on the desktop JVM
+    r = subprocess.run(["javac", "-encoding", "UTF-8", "-nowarn", "-d", str(out), str(ROOT / "android" / "src" / "ru" / "pcremote" / "Paths.java"), str(ROOT / "android" / "test" / "PathsTest.java")], capture_output=True, text=True, env={**os.environ, "JAVA_TOOL_OPTIONS": ""})
+    pt = await loop.run_in_executor(None, lambda: subprocess.run(["java", "-cp", str(out), "PathsTest"], capture_output=True, text=True, env={**os.environ, "JAVA_TOOL_OPTIONS": ""}))
+    print(pt.stdout.strip())
+    report("Paths: USB/hotspot/LAN before public", r.returncode == 0 and pt.returncode == 0, (r.stderr or pt.stderr)[-300:])
     java.terminate(); await loop.run_in_executor(None, java.wait, 5)
     await asyncio.sleep(0.3)
     report("session gone after the phone disconnects", not app["hub"].netproxy.sessions)

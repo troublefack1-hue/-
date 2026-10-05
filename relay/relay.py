@@ -27,6 +27,7 @@ import ipaddress
 import json
 import logging
 import os
+import socket
 import secrets
 import ssl
 import sys
@@ -96,6 +97,23 @@ GUEST_RECV_BLOCK = {"term_out", "term_exit", "term_open", "pc_clip", "pc_notify"
 
 
 LAN_IP = {"ip": None}
+
+
+def local_ipv4s() -> list:
+    """Every IPv4 address of this machine except loopback/APIPA: USB tethering, hotspot and LAN adapters included."""
+    out = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip.startswith(("127.", "169.254.", "0.")) or ip in out:
+                continue
+            out.append(ip)
+    except OSError:
+        pass
+    lan = LAN_IP.get("ip")
+    if lan and lan not in out:
+        out.insert(0, lan)
+    return out[:16]
 
 
 def lan_interface_index() -> int | None:
@@ -347,6 +365,7 @@ class Hub:
         return {"t": "status", "pc_online": self.pc is not None,
                 "pc_since": self.pc_since, "phones": len(self.phones), "lan": LAN_IP.get("ip"),
                 "net": self.netproxy.stats() if getattr(self, "netproxy", None) else None,
+                "addrs": local_ipv4s(),
                 "ports": [self.cfg.get("tls_port")] + [int(p) for p in self.cfg.get("extra_ports") or [] if int(p) != self.cfg.get("tls_port")]}
 
     async def broadcast_phones(self, data, binary=False):
