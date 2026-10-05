@@ -101,14 +101,24 @@ def fetch_components(data_dir: Path, status, want_video: bool = True) -> int:
         status(f"докачиваю {item.get('label') or name}…")
         dest.parent.mkdir(parents=True, exist_ok=True)
         part = dest.with_suffix(dest.suffix + ".part")
-        with urllib.request.urlopen(urllib.request.Request(item["url"], headers={"User-Agent": "pc-remote"}), timeout=120) as r, open(part, "wb") as f:
-            total = int(r.headers.get("Content-Length") or 0)
-            done = 0
-            while chunk := r.read(1 << 17):
-                f.write(chunk)
-                done += len(chunk)
-                if total and done % (8 << 20) < (1 << 17):
-                    status(f"докачиваю {item.get('label') or name}: {done * 100 // total}%")
+        for attempt in range(3):   # a VPN or a flaky link cuts big downloads short: a cut zip is "not a zip file"
+            try:
+                with urllib.request.urlopen(urllib.request.Request(item["url"], headers={"User-Agent": "pc-remote"}), timeout=120) as r, open(part, "wb") as f:
+                    total = int(r.headers.get("Content-Length") or 0)
+                    done = 0
+                    while chunk := r.read(1 << 17):
+                        f.write(chunk)
+                        done += len(chunk)
+                        if total and done % (8 << 20) < (1 << 17):
+                            status(f"докачиваю {item.get('label') or name}: {done * 100 // total}%")
+                if total and done != total:
+                    raise OSError(f"got {done} of {total} bytes")
+                break
+            except Exception as e:  # noqa: BLE001
+                log.warning("component %s: download attempt %d failed: %s", name, attempt + 1, e)
+                part.unlink(missing_ok=True)
+        else:
+            continue
         if item.get("zip_member"):
             # take one file out of the archive (e.g. bin/ffmpeg.exe), whatever the top folder is called
             import zipfile

@@ -372,7 +372,7 @@ class Hub:
 
     async def broadcast_phones(self, data, binary=False):
         dead = []
-        for ws in self.phones:
+        for ws in list(self.phones):   # a phone may come or go while we await a send
             if binary and ws in self.bg:
                 continue
             try:
@@ -394,7 +394,7 @@ class Hub:
                 t = None
             if t in GUEST_RECV_BLOCK:
                 dead = []
-                for ws in self.phones:
+                for ws in list(self.phones):
                     if ws in self.guests:
                         continue
                     try:
