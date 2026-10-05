@@ -139,7 +139,7 @@
 
   // the Android activity tells us when it goes to the background (the WebView itself keeps running)
   let appHidden = false;
-  const isHidden = () => isHidden() || appHidden;
+  const isHidden = () => document.hidden || appHidden;
   window.pcrVisible = (v) => {
     appHidden = !v;
     send({ t: "profile", name: isHidden() ? "idle" : profile });
