@@ -225,6 +225,26 @@ public class MainActivity extends Activity {
             startService(new Intent(MainActivity.this, RemoteService.class).setAction(RemoteService.ACTION_CAST_STOP));
         }
         @JavascriptInterface public boolean isCasting() { return RemoteService.casting; }
+        /** Phone files for the PC (Claude): "All files access" on Android 11+, storage permission before. */
+        @JavascriptInterface public boolean filesGranted() {
+            if (Build.VERSION.SDK_INT >= 30) return android.os.Environment.isExternalStorageManager();
+            return checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE") == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+        @JavascriptInterface public boolean filesEnabled() { return prefs.getBoolean("pfs", true) && filesGranted(); }
+        @JavascriptInterface public void setFiles(boolean on) {
+            prefs.edit().putBoolean("pfs", on).apply();
+            if (on && !filesGranted()) runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= 30) {
+                    Intent i = new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                            android.net.Uri.parse("package:" + getPackageName()));
+                    try { startActivity(i); } catch (Exception e) { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)); }
+                } else {
+                    requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE"}, 2);
+                }
+            });
+            // the service re-announces the flag on its next connect; poke it now
+            startService(new Intent(MainActivity.this, RemoteService.class).setAction(RemoteService.ACTION_START));
+        }
         @JavascriptInterface public boolean isPhoneMuted() { return RemoteService.phoneMuted; }
         @JavascriptInterface public void setPhoneMute(boolean on) {
             startService(new Intent(MainActivity.this, RemoteService.class).setAction(RemoteService.ACTION_MUTE).putExtra("on", on));

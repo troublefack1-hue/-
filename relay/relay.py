@@ -39,7 +39,7 @@ HERE = Path(__file__).resolve().parent
 WEB_DIR = HERE.parent / "web"
 CONFIG_PATH = Path(os.environ.get("PC_REMOTE_CONFIG", HERE / "config.json"))
 
-FRAME_VIDEO, FRAME_AUDIO, FRAME_CAST, FRAME_CAST_AUDIO = 0x01, 0x02, 0x03, 0x04
+FRAME_VIDEO, FRAME_AUDIO, FRAME_CAST, FRAME_CAST_AUDIO, FRAME_PFS_DATA, FRAME_PFS_WRITE = 0x01, 0x02, 0x03, 0x04, 0x06, 0x07
 MAX_PHONES = 4                      # simultaneous viewers
 MAX_FRAME = 4 * 1024 * 1024         # bytes per binary frame from the agent
 MAX_EVENT = 64 * 1024               # bytes per text event from a phone
@@ -244,6 +244,11 @@ class Hub:
         self.events: list = []  # last 200 events: (time, text)
         self.net = {"vpn": False, "lan": None, "pinned": False}
         self.on_net = None      # callback(dict) for the PC app's UI
+        # phone files for the PC: the Android service announces hello_phone{"fs":true}; the local
+        # `phone` CLI asks /api/phone, we forward to that phone and wait for its answer
+        self.fs_phone = None
+        self.pfs_pending: dict = {}   # id -> {"fut": Future, "chunks": asyncio.Queue | None}
+        self.pfs_seq = 0
 
     def log_event(self, text: str):
         self.events.append((time.time(), text))
@@ -411,6 +416,8 @@ class Hub:
                     if msg.data and msg.data[0] in (FRAME_CAST, FRAME_CAST_AUDIO) and self.on_cast:
                         casting = True
                         self.on_cast(msg.data[0], msg.data[1:])
+                    elif msg.data and msg.data[0] == FRAME_PFS_DATA and ws is self.fs_phone:
+                        self.pfs_chunk(msg.data)
                     continue
                 if msg.type != WSMsgType.TEXT:
                     if msg.type == WSMsgType.ERROR:
@@ -418,12 +425,19 @@ class Hub:
                     continue
                 if len(msg.data) > MAX_EVENT:
                     break
-                if msg.data.startswith('{"t":"hello_phone"'):
+                if msg.data.startswith('{"t":"hello_phone"') or msg.data.startswith('{"t": "hello_phone"'):
                     try:
-                        self.phone_names[ws] = str(json.loads(msg.data).get("model", ""))[:40]
+                        hp = json.loads(msg.data)
+                        self.phone_names[ws] = str(hp.get("model", ""))[:40]
+                        if hp.get("fs") and ws not in self.guests:
+                            self.fs_phone = ws
                     except ValueError:
                         pass
                     self.phones_changed()
+                    continue
+                if msg.data.startswith('{"t":"pfs_r"') or msg.data.startswith('{"t": "pfs_r"'):
+                    if ws is self.fs_phone:
+                        self.pfs_reply(msg.data)
                     continue
                 if msg.data.startswith('{"t":"cmd"') or msg.data.startswith('{"t":"term_open"'):
                     try:
@@ -449,6 +463,11 @@ class Hub:
         finally:
             self.phones.discard(ws)
             self.guests.discard(ws)
+            if ws is self.fs_phone:
+                self.fs_phone = None
+                for p in list(self.pfs_pending.values()):
+                    if not p["fut"].done():
+                        p["fut"].set_exception(ConnectionError("телефон отключился"))
             self.phone_names.pop(ws, None)
             self.log_event(f"телефон отключился ({ip})")
             if self.pc is not None:
@@ -596,6 +615,116 @@ class Hub:
             raise web.HTTPForbidden(headers=CORS)
         return web.json_response({"path": str(p), "items": items}, headers=CORS)
 
+    # --- phone files (for the `phone` CLI and Claude on the PC) -----------
+    def pfs_reply(self, text: str):
+        try:
+            ev = json.loads(text)
+        except ValueError:
+            return
+        p = self.pfs_pending.get(str(ev.get("id")))
+        if not p:
+            return
+        if ev.get("begin"):
+            p["item"] = ev.get("item")
+            p["started"].set()
+            return
+        if ev.get("done") and p["chunks"] is not None:
+            p["chunks"].put_nowait(None)
+        if not p["fut"].done():
+            p["fut"].set_result(ev)
+
+    def pfs_chunk(self, data: bytes):
+        rid = data[1:9].decode("ascii", "replace").strip()
+        p = self.pfs_pending.get(rid)
+        if p and p["chunks"] is not None:
+            p["chunks"].put_nowait(data[9:])
+
+    async def pfs_call(self, req: dict, timeout: float = 30.0, stream: bool = False) -> dict:
+        if self.fs_phone is None:
+            raise ConnectionError("телефон не подключён или доступ к файлам не включён")
+        self.pfs_seq += 1
+        rid = f"{self.pfs_seq:x}"[-8:]
+        p = {"fut": asyncio.get_running_loop().create_future(), "chunks": asyncio.Queue() if stream else None,
+             "started": asyncio.Event(), "item": None}
+        self.pfs_pending[rid] = p
+        try:
+            await self.fs_phone.send_str(json.dumps({"t": "pfs", "id": rid, **req}))
+            if stream:
+                waiter = asyncio.ensure_future(p["started"].wait())
+                try:
+                    await asyncio.wait_for(asyncio.wait([waiter, p["fut"]], return_when=asyncio.FIRST_COMPLETED), timeout)
+                finally:
+                    waiter.cancel()
+                if p["fut"].done() and not p["started"].is_set():   # an error came instead of "begin"
+                    res = p["fut"].result()
+                    raise ConnectionError(res.get("error", "ошибка"))
+                if not p["started"].is_set():
+                    raise asyncio.TimeoutError()
+                return p
+            res = await asyncio.wait_for(p["fut"], timeout)
+            if not res.get("ok"):
+                raise ConnectionError(res.get("error", "ошибка"))
+            return res
+        finally:
+            if not stream:
+                self.pfs_pending.pop(rid, None)
+
+    async def phone_files_handler(self, request: web.Request):
+        """Local API for the `phone` CLI: JSON ops, file bytes for read, raw body for write."""
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        op = request.query.get("op") or ""
+        try:
+            if request.method == "GET" and op == "read":
+                p = await self.pfs_call({"op": "read", "path": request.query.get("path", "")}, stream=True)
+                rid = next(k for k, v in self.pfs_pending.items() if v is p)
+                try:
+                    resp = web.StreamResponse(headers={**CORS, "Content-Type": "application/octet-stream",
+                                                       "X-Item": json.dumps(p["item"] or {}, ensure_ascii=True)})
+                    if p["item"] and p["item"].get("size") is not None:
+                        resp.content_length = int(p["item"]["size"])
+                    await resp.prepare(request)
+                    while True:
+                        chunk = await asyncio.wait_for(p["chunks"].get(), 60)
+                        if chunk is None:
+                            break
+                        await resp.write(chunk)
+                    await resp.write_eof()
+                    return resp
+                finally:
+                    self.pfs_pending.pop(rid, None)
+            if request.method == "POST" and op == "write":
+                path = request.query.get("path", "")
+                await self.pfs_call({"op": "write_begin", "path": path})
+                rid = f"{self.pfs_seq:x}"[-8:]
+                hdr = bytes([FRAME_PFS_WRITE]) + rid.encode().ljust(8)
+                total = 0
+                async for chunk in request.content.iter_chunked(256 * 1024):
+                    await self.fs_phone.send_bytes(hdr + chunk)
+                    total += len(chunk)
+                # write_begin/write_end must share the id: the phone keeps the open file under it
+                p = {"fut": asyncio.get_running_loop().create_future(), "chunks": None, "started": asyncio.Event(), "item": None}
+                self.pfs_pending[rid] = p
+                try:
+                    await self.fs_phone.send_str(json.dumps({"t": "pfs", "id": rid, "op": "write_end"}))
+                    res = await asyncio.wait_for(p["fut"], 60)
+                finally:
+                    self.pfs_pending.pop(rid, None)
+                if not res.get("ok"):
+                    raise ConnectionError(res.get("error", "ошибка записи"))
+                self.log_event(f"файл на телефон: {path} ({total} байт)")
+                return web.json_response(res, headers=CORS)
+            body = await request.json() if request.method == "POST" else dict(request.query)
+            op = body.get("op", op)
+            if op not in ("roots", "list", "stat", "find", "delete", "mkdir", "move"):
+                raise web.HTTPBadRequest(text="bad op", headers=CORS)
+            res = await self.pfs_call({k: v for k, v in body.items() if k in ("op", "path", "to", "q", "limit")})
+            if op in ("delete", "move", "mkdir"):
+                self.log_event(f"телефон: {op} {body.get('path', '')}")
+            return web.json_response(res, headers=CORS)
+        except (ConnectionError, asyncio.TimeoutError) as e:
+            return web.json_response({"ok": False, "error": str(e) or "нет ответа от телефона"}, status=502, headers=CORS)
+
     async def fs_handler(self, request: web.Request):
         """Explorer-like operations: mkdir, rename, delete, copy, move. All paths inside share_dirs."""
         if not self.check_header(request):
@@ -707,6 +836,8 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_get("/api/file", hub.file_handler)
     app.router.add_get("/api/thumb", hub.thumb_handler)
     app.router.add_post("/api/fs", hub.fs_handler)
+    app.router.add_get("/api/phone", hub.phone_files_handler)
+    app.router.add_post("/api/phone", hub.phone_files_handler)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", hub.options_handler)
     app.router.add_static("/static", WEB_DIR)
     if cfg["ca_cert"]:

@@ -28,6 +28,7 @@ import android.util.DisplayMetrics;
 import android.view.WindowManager;
 
 import java.io.ByteArrayOutputStream;
+import org.json.JSONObject;
 import java.nio.ByteBuffer;
 
 /**
@@ -54,6 +55,9 @@ public class RemoteService extends Service {
     private Thread audioThread;
     private int savedVolume = -1;
     private long lastFrameAt = 0;
+    private PhoneFs fs;
+    private final java.util.concurrent.ExecutorService fsPool = java.util.concurrent.Executors.newSingleThreadExecutor();
+    public static final String ACTION_TERM = "term";
 
     @Override public void onCreate() {
         super.onCreate();
@@ -74,6 +78,7 @@ public class RemoteService extends Service {
         else if (ACTION_CAST_STOP.equals(a)) stopCast();
         else if (ACTION_MUTE.equals(a)) setPhoneMuted(intent.getBooleanExtra("on", false));
         else if (ACTION_STOP_RING.equals(a)) RingActivity.stop();
+        else if (ACTION_TERM.equals(a)) termSend(intent.getStringExtra("id"), intent.getStringExtra("data"));
         return START_STICKY;
     }
 
@@ -125,14 +130,19 @@ public class RemoteService extends Service {
                 WsClient c = new WsClient(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""),
                         "/ws/phone", new WsClient.Listener() {
                     public void onText(String s) { onMessage(s); }
-                    public void onBinary(byte[] b) {}
+                    public void onBinary(byte[] b) { if (b.length > 0 && b[0] == 0x07 && fs != null) fs.writeChunk(b); }
                     public void onClose(String reason) {}
                 });
                 c.connect();
                 c.sendText("{\"t\":\"auth\",\"token\":\"" + prefs.getString("secret", "") + "\"}");
                 c.sendText("{\"t\":\"profile\",\"name\":\"idle\"}");   // no video for the background link
-                c.sendText("{\"t\":\"hello_phone\",\"model\":\"" + Build.MODEL.replace('"', ' ') + "\"}");
+                c.sendText("{\"t\":\"hello_phone\",\"model\":\"" + Build.MODEL.replace('"', ' ') + "\",\"fs\":" + filesAllowed() + "}");
                 ws = c; delay = 1000;
+                final WsClient cc = c;
+                fs = new PhoneFs(new PhoneFs.Sender() {
+                    public void text(String j) throws java.io.IOException { cc.sendText(j); }
+                    public void binary(byte[] f) throws java.io.IOException { cc.sendBinary(f); }
+                });
                 update("Связь с ПК", casting ? "трансляция экрана" : "подключено");
                 c.run();  // blocks until closed
             } catch (Exception e) {
@@ -149,7 +159,51 @@ public class RemoteService extends Service {
             Intent i = new Intent(this, RingActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             startActivity(i);
+        } else if (s.startsWith("{\"t\":\"pfs\"") || s.startsWith("{\"t\": \"pfs\"")) {
+            final PhoneFs f = fs;
+            if (f == null) return;
+            try {
+                final JSONObject ev = new JSONObject(s);
+                if (!filesAllowed()) {
+                    WsClient c = ws;
+                    if (c != null) c.sendText("{\"t\":\"pfs_r\",\"id\":\"" + ev.optString("id") + "\",\"ok\":false,\"error\":\"доступ к файлам выключен на телефоне\"}");
+                    return;
+                }
+                fsPool.execute(() -> f.handle(ev));
+            } catch (Exception ignored) {}
+        } else if (s.startsWith("{\"t\":\"attention\"")) {
+            try { attention(new JSONObject(s)); } catch (Exception ignored) {}
         }
+    }
+
+    /** "All files access" granted (Android 11+) or legacy storage permission, and the switch is on. */
+    public boolean filesAllowed() {
+        if (!prefs.getBoolean("pfs", true)) return false;
+        if (Build.VERSION.SDK_INT >= 30) return android.os.Environment.isExternalStorageManager();
+        return checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE") == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** Claude on the PC is waiting for an answer: show it as a notification with Yes / No buttons. */
+    private void attention(JSONObject ev) {
+        String term = ev.optString("term", ""), text = ev.optString("text", "Claude ждёт ответа");
+        Intent open = new Intent(this, MainActivity.class);
+        Notification.Builder b = new Notification.Builder(this, CHANNEL_RING)
+                .setSmallIcon(R.drawable.ic_launcher).setContentTitle("Claude ждёт ответа")
+                .setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text))
+                .setContentIntent(PendingIntent.getActivity(this, 3, open, PendingIntent.FLAG_IMMUTABLE)).setAutoCancel(true);
+        Intent yes = new Intent(this, RemoteService.class).setAction(ACTION_TERM).putExtra("id", term).putExtra("data", "\r");
+        Intent no = new Intent(this, RemoteService.class).setAction(ACTION_TERM).putExtra("id", term).putExtra("data", "\u001b");
+        b.addAction(new Notification.Action.Builder(null, "Да", PendingIntent.getService(this, 4, yes, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT)).build());
+        b.addAction(new Notification.Action.Builder(null, "Нет", PendingIntent.getService(this, 5, no, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT)).build());
+        getSystemService(NotificationManager.class).notify(7, b.build());
+    }
+
+    private void termSend(String id, String data) {
+        WsClient c = ws;
+        try {
+            if (c != null && c.isOpen()) c.sendText(new JSONObject().put("t", "term_in").put("id", id).put("data", data).toString());
+        } catch (Exception ignored) {}
+        getSystemService(NotificationManager.class).cancel(7);
     }
 
     // ------------------------------------------------------------ cast ---

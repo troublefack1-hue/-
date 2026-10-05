@@ -62,6 +62,19 @@ def public_ip() -> str:
     return ""
 
 
+def install_phone_cli() -> Path:
+    """Copy the `phone` command (PowerShell + wrappers + PHONE.md for Claude) into the data folder."""
+    src = BASE / "pcapp" / "phone_cli"
+    dst = DATA / "bin"
+    dst.mkdir(parents=True, exist_ok=True)
+    import shutil
+    for f in ("phone.ps1", "phone.cmd", "phone", "claude-phone.sh", "PHONE.md"):
+        if (src / f).exists():
+            shutil.copyfile(src / f, dst / f)
+    agent_mod.Term.BIN = str(dst)
+    return dst
+
+
 def load_config() -> dict:
     DATA.mkdir(parents=True, exist_ok=True)
     first_run = not CONFIG.exists()
@@ -729,6 +742,10 @@ def main():
     except Exception:  # noqa: BLE001
         pass
     cfg = load_config()
+    try:
+        install_phone_cli()
+    except Exception:  # noqa: BLE001
+        log.exception("phone cli")
     try:
         firewall_open(cfg["port"])
     except Exception:  # noqa: BLE001

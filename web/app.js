@@ -211,6 +211,8 @@
         pingSentAt = Date.now(); send({ t: "ping" });
         setTimeout(() => { if (Date.now() - lastMsgAt > 1400 && ws && ws.readyState === 1) { backoff = 300; ws.close(); } }, 1500);
       } else if (m.t === "term_out") { termOut(m.id, m.data);
+      } else if (m.t === "attention") {
+        if ($("termPanel").hidden || document.hidden) { pill("Claude ждёт ответа — откройте терминал", true, 5000); buzz([30, 60, 30]); sfx("ok"); }
       } else if (m.t === "term_exit") { termExit(m.id);
       } else if (m.t === "pc_clip") {
         pcClip = m.s; $("pcClipBtn").hidden = false; $("pcClipText").textContent = m.s.slice(0, 40).replace(/\s+/g, " ");
@@ -677,6 +679,13 @@
     $("phoneMute").onchange = () => bridge.setPhoneMute($("phoneMute").checked);
     $("menuBtn").addEventListener("click", refreshCast);
     refreshCast();
+  }
+  // ---- phone files for the PC (Claude's `phone` command), Android only
+  if (bridge && bridge.setFiles) {
+    $("pfsBox").hidden = false;
+    $("pfsOn").checked = bridge.filesEnabled();
+    $("pfsOn").onchange = () => { bridge.setFiles($("pfsOn").checked); setTimeout(() => { $("pfsOn").checked = bridge.filesEnabled(); }, 1500); };
+    $("settingsBtn").addEventListener("click", () => { $("pfsOn").checked = bridge.filesEnabled(); });
   }
 
   let wakeT0 = 0, wakeTimer = null;

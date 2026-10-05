@@ -352,16 +352,26 @@ def find_git_bash() -> str | None:
     return None
 
 
+import re
+ATTENTION_RE = re.compile(r"Do you want to (proceed|make this edit|run this command|create)|Would you like to|\(esc\)|Yes, and don't ask again|Esc to cancel")
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|[\r\x07]")
+
+
 class Term:
     """One console on the PC (Git Bash, PowerShell, cmd or the Claude Code CLI), streamed to the phone."""
+
+    BIN = ""   # folder with the `phone` CLI (set by the PC app); goes on PATH of every terminal
 
     @staticmethod
     def shells() -> dict:
         bash = find_git_bash()
         d = {}
+        # Claude Code learns about the phone from PHONE.md (claude-phone.sh appends it to the system prompt)
+        launcher = os.path.join(Term.BIN, "claude-phone.sh").replace("\\", "/") if Term.BIN else ""
+        claude = f"'{launcher}'" if launcher and os.path.isfile(launcher) else "claude"
         if bash:
             d["bash"] = f'"{bash}" --login -i'
-            d["claude"] = f'"{bash}" --login -i -c claude'   # Claude Code inside Git Bash
+            d["claude"] = f'"{bash}" --login -i -c "{claude}"'   # Claude Code inside Git Bash
         d["shell"] = "powershell.exe -NoLogo"
         d["cmd"] = "cmd.exe"
         d.setdefault("claude", "cmd.exe /c claude")        # Claude Code CLI must be on PATH
@@ -381,7 +391,10 @@ class Term:
         cmd = shells.get(kind) or shells.get("bash") or shells["shell"]
         if cwd and not os.path.isdir(cwd):
             cwd = None
-        self.proc = winpty.PtyProcess.spawn(cmd, cwd=cwd or os.path.expanduser("~"),
+        env = dict(os.environ)
+        if Term.BIN:
+            env["PATH"] = Term.BIN + os.pathsep + env.get("PATH", "")
+        self.proc = winpty.PtyProcess.spawn(cmd, cwd=cwd or os.path.expanduser("~"), env=env,
                                             dimensions=(max(5, min(rows, 200)), max(20, min(cols, 400))))
 
     def write(self, data: str):
@@ -817,12 +830,22 @@ class Agent:
     async def term_pump(self, ws, tid: str, term: Term):
         """Reads console output in a thread and ships it to the phone."""
         loop = asyncio.get_running_loop()
+        tail, last_attn = "", 0.0
         try:
             while True:
                 chunk = await loop.run_in_executor(None, term.read)
                 if chunk is None:
                     break
                 await ws.send_str(json.dumps({"t": "term_out", "id": tid, "data": chunk}))
+                # Claude Code is asking something: tell the phone (notification with Yes / No)
+                tail = (tail + chunk)[-600:]
+                m = ATTENTION_RE.search(tail)
+                if m and time.monotonic() - last_attn > 20:
+                    last_attn = time.monotonic()
+                    q = ANSI_RE.sub("", tail)
+                    q = q[max(0, q.rfind("\n", 0, q.find(m.group(0)) if m.group(0) in q else len(q)) - 120):].strip()[-160:]
+                    await ws.send_str(json.dumps({"t": "attention", "term": tid, "text": q or "Claude ждёт ответа"}))
+                    tail = ""
         except Exception as e:  # noqa: BLE001
             log.info("term %s ended: %s", tid, e)
         finally:

@@ -9,7 +9,7 @@ if (-not (Test-Path "$here\venv")) { python -m venv "$here\venv" }
 & "$here\venv\Scripts\pip.exe" install -q -r "$root\agent\requirements.txt" -r "$root\relay\requirements.txt" cryptography pystray pyinstaller
 
 & "$here\venv\Scripts\pyinstaller.exe" --noconfirm --clean --onefile --windowed --name "PC Remote" `
-    --add-data "$root\relay;relay" --add-data "$root\agent;agent" --add-data "$root\web;web" `
+    --add-data "$root\relay;relay" --add-data "$root\agent;agent" --add-data "$root\web;web" --add-data "$root\pcapp\phone_cli;pcapp\phone_cli" `
     --hidden-import mss.windows --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 --collect-all winpty --collect-all comtypes --collect-all pycaw `
     "$here\main.py"
 

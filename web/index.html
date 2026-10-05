@@ -209,6 +209,11 @@
       <label class="row switch"><span>Переводить подсказки Claude Code в терминале</span><input type="checkbox" id="termRu"><i></i></label>
       <label class="row switch"><span>Вибрация</span><input type="checkbox" id="haptic"><i></i></label>
       <label class="row switch"><span>Звуки</span><input type="checkbox" id="sfx"><i></i></label>
+      <div id="pfsBox" hidden>
+        <h3>Телефон для ПК</h3>
+        <label class="row switch"><span>Файлы телефона доступны для ПК (команда <b>phone</b> для Claude)</span><input type="checkbox" id="pfsOn"><i></i></label>
+        <p class="muted small">На ПК в терминале: <code>phone ls /sdcard/DCIM</code>, <code>phone pull /sdcard/DCIM/Camera</code>. Claude Code узнаёт о команде сам.</p>
+      </div>
       <h3>Звук с ПК</h3>
       <div class="seg" id="audioSrc"><span class="lbl">Источник</span><button data-src="speakers" class="on">Динамики</button><button data-src="mic">Микрофон ПК</button></div>
       <h3>Автоматика</h3>
