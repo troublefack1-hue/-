@@ -1,0 +1,5 @@
+# Replace pc.example.duckdns.org with your domain.
+# Caddy obtains and renews the HTTPS certificate on its own.
+pc.example.duckdns.org {
+    reverse_proxy 127.0.0.1:8787
+}

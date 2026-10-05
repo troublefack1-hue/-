@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#111318">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Мой ПК</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="login" class="panel">
+  <h1>Мой ПК</h1>
+  <p>Введите секрет из настроек ретранслятора.</p>
+  <input id="secret" type="password" autocomplete="current-password" placeholder="секрет">
+  <button id="loginBtn" class="primary">Подключиться</button>
+  <p id="loginErr" class="err"></p>
+</div>
+
+<div id="app" hidden>
+  <header id="bar">
+    <span id="dot" class="dot off"></span>
+    <span id="state">подключение…</span>
+    <span class="spacer"></span>
+    <button id="kbBtn" title="Клавиатура">⌨</button>
+    <button id="menuBtn" title="Меню">☰</button>
+  </header>
+
+  <main id="view">
+    <canvas id="screen"></canvas>
+    <div id="offline" class="center" hidden>
+      <p>ПК не в сети</p>
+      <button id="wakeBtn" class="primary">Включить ПК</button>
+      <p id="wakeMsg" class="muted"></p>
+    </div>
+  </main>
+
+  <div id="keys" hidden>
+    <button data-key="Escape">Esc</button>
+    <button data-key="Tab">Tab</button>
+    <button data-combo="Alt,Tab">Alt+Tab</button>
+    <button data-key="Meta">Win</button>
+    <button data-combo="Control,c">Ctrl+C</button>
+    <button data-combo="Control,v">Ctrl+V</button>
+    <button data-combo="Alt,F4">Alt+F4</button>
+    <button data-key="ArrowUp">↑</button>
+    <button data-key="ArrowDown">↓</button>
+    <button data-key="ArrowLeft">←</button>
+    <button data-key="ArrowRight">→</button>
+    <button data-key="Enter">Enter</button>
+    <button data-key="Backspace">⌫</button>
+    <button data-key="Delete">Del</button>
+  </div>
+  <!-- invisible input that opens the phone keyboard -->
+  <input id="kbInput" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+
+  <div id="menu" class="sheet" hidden>
+    <button data-cmd="reboot">Перезагрузить ПК</button>
+    <button data-cmd="shutdown">Выключить ПК</button>
+    <button data-cmd="sleep">Спящий режим</button>
+    <button data-cmd="lock">Заблокировать</button>
+    <button data-cmd="cancel" class="muted">Отменить выключение</button>
+    <hr>
+    <label><input type="checkbox" id="trackpad"> Режим тачпада</label>
+    <button id="fsBtn">На весь экран</button>
+    <button id="logoutBtn" class="muted">Сменить секрет</button>
+  </div>
+  <div id="toast" hidden></div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

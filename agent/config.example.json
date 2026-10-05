@@ -1,0 +1,8 @@
+{
+  "relay_url": "https://pc.example.duckdns.org",
+  "secret": "the same secret as in the relay config",
+  "max_width": 1280,
+  "quality": 55,
+  "fps": 12,
+  "monitor": 1
+}

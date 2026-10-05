@@ -1,0 +1,15 @@
+[Unit]
+Description=pc-remote relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pcremote
+WorkingDirectory=/opt/pc-remote/relay
+ExecStart=/opt/pc-remote/relay/venv/bin/python /opt/pc-remote/relay/relay.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

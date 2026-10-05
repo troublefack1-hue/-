@@ -1,0 +1,46 @@
+:root {
+  --bg: #111318; --panel: #1c1f27; --text: #e8eaf0; --muted: #8b90a0;
+  --accent: #4f8cff; --ok: #3ccf6a; --bad: #e5484d; --border: #2a2e3a;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overscroll-behavior: none; }
+button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.muted, p.muted { color: var(--muted); }
+input[type=password], input[type=text] { font: inherit; width: 100%; padding: 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+.err { color: var(--bad); min-height: 1.4em; }
+
+.panel { max-width: 360px; margin: 18vh auto 0; padding: 0 16px; display: flex; flex-direction: column; gap: 12px; }
+.panel h1 { margin: 0; font-size: 24px; }
+
+#app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+#bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+  padding-top: calc(6px + env(safe-area-inset-top)); background: var(--panel); border-bottom: 1px solid var(--border); }
+#bar .spacer { flex: 1; }
+#bar button { padding: 4px 10px; font-size: 18px; line-height: 1; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+.dot.on { background: var(--ok); }
+
+#view { flex: 1; position: relative; overflow: hidden; background: #000; touch-action: none; }
+#screen { position: absolute; left: 0; top: 0; image-rendering: auto; }
+.center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px; background: var(--bg); }
+
+#keys { display: flex; gap: 6px; padding: 6px; overflow-x: auto; background: var(--panel);
+  border-top: 1px solid var(--border); white-space: nowrap; }
+#keys button { padding: 8px 10px; flex: 0 0 auto; }
+#kbInput { position: fixed; left: -1000px; top: 0; width: 10px; height: 10px; opacity: 0.01; }
+
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  background: var(--panel); border-top: 1px solid var(--border); border-radius: 16px 16px 0 0;
+  display: flex; flex-direction: column; gap: 8px; box-shadow: 0 -8px 30px rgba(0,0,0,.5); }
+.sheet button { text-align: left; padding: 12px; }
+.sheet hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+.sheet label { padding: 6px 12px; display: flex; gap: 10px; align-items: center; }
+
+#toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); padding: 8px 14px;
+  background: #000c; border-radius: 10px; font-size: 14px; }

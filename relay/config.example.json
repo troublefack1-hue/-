@@ -1,0 +1,6 @@
+{
+  "secret": "CHANGE-ME-to-a-long-random-string-32-chars",
+  "host": "127.0.0.1",
+  "port": 8787,
+  "ntfy_wake_url": "https://ntfy.sh/YOUR-WAKE-CHANNEL"
+}
