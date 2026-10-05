@@ -57,16 +57,13 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import ru.pcremote.Pairing;
-import ru.pcremote.Paths;
 import ru.pcremote.Updater;
 
 /**
  * «Проводник»: a file manager that does one thing well and asks nothing in return. No ads, no
- * purchases, no analytics, no network except our own update check and (if you pair it) your own PC.
+ * purchases, no analytics, no network except our own update check.
  *
- * One or two panes. A pane shows a place (Loc): a local folder, the inside of a zip, a folder on
- * the PC. Drag selected items onto the other pane (or onto a folder in it) to copy or move.
+ * One or two panes. A pane shows a place (Loc): a local folder or the inside of a zip. Drag selected items onto the other pane (or onto a folder in it) to copy or move.
  */
 public class MainActivity extends Activity {
     static final int BG = 0xFF0F1117, PANEL = 0xFF181B24, PANEL2 = 0xFF222633, TEXT = 0xFFEEF0F5, MUTED = 0xFF8E94A6, ACCENT = 0xFFE0A030, BAD = 0xFFEF5350, OK = 0xFF38D070, BORDER = 0xFF2A2F3D;
@@ -80,7 +77,6 @@ public class MainActivity extends Activity {
 
     private boolean grid, hidden, desc, twoPanes, showSizes;
     private Fs.Sort sort = Fs.Sort.NAME;
-    private PcClient pc;
 
     // clipboard
     private final ArrayList<Fs.Entry> clip = new ArrayList<>();
@@ -103,8 +99,7 @@ public class MainActivity extends Activity {
         try { sort = Fs.Sort.valueOf(prefs.getString("sort", "NAME")); } catch (Exception ignored) {}
         thumbs = new Thumbs(this, dp(96));
         Ops.trashRoot = Environment.getExternalStorageDirectory();
-        ZipLoc.cacheDir = new File(getCacheDir(), "zip"); PcLoc.cacheDir = new File(getCacheDir(), "pc");
-        Paths.pcAddrs = prefs.getString("addrs", "");
+        ZipLoc.cacheDir = new File(getCacheDir(), "zip");
         getWindow().setStatusBarColor(BG); getWindow().setNavigationBarColor(BG);
         buildUi();
         if (!hasStorage()) { showPermission(); return; }
@@ -464,8 +459,6 @@ public class MainActivity extends Activity {
         r.add(new Root("Загрузки", "", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), R.drawable.ic_folder));
         r.add(new Root("Камера", "", new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera"), R.drawable.ic_image));
         r.add(new Root("Документы", "", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), R.drawable.ic_doc));
-        Root pcRoot = new Root("ПК", prefs.contains("secret") ? "папки компьютера через PC Remote · " + prefs.getString("hostport", "") : "подключить компьютер с PC Remote", null, R.drawable.ic_sd);
-        pcRoot.open = this::openPc; r.add(pcRoot);
         r.add(new Root("Корзина", "удалённое можно вернуть", Fs.trashDir(ext), R.drawable.ic_trash));
         String ver = "?"; try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) {}
         Root upd = new Root("Обновить приложение", "версия " + ver + " · нажмите: проверит и установит новую", null, R.drawable.ic_rotate); upd.open = () -> checkUpdate(true); r.add(upd);
@@ -490,34 +483,6 @@ public class MainActivity extends Activity {
 
     private float usedFraction(File f) { try { StatFs s = new StatFs(f.getAbsolutePath()); return 1f - (float) s.getAvailableBytes() / Math.max(1, s.getTotalBytes()); } catch (Exception e) { return -1; } }
     private String usage(File f) { try { StatFs s = new StatFs(f.getAbsolutePath()); return "свободно " + Fs.size(s.getAvailableBytes()) + " из " + Fs.size(s.getTotalBytes()); } catch (Exception e) { return ""; } }
-
-    // ---- the PC root: pair once with the code from the PC Remote window ----
-    private void openPc() {
-        if (!prefs.contains("secret")) { pairPc(); return; }
-        if (pc == null) pc = new PcClient(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""), prefs.getString("secret", ""), prefs.getString("lan", ""), onWifi());
-        active.open(new PcLoc(pc, ""));
-    }
-
-    private void pairPc() {
-        LinearLayout box = column(); int p = dp(20); box.setPadding(p, p, p, 0);
-        box.addView(text("Адрес и код из окна PC Remote на компьютере (те же, что для «Мой ПК»). Все диски ПК станут папками здесь.", 13, MUTED));
-        EditText host = new EditText(this); host.setHint("IP:порт, например 93.100.1.2:8443"); host.setText(prefs.getString("hostport", "")); host.setSingleLine(true); box.addView(host);
-        EditText code = new EditText(this); code.setHint("код подключения"); code.setSingleLine(true); code.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS); box.addView(code);
-        new AlertDialog.Builder(this).setTitle("Подключить ПК").setView(box).setPositiveButton("Привязать", (d, w) -> {
-            String hp = host.getText().toString().trim().replaceAll("^[a-zA-Z]+://", "").replaceAll("/.*$", ""), c = code.getText().toString().toUpperCase().replaceAll("[^0-9A-Z]", "");
-            String[] parts = hp.split(":"); if (hp.isEmpty() || !(c.length() == 6 || c.length() == 8)) { toast("Нужен адрес и код"); return; }
-            final String h = parts[0]; final int port; try { port = parts.length == 2 ? Integer.parseInt(parts[1]) : 8443; } catch (NumberFormatException e) { toast("Порт должен быть числом"); return; }
-            active.run("Привязываю", pr -> {
-                Pairing.Result r = Pairing.pair(h, port, c, "", "", onWifi());
-                prefs.edit().putString("hostport", h + ":" + port).putString("host", h).putInt("port", port).putString("secret", r.secret).putString("pin", r.fingerprint).putString("lan", r.lan).apply();
-                pc = null; ui.post(() -> { for (Pane x : panes) if (x.rootsMode) x.showRoots(); openPc(); });
-            });
-        }).setNegativeButton("Отмена", null).show();
-    }
-
-    private boolean onWifi() {
-        try { android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE); android.net.NetworkCapabilities c = cm.getNetworkCapabilities(cm.getActiveNetwork()); return c != null && (c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) || c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)); } catch (Exception e) { return false; }
-    }
 
     // ================================================================== open files ===
     private void openLocal(File f) {
@@ -564,7 +529,6 @@ public class MainActivity extends Activity {
             case "Вырезать": if (!loc.writable()) { toast("Отсюда нельзя вырезать, только копировать"); return; } clip.clear(); clip.addAll(sel); clipFrom = loc; clipCut = true; pane.selected.clear(); pane.adapter.notifyDataSetChanged(); updateBars(); toast("Вырезано: откройте папку и нажмите «Вставить сюда»"); break;
             case "Удалить":
                 if (pane.trashMode()) confirm("Удалить навсегда " + sel.size() + " " + plural(sel.size(), "объект", "объекта", "объектов") + "?", () -> pane.run("Удаляю", p -> { for (Fs.Entry e : sel) Fs.purge(e.file); }));
-                else if (loc instanceof PcLoc) confirm("Удалить на ПК " + sel.size() + " " + plural(sel.size(), "объект", "объекта", "объектов") + "? (попадёт в корзину Windows)", () -> pane.run("Удаляю на ПК", p -> Ops.delete(loc, sel, p)));
                 else pane.run("Удаляю в корзину", p -> Ops.delete(loc, sel, p));
                 break;
             case "Поделиться": share(pane, sel); break;
@@ -671,7 +635,6 @@ public class MainActivity extends Activity {
         m.getMenu().add((showSizes ? "Не считать" : "Считать") + " размеры папок");
         m.getMenu().add((twoPanes ? "Одна панель" : "Две панели"));
         if (loc != null) m.getMenu().add("Свойства папки");
-        if (prefs.contains("secret")) m.getMenu().add("Отвязать ПК");
         m.getMenu().add("Проверить обновления"); m.getMenu().add("О программе");
         m.setOnMenuItemClickListener(mi -> {
             String t = String.valueOf(mi.getTitle());
@@ -684,9 +647,8 @@ public class MainActivity extends Activity {
             else if (t.endsWith("размеры папок")) { showSizes = !showSizes; prefs.edit().putBoolean("sizes", showSizes).apply(); for (Pane p : panes) p.adapter.notifyDataSetChanged(); }
             else if (t.equals("Две панели") || t.equals("Одна панель")) panesBtn.performClick();
             else if (t.equals("Свойства папки")) { List<Fs.Entry> l = new ArrayList<>(); l.add(active.loc instanceof LocalLoc ? new Fs.Entry(((LocalLoc) active.loc).dir) : new Fs.Entry(active.loc.title(), true, 0, 0, active.loc.path())); properties(l); }
-            else if (t.equals("Отвязать ПК")) { prefs.edit().remove("secret").remove("pin").remove("host").remove("port").remove("hostport").remove("lan").apply(); pc = null; for (Pane p : panes) if (p.loc instanceof PcLoc || p.rootsMode) p.showRoots(); toast("ПК отвязан"); }
             else if (t.equals("Проверить обновления")) checkUpdate(true);
-            else if (t.equals("О программе")) new AlertDialog.Builder(this).setTitle("Проводник").setMessage("Файловый менеджер без рекламы, покупок и слежки. В сеть ходит только за обновлениями на GitHub и, если вы его подключили, к вашему же ПК.\n\nИсходники: github.com/troublefack1-hue/-\n\nСоздано Николаем Коноваловым для вас, с любовью.").setPositiveButton("Ок", null).show();
+            else if (t.equals("О программе")) new AlertDialog.Builder(this).setTitle("Проводник").setMessage("Файловый менеджер без рекламы, покупок и слежки. В сеть ходит только за обновлениями на GitHub.\n\nИсходники: github.com/troublefack1-hue/-\n\nСоздано Николаем Коноваловым для вас, с любовью.").setPositiveButton("Ок", null).show();
             return true;
         });
         m.show();
@@ -747,18 +709,13 @@ public class MainActivity extends Activity {
     // ==================================================================== update ===
     private void checkUpdate(boolean manual) {
         if (manual) toast("Проверяю обновления…");
-        Updater.pc = prefs.contains("secret") ? new Updater.Pc(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""), prefs.getString("secret", ""), prefs.getString("lan", "")) : null;
         new Thread(() -> {
             try {
                 String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-                Updater.Info found = null; boolean fromPc = false;
-                if (Updater.pc != null) { try { found = Updater.checkPc(cur, "pcremote-files.apk"); fromPc = found != null; } catch (Exception ignored) {} }
-                if (found == null) found = Updater.check(cur, "pcremote-files.apk");
-                final Updater.Info info = found;
+                Updater.Info info = Updater.check(cur, "pcremote-files.apk");
                 if (info == null) { if (manual) ui.post(() -> toast("Это последняя версия (" + cur + ")")); return; }
-                final String src = fromPc ? " с ПК" : " с GitHub";
-                if (manual) ui.post(() -> toast("Скачиваю " + info.version + src + "…"));
-                File apk = fromPc ? Updater.downloadPc("pcremote-files.apk", getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
+                if (manual) ui.post(() -> toast("Скачиваю " + info.version + "…"));
+                File apk = Updater.download(info.url, getCacheDir(), info.sha256);
                 ui.post(() -> { toast("Обновление " + info.version + " — установите"); startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(FileProvider.uriFor(apk), "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)); });
             } catch (Exception e) { if (manual) ui.post(() -> toast("Не удалось проверить: " + e.getMessage())); }
         }).start();

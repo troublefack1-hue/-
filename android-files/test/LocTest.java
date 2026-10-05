@@ -6,8 +6,8 @@ import java.util.Arrays;
 import java.util.List;
 import ru.pcremote.files.*;
 
-/** PcClient / PcLoc / ZipLoc / Ops / search filters / batch rename against a real relay (tests/test_pcclient_jvm.py). */
-public class PcTest {
+/** ZipLoc / Ops / search filters / batch rename on a desktop JVM (tests/test_files_locs_jvm.py). */
+public class LocTest {
     static int fails = 0;
     static void check(String n, boolean ok, String d) { System.out.println((ok ? "PASS " : "FAIL ") + n + (ok ? "" : ": " + d)); if (!ok) fails++; }
     static void write(File f, String s) throws Exception { f.getParentFile().mkdirs(); try (FileOutputStream o = new FileOutputStream(f)) { o.write(s.getBytes("UTF-8")); } }
@@ -15,41 +15,9 @@ public class PcTest {
     static Fs.Entry find(List<Fs.Entry> l, String n) { for (Fs.Entry e : l) if (e.name.equals(n)) return e; return null; }
 
     public static void main(String[] a) throws Exception {
-        String host = a[0]; int port = Integer.parseInt(a[1]); String secret = a[2]; File share = new File(a[3]);
-        File local = Files.createTempDirectory("local").toFile(); Ops.trashRoot = local; ZipLoc.cacheDir = new File(local, ".zipcache"); PcLoc.cacheDir = new File(local, ".pccache");
-        PcClient c = new PcClient(host, port, null, secret, "", false);
-        // roots and listing
-        List<Fs.Entry> roots = c.list("");
-        check("PC roots", roots.size() == 1 && roots.get(0).dir && roots.get(0).ref.equals(share.getAbsolutePath()), names(roots));
-        PcLoc pc = new PcLoc(c, share.getAbsolutePath());
-        List<Fs.Entry> l = pc.list(false, Fs.Sort.NAME, false);
-        check("PC folder listing", names(l).equals("docs hello.txt photo.jpg") && find(l, "hello.txt").size == 12, names(l));
-        check("PC parent/child", pc.parent().path().equals("ПК:") && pc.child(find(l, "docs")).path().endsWith("docs"), pc.child(find(l, "docs")).path());
-        // download (materialize) and upload
-        File got = pc.materialize(find(l, "hello.txt"), null);
-        check("download", got.isFile() && new String(Files.readAllBytes(got.toPath()), "UTF-8").equals("привет"), got.getPath());
-        File up = new File(local, "up.txt"); write(up, "uploaded-content");
-        c.upload(up, share.getAbsolutePath(), (n, d, t) -> true);
-        check("upload", new File(share, "up.txt").length() == 16, "");
-        // ops on the PC
-        c.op("mkdir", share.getAbsolutePath(), "newdir");
-        c.op("rename", new File(share, "up.txt").getAbsolutePath(), "renamed.txt");
-        c.op("copy", new File(share, "renamed.txt").getAbsolutePath(), new File(share, "newdir").getAbsolutePath());
-        c.op("move", new File(share, "renamed.txt").getAbsolutePath(), new File(share, "docs").getAbsolutePath());
-        check("mkdir/rename/copy/move on the PC", new File(share, "newdir/renamed.txt").exists() && new File(share, "docs/renamed.txt").exists() && !new File(share, "renamed.txt").exists(), "");
-        c.op("delete", new File(share, "newdir/renamed.txt").getAbsolutePath(), null);
-        check("delete on the PC", !new File(share, "newdir/renamed.txt").exists(), "");
-        boolean refused = false; try { c.op("delete", "/etc/passwd", null); } catch (Exception e) { refused = true; }
-        check("outside share refused", refused, "");
-        // Ops: PC -> local tree, local -> PC tree
-        LocalLoc dst = new LocalLoc(new File(local, "dl")); dst.dir.mkdirs();
-        List<Fs.Entry> sel = new ArrayList<>(); sel.add(find(pc.list(false, Fs.Sort.NAME, false), "docs"));
-        Ops.copy(pc, sel, dst, false, null);
-        check("Ops PC->local tree", new File(dst.dir, "docs/renamed.txt").length() == 16 && new File(dst.dir, "docs/inner/deep.md").exists(), "");
+        File local = Files.createTempDirectory("local").toFile(); Ops.trashRoot = local; ZipLoc.cacheDir = new File(local, ".zipcache");
         write(new File(local, "tree/a/b.txt"), "b"); write(new File(local, "tree/c.txt"), "c");
-        List<Fs.Entry> sel2 = new ArrayList<>(); sel2.add(new Fs.Entry(new File(local, "tree")));
-        Ops.copy(new LocalLoc(local), sel2, pc, false, (n, d, t) -> true);
-        check("Ops local->PC tree", new File(share, "tree/a/b.txt").exists() && new File(share, "tree/c.txt").exists(), "");
+        LocalLoc dst = new LocalLoc(new File(local, "dl")); dst.dir.mkdirs();
         // zip as a folder
         File z = Fs.zip(Arrays.asList(new File(local, "tree")), local, "tree", null);
         ZipLoc zl = new ZipLoc(z, "");
