@@ -470,6 +470,14 @@ class Term:
         return self.proc.isalive()
 
     def close(self):
+        # kill the whole tree: bash -> claude/node would otherwise live on as orphans after the tab closes
+        try:
+            pid = int(getattr(self.proc, "pid", 0) or 0)
+            if pid and os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, timeout=10,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.proc.terminate(force=True)
         except Exception:  # noqa: BLE001
