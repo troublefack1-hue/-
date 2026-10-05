@@ -751,7 +751,7 @@
     parts.forEach((seg, i) => {
       const sepEl = document.createElement("i"); sepEl.textContent = "›"; c.appendChild(sepEl);
       const b = document.createElement("button"); b.textContent = seg;
-      const target = parts.slice(0, i + 1).join(sp) + (i === 0 && /^[A-Za-z]:$/.test(seg) ? sp : "");
+      const target = (fPath.startsWith("/") ? "/" : "") + parts.slice(0, i + 1).join(sp) + (i === 0 && /^[A-Za-z]:$/.test(seg) ? sp : "");
       b.onclick = () => loadFiles(target); if (i === parts.length - 1) b.classList.add("cur"); c.appendChild(b);
     });
     c.scrollLeft = c.scrollWidth;
