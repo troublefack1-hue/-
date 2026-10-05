@@ -523,8 +523,11 @@ class Volume:
             from comtypes import CLSCTX_ALL
             from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
             dev = AudioUtilities.GetSpeakers()
-            iface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            self.ep = cast(iface, POINTER(IAudioEndpointVolume))
+            if hasattr(dev, "EndpointVolume"):   # pycaw 2025+: a wrapper with the interface ready ("no attribute 'Activate'")
+                self.ep = dev.EndpointVolume
+            else:
+                iface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                self.ep = cast(iface, POINTER(IAudioEndpointVolume))
         except Exception as e:  # noqa: BLE001
             log.info("pycaw unavailable (%s): volume via media keys only", e)
 
