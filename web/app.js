@@ -355,7 +355,11 @@
     if (!zoneImg || !zoneRect || !frameW) return;
     ctx.drawImage(zoneImg, zoneRect.x * frameW, zoneRect.y * frameH, zoneRect.w * frameW, zoneRect.h * frameH);
   }
-  function clearCanvas() { frameW = frameH = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.classList.remove("live"); }
+  function clearCanvas() {
+    frameW = frameH = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.classList.remove("live");
+    $("bVideo").hidden = true; $("bZone").hidden = true; zoneRect = zoneImg = null;
+    try { vdec && vdec.close(); } catch {} vdec = null; waitKey = true;
+  }
   setInterval(() => {
     $("spdDown").textContent = "↓ " + fmtSpeed(bytesIn); $("spdUp").textContent = "↑ " + fmtSpeed(bytesOut);
     $("spdDown").classList.toggle("hot", bytesIn > 2048); $("spdUp").classList.toggle("hot", bytesOut > 2048);

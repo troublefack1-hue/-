@@ -639,11 +639,14 @@ class Hub:
         if p and p["chunks"] is not None:
             p["chunks"].put_nowait(data[9:])
 
+    def _new_rid(self) -> str:
+        self.pfs_seq += 1
+        return f"{self.pfs_seq:x}"[-8:]
+
     async def pfs_call(self, req: dict, timeout: float = 30.0, stream: bool = False) -> dict:
         if self.fs_phone is None:
             raise ConnectionError("телефон не подключён или доступ к файлам не включён")
-        self.pfs_seq += 1
-        rid = f"{self.pfs_seq:x}"[-8:]
+        rid = self._new_rid()
         p = {"fut": asyncio.get_running_loop().create_future(), "chunks": asyncio.Queue() if stream else None,
              "started": asyncio.Event(), "item": None}
         self.pfs_pending[rid] = p
@@ -694,18 +697,25 @@ class Hub:
                 finally:
                     self.pfs_pending.pop(rid, None)
             if request.method == "POST" and op == "write":
+                if self.fs_phone is None:
+                    raise ConnectionError("телефон не подключён или доступ к файлам не включён")
                 path = request.query.get("path", "")
-                await self.pfs_call({"op": "write_begin", "path": path})
-                rid = f"{self.pfs_seq:x}"[-8:]
-                hdr = bytes([FRAME_PFS_WRITE]) + rid.encode().ljust(8)
-                total = 0
-                async for chunk in request.content.iter_chunked(256 * 1024):
-                    await self.fs_phone.send_bytes(hdr + chunk)
-                    total += len(chunk)
-                # write_begin/write_end must share the id: the phone keeps the open file under it
-                p = {"fut": asyncio.get_running_loop().create_future(), "chunks": None, "started": asyncio.Event(), "item": None}
+                # one explicit id ties write_begin, the data frames and write_end to the same open file
+                rid = self._new_rid()
+                loop = asyncio.get_running_loop()
+                p = {"fut": loop.create_future(), "chunks": None, "started": asyncio.Event(), "item": None}
                 self.pfs_pending[rid] = p
                 try:
+                    await self.fs_phone.send_str(json.dumps({"t": "pfs", "id": rid, "op": "write_begin", "path": path}))
+                    res = await asyncio.wait_for(p["fut"], 30)
+                    if not res.get("ok"):
+                        raise ConnectionError(res.get("error", "не удалось открыть файл"))
+                    p["fut"] = loop.create_future()   # reuse the entry for write_end's answer
+                    hdr = bytes([FRAME_PFS_WRITE]) + rid.encode().ljust(8)
+                    total = 0
+                    async for chunk in request.content.iter_chunked(256 * 1024):
+                        await self.fs_phone.send_bytes(hdr + chunk)
+                        total += len(chunk)
                     await self.fs_phone.send_str(json.dumps({"t": "pfs", "id": rid, "op": "write_end"}))
                     res = await asyncio.wait_for(p["fut"], 60)
                 finally:

@@ -65,9 +65,9 @@ function Pull($remote, $local, $level) {
         $dest = Join-Path $local $it.name
         if ($it.dir) { $n += (Pull $it.path $dest ($level + 1)); continue }
         if ((Test-Path $dest) -and ((Get-Item $dest).Length -eq $it.size) -and ([Math]::Abs(((Get-Item $dest).LastWriteTime - [DateTimeOffset]::FromUnixTimeSeconds([int64]$it.mtime).LocalDateTime).TotalSeconds) -lt 2)) { continue }
-        Get-File $it.path $dest $true; $n++; "  $($it.path)"
+        Get-File $it.path $dest $true | Out-Null; $n++; Write-Host "  $($it.path)"
     }
-    if ($level -eq 0) { "готово: $local (новых/изменённых файлов: $n)" }
+    if ($level -eq 0) { Write-Host "готово: $local (новых/изменённых файлов: $n)" }
     return $n
 }
 function Tree($path, $depth, $prefix, $level) {
@@ -117,7 +117,7 @@ phone — файлы телефона с ПК (через PC Remote)
     "pull" { Pull $(if ($a.Count) { $a[0] } else { "/sdcard/DCIM/Camera" }) $(if ($a.Count -gt 1) { $a[1] } else { $null }) 0 | Out-Null }
     "push" { if ($a.Count -lt 2) { Fail "phone push <папка> <папка на телефоне>" }; $n = 0
              Get-ChildItem $a[0] -Recurse -File | ForEach-Object { $rel = $_.FullName.Substring((Resolve-Path $a[0]).Path.Length).TrimStart('\') -replace '\\', '/'
-               Put-File $_.FullName ($a[1].TrimEnd('/') + "/" + $rel) $true; $n++; "  $rel" }; "готово: $n файлов -> $($a[1])" }
+               Put-File $_.FullName ($a[1].TrimEnd('/') + "/" + $rel) $true | Out-Null; $n++; Write-Host "  $rel" }; Write-Host "готово: $n файлов -> $($a[1])" }
     "rm" { if ((Call "delete" @{ path = $a[0] }).ok) { "удалено" } else { "не удалось" } }
     "mkdir" { if ((Call "mkdir" @{ path = $a[0] }).ok) { "ok" } else { "не удалось" } }
     "mv" { if ((Call "move" @{ path = $a[0]; to = $a[1] }).ok) { "ok" } else { "не удалось" } }

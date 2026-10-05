@@ -939,11 +939,11 @@ class Agent:
                 await ws.send_str(json.dumps({"t": "term_out", "id": tid, "data": chunk}))
                 # Claude Code is asking something: tell the phone (notification with Yes / No)
                 tail = (tail + chunk)[-600:]
-                m = ATTENTION_RE.search(tail)
-                if m and time.monotonic() - last_attn > 20:
+                if ATTENTION_RE.search(tail) and time.monotonic() - last_attn > 20:
                     last_attn = time.monotonic()
-                    q = ANSI_RE.sub("", tail)
-                    q = q[max(0, q.rfind("\n", 0, q.find(m.group(0)) if m.group(0) in q else len(q)) - 120):].strip()[-160:]
+                    # strip colours and control bytes, keep the last non-empty lines as the question
+                    clean = [ln.strip() for ln in ANSI_RE.sub("", tail).splitlines() if ln.strip()]
+                    q = " · ".join(clean[-3:])[-160:]
                     await ws.send_str(json.dumps({"t": "attention", "term": tid, "text": q or "Claude ждёт ответа"}))
                     tail = ""
         except Exception as e:  # noqa: BLE001

@@ -45,6 +45,14 @@ async def main():
         rc, out, err = await loop.run_in_executor(None, cli, "pull", "/sdcard/DCIM/Camera"); report("pull again downloads nothing", rc == 0 and "0)" in out)
         rc, out, err = await loop.run_in_executor(None, cli, "cat", "/sdcard/../../etc/passwd"); report("ATTACK: path escape refused", rc != 0 and "outside" in err)
         rc, out, err = await loop.run_in_executor(None, cli, "rm", "/sdcard/Download/up.bin"); report("rm", rc == 0 and not (root / "Download" / "up.bin").exists())
+        # two uploads at once must not cross their data (explicit per-request ids)
+        a = tmp / "a.bin"; a.write_bytes(b"A" * 400_000); c = tmp / "c.bin"; c.write_bytes(b"C" * 650_000)
+        r1 = loop.run_in_executor(None, cli, "put", str(a), "/sdcard/Download/a.bin")
+        r2 = loop.run_in_executor(None, cli, "put", str(c), "/sdcard/Download/c.bin")
+        await asyncio.gather(r1, r2)
+        ok_a = (root / "Download" / "a.bin").read_bytes() == a.read_bytes()
+        ok_c = (root / "Download" / "c.bin").read_bytes() == c.read_bytes()
+        report("concurrent uploads stay separate", ok_a and ok_c)
         import aiohttp
         async with aiohttp.ClientSession() as s:
             r = await s.post(U + "/api/phone", json={"op": "list", "path": "/sdcard"}); report("no token -> 403", r.status == 403)
