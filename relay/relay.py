@@ -514,7 +514,10 @@ class Hub:
                 if msg.data.startswith('{"t":"hello_phone"') or msg.data.startswith('{"t": "hello_phone"'):
                     try:
                         hp = json.loads(msg.data)
-                        self.phone_names[ws] = str(hp.get("model", ""))[:40]
+                        ver = "".join(c for c in str(hp.get("ver", "")) if c.isalnum() or c in ".-")[:16]   # phone-controlled
+                        self.phone_names[ws] = str(hp.get("model", ""))[:40] + (f" v{ver}" if ver else "")
+                        log.info("phone hello: %s, app %s, files %s", str(hp.get("model", ""))[:40], ver or "old (no version)",
+                                 "on" if hp.get("fs") else "off")
                         # the service checks the permission on every request, so a bg link that said fs:false
                         # (access granted later) still serves files; an fs:true link always wins
                         if ws not in self.guests and (hp.get("fs") or (hp.get("bg") and self.fs_phone is None)):

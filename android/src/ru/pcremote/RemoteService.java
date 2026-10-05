@@ -156,7 +156,7 @@ public class RemoteService extends Service {
                 }, prefs.getString("lan", ""), onWifi(this));
                 c.connect();
                 c.sendText("{\"t\":\"auth\",\"token\":\"" + prefs.getString("secret", "") + "\"}");
-                c.sendText("{\"t\":\"hello_phone\",\"model\":\"" + Build.MODEL.replace('"', ' ') + "\",\"fs\":" + filesAllowed() + ",\"bg\":true}");
+                c.sendText("{\"t\":\"hello_phone\",\"model\":\"" + Build.MODEL.replace('"', ' ') + "\",\"ver\":\"" + appVersion() + "\",\"fs\":" + filesAllowed() + ",\"bg\":true}");
                 ws = c; delay = 1000;
                 final WsClient cc = c;
                 fs = new PhoneFs(new PhoneFs.Sender() {
@@ -256,6 +256,11 @@ public class RemoteService extends Service {
         } else if (s.startsWith("{\"t\":\"pc_notify\"")) {
             try { pcNotify(new JSONObject(s)); } catch (Exception ignored) {}
         }
+    }
+
+    /** versionName, so the PC log and window show which build the phone runs */
+    private String appVersion() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName.replace('"', ' '); } catch (Exception e) { return ""; }
     }
 
     /** "All files access" granted (Android 11+) or legacy storage permission, and the switch is on. */
