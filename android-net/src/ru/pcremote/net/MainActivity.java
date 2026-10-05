@@ -69,13 +69,17 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ setup ---
     /** Neither paired here nor in «Мой ПК»: pair by ourselves from what the PC put inside this app. */
-    private void autoPairFromApk() {
-        final org.json.JSONObject p;
+    private org.json.JSONObject apkPairing() {
         try (java.io.InputStream in = getAssets().open("pairing.json")) {
             java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream(); byte[] buf = new byte[4096]; int n;
             while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
-            p = new org.json.JSONObject(b.toString("UTF-8"));
-        } catch (Exception e) { return; }   // an app from the release: nothing inside
+            return new org.json.JSONObject(b.toString("UTF-8"));
+        } catch (Exception e) { return null; }   // an app from the release: nothing inside
+    }
+
+    private void autoPairFromApk() {
+        final org.json.JSONObject p = apkPairing();
+        if (p == null) return;
         final String h = p.optString("host"), c = p.optString("code"), fp = p.optString("fp"), lan = p.optString("lan");
         final int port = p.optInt("port", 8443);
         if (h.isEmpty() || c.isEmpty()) return;
@@ -96,10 +100,13 @@ public class MainActivity extends Activity {
         TextView sub = text("Телефон выходит в интернет через домашний ПК — и через его VPN, если он там включён. Реклама режется на ПК.\n\nВведите адрес и код из окна PC Remote (те же, что для «Мой ПК»).", 14, MUTED);
         sub.setPadding(0, dp(6), 0, dp(18)); card.addView(sub);
         card.addView(text("Адрес ПК", 13, MUTED));
-        final EditText host = input(prefs.getString("hostport", ""), "IP:порт, например 93.100.1.2:8443", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        final org.json.JSONObject inApk = apkPairing();   // filled in for the owner: nothing to type
+        String hostDefault = prefs.getString("hostport", "");
+        if (hostDefault.isEmpty() && inApk != null) hostDefault = inApk.optString("host") + ":" + inApk.optInt("port", 8443);
+        final EditText host = input(hostDefault, "IP:порт, например 93.100.1.2:8443", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         card.addView(host);
         card.addView(text("Код подключения", 13, MUTED));
-        final EditText code = input("", "код из окна PC Remote", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        final EditText code = input(inApk != null ? inApk.optString("code") : "", "код из окна PC Remote", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         card.addView(code);
         final TextView err = text(error == null ? "" : error, 14, BAD); err.setPadding(0, dp(6), 0, dp(6)); card.addView(err);
         final Button btn = button("Привязать"); card.addView(btn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));

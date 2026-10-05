@@ -276,6 +276,11 @@ public class MainActivity extends Activity {
         btn.setText("Привязать"); btn.setTextColor(Color.WHITE); btn.setBackgroundColor(ACCENT); btn.setAllCaps(false);
         btn.setTypeface(null, Typeface.BOLD);
         card.addView(btn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        String ver = "?";
+        try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) {}
+        TextView about = text("версия " + ver + " · данные ПК в приложении: " + (inApk != null ? "есть" : "нет"), 12, MUTED);
+        about.setGravity(Gravity.CENTER); about.setPadding(0, dp(10), 0, 0);   // which build is installed, at a glance
+        card.addView(about);
         if (prefs.contains("secret")) {   // still paired: going back simply reconnects with the old secret
             Button back = new Button(this); back.setText("Отмена — подключиться как раньше"); back.setAllCaps(false);
             back.setOnClickListener(v -> { RemoteService.ensureRunning(this); startRemote(); });
