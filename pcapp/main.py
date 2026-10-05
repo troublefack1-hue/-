@@ -572,7 +572,7 @@ class App(tk.Tk):
                         command=lambda: autostart(self.auto.get())).grid(row=6, column=0, columnspan=2, sticky="w", **pad)
 
         hint = ("На роутере пробросьте TCP-порт %d на этот ПК.\n"
-                "Данные: %s" % (cfg["port"], DATA))
+                "Данные: %s\nСоздано Николаем Коноваловым для вас, с любовью." % (cfg["port"], DATA))
         ttk.Label(f, text=hint, style="Muted.TLabel", justify="left").grid(row=7, column=0, columnspan=2, sticky="w", **pad)
         self.bubble_on = tk.BooleanVar(value=cfg.get("bubble", True))
         ttk.Checkbutton(f, text="Значок на экране, когда окно свёрнуто", variable=self.bubble_on,

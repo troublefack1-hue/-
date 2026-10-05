@@ -129,6 +129,7 @@ public class MainActivity extends Activity {
         updRow = row("Проверить обновления", "версия " + ver + " · обновления выходят вместе с PC Remote", v -> checkUpdate(true));
         root.addView(updRow);
         root.addView(row("Отвязать от ПК", "", v -> { PcVpnService.stop(this); prefs.edit().clear().apply(); showSetup(null); }));
+        TextView sig = text("Создано Николаем Коноваловым для вас, с любовью.", 12, MUTED); sig.setGravity(Gravity.CENTER); sig.setPadding(0, dp(16), 0, 0); root.addView(sig);
         ScrollView sv = new ScrollView(this); sv.setBackgroundColor(BG);
         sv.addView(root, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(sv);
