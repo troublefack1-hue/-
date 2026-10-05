@@ -187,7 +187,23 @@ public final class Fs {
         return f.delete();
     }
 
-    static boolean isSymlink(File f) { try { return !f.getCanonicalFile().equals(f.getAbsoluteFile()); } catch (IOException e) { return false; } }
+    /** Is f itself a link? Comparing f's canonical and absolute paths also fired for every file under a link
+     *  higher up (/sdcard -> /storage/emulated/0, a Windows 8.3 short name): deleteTree, search and move then
+     *  skipped real folders. Only the last step counts: resolve the parent first. */
+    static boolean isSymlink(File f) {
+        try {
+            return java.nio.file.Files.isSymbolicLink(f.toPath());
+        } catch (Throwable noNio) {   // Android 7 has no java.nio.file
+            try {
+                File parent = f.getParentFile();
+                if (parent == null) return false;
+                File inReal = new File(parent.getCanonicalFile(), f.getName());
+                return !inReal.getCanonicalFile().equals(inReal.getAbsoluteFile());
+            } catch (IOException e) {
+                return false;
+            }
+        }
+    }
 
     public static File rename(File f, String newName) throws IOException {
         if (newName.isEmpty() || newName.contains("/")) throw new IOException("недопустимое имя");
