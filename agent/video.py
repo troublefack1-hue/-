@@ -53,6 +53,13 @@ H264_CHAIN = [
 _h264_pick: dict = {}
 
 
+def _kbit(br: str) -> int:
+    try:
+        return int(br.lower().rstrip("k"))
+    except ValueError:
+        return 10**6
+
+
 def h264_encoder(ffmpeg: str):
     """(name, args) of the first H.264 encoder that really works on this machine, or None."""
     if ffmpeg in _h264_pick:
@@ -109,12 +116,15 @@ def _encoders(ffmpeg: str) -> set:
 class Encoder:
     """One ffmpeg process. write(bgra) feeds a frame; frames() yields (key, pts_us, bytes)."""
 
-    def __init__(self, ffmpeg: str, codec: str, width: int, height: int, fps: int, profile: str = "normal", pix_fmt: str = "bgra"):
+    def __init__(self, ffmpeg: str, codec: str, width: int, height: int, fps: int, profile: str = "normal", pix_fmt: str = "bgra",
+                 bitrate: str | None = None):
         self.codec, self.width, self.height, self.fps = codec, width, height, max(1, fps)
         self.key = None
         have = _encoders(ffmpeg)
-        br = BITRATE.get(profile, BITRATE["normal"])
-        gop = str(self.fps * (10 if profile == "tiny" else 2))   # thin link: key frames are the expensive part
+        br = bitrate or BITRATE.get(profile, BITRATE["normal"])
+        self.bitrate = br
+        thin = profile == "tiny" or _kbit(br) <= 150
+        gop = str(self.fps * (10 if thin else 2))   # thin link: key frames are the expensive part
         if codec == "h264":
             name, args = h264_encoder(ffmpeg) or H264_CHAIN[-1]
             self.encoder_name = name

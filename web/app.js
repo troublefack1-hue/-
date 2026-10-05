@@ -194,7 +194,7 @@
         renderMonitors();
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
-        sendRules(); sendAudioSrc(); if (m.video) announceCodecs();
+        sendRules(); sendAudioSrc(); sendAdapt(); if (m.video) announceCodecs();
         if (!$("termPanel").hidden && !terms.size) renderTermEmpty();   // project folders may have changed on the PC
       } else if (m.t === "cmd_result") {
         const okText = { open_url: "Ссылка открыта на ПК", print: "Отправлено на печать", kill: "Процесс завершён", monitor_off: "Экран выключен", monitor_on: "Экран включён", powerplan: "Схема питания изменена" };
@@ -371,6 +371,9 @@
     try { vdec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: pts, data: buf.slice(11) })); }
     catch (e) { waitKey = true; }
   }
+  $("adaptOn").checked = prefs.adapt !== false;
+  const sendAdapt = () => send({ t: "adapt", on: prefs.adapt !== false });
+  $("adaptOn").onchange = () => { prefs.adapt = $("adaptOn").checked; savePrefs(); sendAdapt(); show(prefs.adapt ? "Качество подстраивается под канал" : "Качество фиксировано: как выбрано в профиле"); };
   $("videoOn").checked = prefs.video !== false;
   $("videoOn").onchange = () => { prefs.video = $("videoOn").checked; savePrefs(); announceCodecs(); };
 
@@ -1319,6 +1322,7 @@
     return [["Связь", pcOnline ? "ПК в сети" : "ПК не в сети"], ["Задержка", latency ? latency + " мс" : "—"], ["Кадров/с (факт)", String(fpsShown)],
       ["Картинка", kind], ["Размер кадра", d.size ? `${d.size[0]}×${d.size[1]}` : (frameW ? `${frameW}×${frameH}` : "—")],
       ["Профиль", d.profile || profile], ["RTT по ack на ПК", d.rtt_ms != null ? d.rtt_ms + " мс" : "—"], ["Канал по оценке ПК", d.bw_kbs ? d.bw_kbs + " КБ/с" : "—"],
+      ["Адаптация", d.adaptive === false ? "выкл" : (d.rung ? `ступень ${d.rung} из 7` + (d.bitrate ? ` · ${d.bitrate}бит/с` : "") : "полное качество профиля")],
       ["Звук", d.audio ? `${d.audio} · ${d.audio_codec || "?"}` : "выкл"], ["HD-зона", d.zone ? "вкл" : "выкл"],
       ["Зрителей", d.viewers ?? "—"], ["Терминалов", d.terms ?? "—"], ["Переподключений ПК↔relay", d.reconnects ?? "—"], ["Переподключений телефона", String(phoneReconnects)],
       ["Кодеки телефона", (codecList || []).join(", ") || "нет WebCodecs"], ["Без касаний, с", d.idle_s ?? "—"], ["Сеть телефона", (navigator.connection && (navigator.connection.effectiveType || navigator.connection.type)) || "—"],

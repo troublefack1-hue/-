@@ -52,6 +52,27 @@ PROFILES = {
     "idle":   {"fps": 0,  "max_width": 640,  "quality": 30},
 }
 
+# Adaptive ladder for the video path: (max_width, fps, bitrate). Rung 0 = the profile as chosen;
+# the agent walks down as fast as the link degrades (measured throughput, late acks) and climbs
+# back one rung at a time when there is headroom. Bottom rung is "potato": 320 px, 2 fps, 24 kbit/s,
+# which still keeps the cursor and clicks responsive on a near-dead link.
+LADDER = [
+    (None, None, None),        # 0: profile's own settings
+    (1280, 12, "1200k"),
+    (960, 10, "600k"),
+    (720, 8, "300k"),
+    (480, 6, "150k"),
+    (480, 4, "64k"),
+    (320, 3, "40k"),
+    (320, 2, "24k"),
+]
+TINY_RUNG = 5                   # the "10 KB/s" profile never goes above this
+
+
+def _kbit(br: str) -> int:
+    return int(br.rstrip("k"))
+
+
 # ---------------------------------------------------------------- config ---
 
 def load_config() -> dict:
@@ -648,8 +669,10 @@ class Screen:
         top_w, top_q = self.profile["max_width"], self.profile["quality"]
         if rtt > 0.6 and self.quality > 25:
             self.quality = max(25, self.quality - 10)
-        elif rtt > 0.6 and self.size[0] > 480:
-            self.set_width(int(self.size[0] * 0.8))
+        elif rtt > 0.6 and self.size[0] > 320:
+            self.set_width(max(320, int(self.size[0] * 0.8)))
+        elif rtt > 0.6 and self.quality > 15:
+            self.quality = max(15, self.quality - 5)   # "potato": 320 px at quality 15, but the clicks still land
         elif rtt < 0.15:
             if self.size[0] < min(top_w, self.mon["width"]):
                 self.set_width(min(top_w, int(self.size[0] * 1.25)))
@@ -805,7 +828,12 @@ class Agent:
         self.audio_device = ""       # output endpoint to switch to while the phone listens ("" = don't touch)
         self.audio_opus = False      # phone announced an Opus decoder
         self.bw = 0.0                # measured link throughput, bytes/s (from acks of big frames)
+        self.bw_at = 0.0             # when the last throughput sample came in
         self.sent_bytes = 0
+        self.adaptive = True         # walk the LADDER with the link (phone setting)
+        self.rung = 0
+        self.rung_at = 0.0
+        self._vid_w = 0              # width last applied for the video path
         self._ws = None
 
     async def _notify(self, msg: dict):
@@ -889,6 +917,11 @@ class Agent:
                 await self.video_step(ws, codec, fps, interval, t0)
                 continue
             self.video_close()
+            if self._vid_w:
+                self._vid_w = 0
+                self.screen.set_width(self.screen.profile["max_width"])   # JPEG path adapts on its own
+            if self.adaptive and self.rtt > 0.6:
+                interval = 1 / max(2, fps // 2)   # late acks: fewer, smaller frames
             # wait until the phone has drawn the previous frame (or 1 s)
             try:
                 await asyncio.wait_for(self.ack.wait(), 1.0)
@@ -942,6 +975,37 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
 
+    def pick_rung(self) -> int:
+        """Where on the LADDER the link puts us right now (see LADDER). Down fast, up slowly."""
+        if not self.adaptive:
+            self.rung = TINY_RUNG if self.screen.profile_name == "tiny" else 0
+            return self.rung
+        now = time.monotonic()
+        rung = self.rung
+        # what the measured throughput affords: the highest rung whose bitrate fits in 70 % of it
+        if self.bw and now - self.bw_at < 8:
+            afford = len(LADDER) - 1
+            for i in range(1, len(LADDER)):
+                if _kbit(LADDER[i][2]) * 1000 <= self.bw * 8 * 0.7:
+                    afford = i
+                    break
+            if afford == 1 and self.bw * 8 * 0.7 >= 2500 * 1000:
+                afford = 0
+            if afford > rung:
+                rung = afford                                   # down: at once
+            elif afford < rung and self.rtt < 0.4 and now - self.rung_at > 4:
+                rung -= 1                                       # up: one rung per 4 s, only with headroom and quick acks
+        elif rung > 0 and self.rtt < 0.25 and now - self.rung_at > 6:
+            rung -= 1                                           # no recent measurement, acks are quick: probe upward
+        if self.rtt > 0.6 and now - self.rung_at > 2:
+            rung = min(len(LADDER) - 1, rung + 1)               # acks late: step down regardless of throughput
+        if self.screen.profile_name == "tiny":
+            rung = max(rung, TINY_RUNG)
+        if rung != self.rung:
+            log.info("adaptive: rung %d -> %d (bw %.0f KB/s, rtt %.0f ms)", self.rung, rung, self.bw / 1024, self.rtt * 1000)
+            self.rung, self.rung_at = rung, now
+        return rung
+
     def video_close(self):
         if self.enc:
             self.enc.close()
@@ -950,6 +1014,11 @@ class Agent:
     async def video_step(self, ws, codec: str, fps: int, interval: float, t0: float):
         """One tick of the encoded-video path: grab raw pixels, feed ffmpeg, ship what it produced."""
         loop = asyncio.get_running_loop()
+        lw = LADDER[self.pick_rung()][0]
+        want_w = min(self.screen.profile["max_width"], lw) if lw else self.screen.profile["max_width"]
+        if want_w != self._vid_w:
+            self._vid_w = want_w
+            self.screen.set_width(want_w)
         try:
             raw = await loop.run_in_executor(None, self.screen.grab_raw)
             if not self.screen_ok:
@@ -977,22 +1046,23 @@ class Agent:
             await asyncio.sleep(interval)
             return
         data, pix_fmt, size = raw
-        # slow link (acks come back late, or measured throughput is tiny): drop a tier and halve the
-        # frame rate until it recovers; on the "tiny" profile only one frame is ever in flight
-        thin = self.screen.profile_name == "tiny" or (0 < self.bw < 12 * 1024)
-        slow = self.rtt > 0.6
-        tier = "tiny" if thin else "low" if slow else self.screen.profile_name
-        enc_fps = min(fps, 4) if thin else max(4, fps // 2) if slow else fps
+        # the ladder: resolution, frame rate and bitrate follow the link; low rungs keep one frame in flight
+        rung = self.rung
+        lw, lfps, lbr = LADDER[rung]
+        tier = self.screen.profile_name
+        enc_fps = min(fps, lfps) if lfps else fps
+        bitrate = lbr if lbr and _kbit(lbr) < _kbit(video.BITRATE.get(tier, "2500k")) else None
+        thin = rung >= TINY_RUNG - 1
         if thin and not self.ack.is_set() and time.monotonic() - self.sent_at < 1.5:
             await asyncio.sleep(interval)   # the previous frame is still on the wire: don't pile up behind it
             return
-        key = (codec, size, enc_fps, tier, self.video_gen, pix_fmt)
+        key = (codec, size, enc_fps, tier, bitrate, self.video_gen, pix_fmt)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
             try:
-                self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt)
+                self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt, bitrate=bitrate)
                 self.enc.key = key
-                log.info("video: %s %dx%d @%d (%s)", codec, size[0], size[1], fps, self.screen.profile_name)
+                log.info("video: %s %dx%d @%d (%s, rung %d, %s)", codec, size[0], size[1], enc_fps, tier, rung, self.enc.bitrate)
             except Exception as e:  # noqa: BLE001
                 log.warning("ffmpeg failed to start: %s", e)
                 self.ffmpeg = None   # JPEG from now on
@@ -1131,9 +1201,10 @@ class Agent:
                     if self.sent_at:
                         sample = time.monotonic() - self.sent_at
                         self.rtt = sample if not self.rtt else self.rtt * 0.7 + sample * 0.3
-                        if self.sent_bytes >= 6000 and sample > 0.02:   # small frames say nothing about throughput
+                        if self.sent_bytes >= 2000 and sample > 0.02:   # tiny frames say nothing about throughput
                             bw = self.sent_bytes / sample
                             self.bw = bw if not self.bw else self.bw * 0.7 + bw * 0.3
+                            self.bw_at = time.monotonic()
                     self.ack.set()
                 elif t == "viewers":
                     self.viewers = int(ev.get("n", 0))
@@ -1193,6 +1264,9 @@ class Agent:
                     self.audio_device = str(ev.get("device") or "")[:512]
                     if self.audio.stream:
                         self.audio.stop()  # restarts with the new source/device on the next loop
+                elif t == "adapt":
+                    self.adaptive = bool(ev.get("on", True))
+                    self.rung, self.rung_at = 0, time.monotonic()
                 elif t == "audio_devices_get":
                     await ws.send_str(json.dumps({"t": "audio_devices", "items": audio_out.list_render_devices()}))
                 elif t == "rules":
@@ -1260,6 +1334,7 @@ class Agent:
                                                   "profile": self.screen.profile_name, "rtt_ms": int(self.rtt * 1000), "viewers": self.viewers,
                                                   "zone": bool(self.screen.zone), "terms": len(self.terms), "monitor": self.screen.mon_index,
                                                   "codecs": self.codecs, "reconnects": self.reconnects, "bw_kbs": round(self.bw / 1024, 1),
+                                                  "rung": self.rung, "adaptive": self.adaptive, "bitrate": getattr(self.enc, "bitrate", None) if self.enc else None,
                                                   "audio": self.audio.device_name if self.audio.stream else None,
                                                   "audio_codec": ("opus " + self.audio.enc.bitrate) if (self.audio.stream and self.audio.enc) else ("pcm" if self.audio.stream else None),
                                                   "idle_s": int(time.monotonic() - self.last_input)}))
