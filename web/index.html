@@ -206,6 +206,7 @@
       <label class="row switch"><span>Жесты от краёв: снизу — окна, слева — назад</span><input type="checkbox" id="edgeOn"><i></i></label>
       <div class="seg" id="mouseMode"><span class="lbl">Мышь</span><button data-mouse="direct" class="on">Прямая</button><button data-mouse="trackpad">Тачпад</button><button data-mouse="gyro">Гироскоп</button></div>
       <input type="checkbox" id="trackpad" hidden>
+      <label class="row switch"><span>Переводить подсказки Claude Code в терминале</span><input type="checkbox" id="termRu"><i></i></label>
       <label class="row switch"><span>Вибрация</span><input type="checkbox" id="haptic"><i></i></label>
       <label class="row switch"><span>Звуки</span><input type="checkbox" id="sfx"><i></i></label>
       <h3>Звук с ПК</h3>
@@ -304,7 +305,7 @@
       <button data-send="/rc\r">/rc</button><button data-send="/help\r">/help</button><button data-send="/clear\r">/clear</button>
       <button data-send="\r">Enter</button><button data-send="\x1b">Esc</button><button data-send="\x03">Ctrl+C</button>
       <button data-send="\x1b[A">↑</button><button data-send="\x1b[B">↓</button><button data-send="\t">Tab</button><button data-send="y\r">y</button><button data-send="n\r">n</button>
-      <button id="termQuickEdit" title="Свои кнопки">✎</button>
+      <button id="termRuBtn" title="Словарь фраз Claude Code">?</button><button id="termQuickEdit" title="Свои кнопки">✎</button>
     </div>
     <div class="trow" id="termGit">
       <button data-cmd="git status">status</button><button data-cmd="git pull">pull</button><button data-cmd="git push">push</button>
@@ -335,6 +336,7 @@ wait: 500
 url: https://youtube.com
 shell: git pull"></textarea>
     <div class="actions"><button id="macroSave" class="btn primary">Сохранить</button><button id="macroClose" class="btn">Закрыть</button></div></div></div>
+  <div id="ccDlg" class="modal" hidden><div class="box"><p>Фразы Claude Code</p><div id="ccList" class="flist"></div><div class="actions"><button id="ccClose" class="btn">Закрыть</button></div></div></div>
   <div id="textDlg" class="modal" hidden><div class="box"><p id="textDlgTitle">Вставить текст на ПК</p><textarea id="textDlgInput" rows="5"></textarea>
     <div class="actions"><button id="textDlgNo" class="btn">Отмена</button><button id="textDlgYes" class="btn primary">Отправить</button></div></div></div>
   <div id="hints" class="modal" hidden><div class="box hints"><p>Как управлять</p><ul>
@@ -347,6 +349,7 @@ shell: git pull"></textarea>
 
 <script src="/static/vendor/xterm.js"></script>
 <script src="/static/vendor/addon-fit.js"></script>
+<script src="/static/cc_ru.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

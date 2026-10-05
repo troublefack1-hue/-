@@ -795,7 +795,17 @@
       tabs.appendChild(b);
     }
   }
-  function termOut(id, data) { const t = terms.get(id); if (t) t.term.write(data); }
+  // Claude Code phrases -> Russian. Chunks are held for 30 ms so a phrase split between two
+  // packets still gets translated; the PC's console itself is untouched.
+  const ccRe = (window.CC_RU || []).slice().sort((a, b) => b[0].length - a[0].length).map(([en, ru]) => [new RegExp(en.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (/[\w)]$/.test(en) ? "(?![\\w-])" : ""), "g"), ru]);
+  function ccTranslate(s) { if (prefs.termRu === false) return s; for (const [re, ru] of ccRe) s = s.replace(re, ru); return s; }
+  function termOut(id, data) {
+    const t = terms.get(id); if (!t) return;
+    if (prefs.termRu === false) { t.term.write(data); return; }
+    t.buf = (t.buf || "") + data; clearTimeout(t.flush);
+    const go = () => { const b = t.buf; t.buf = ""; if (b) t.term.write(ccTranslate(b)); };
+    if (/\n$/.test(data) || t.buf.length > 4000) go(); else t.flush = setTimeout(go, 30);
+  }
   function termExit(id) { const t = terms.get(id); if (!t) return; t.exited = true; t.term.write("\r\n\x1b[90m[сессия завершена]\x1b[0m\r\n"); renderTabs(); }
   function closeTerm(id) {
     const t = terms.get(id); if (!t) return;
@@ -832,6 +842,11 @@
     }
   }
   renderTermQuick();
+  $("termRuBtn").onclick = () => { $("ccDlg").hidden = false; const L = $("ccList"); L.innerHTML = "";
+    for (const [en, ru] of window.CC_RU || []) { if (en.length < 4) continue; const d = document.createElement("div"); d.className = "it"; d.innerHTML = `<span class="n"><b>${en}</b><span class="m">${ru}</span></span>`; L.appendChild(d); } };
+  $("ccClose").onclick = () => ($("ccDlg").hidden = true);
+  $("termRu").checked = prefs.termRu !== false;
+  $("termRu").onchange = () => { prefs.termRu = $("termRu").checked; savePrefs(); show(prefs.termRu ? "Подсказки Claude Code переводятся" : "Перевод выключен"); };
   $("termQuickEdit").onclick = () => textDialog("Свои кнопки терминала (по одной в строке)", "/rc\n/status\ngit pull", (v) => {
     prefs.termQuick = v.split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 20); savePrefs(); renderTermQuick();
   });
