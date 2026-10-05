@@ -1,4 +1,6 @@
 config.json
+relay.json
 venv/
 *.log
+*.exe
 __pycache__/

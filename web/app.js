@@ -6,7 +6,14 @@
   const dot = $("dot"), stateEl = $("state"), subEl = $("sub"), cursorEl = $("cursor"), zoomBadge = $("zoomBadge");
   const keys = $("keys"), kbInput = $("kbInput"), menu = $("menu"), toast = $("toast");
 
-  let ws = null, secret = localStorage.getItem("pcr_secret") || "";
+  // The launcher page can hand the secret over in the URL hash (local mode:
+  // the tunnel address changes, so localStorage of the old origin is gone).
+  let secret = localStorage.getItem("pcr_secret") || "";
+  if (location.hash.length > 1) {
+    secret = decodeURIComponent(location.hash.slice(1));
+    history.replaceState(null, "", location.pathname);
+  }
+  let ws = null;
   let pcOnline = false, pcHost = "", frameW = 0, frameH = 0;
   let base = 1;                              // fit-to-view scale
   let zoom = 1, panX = 0, panY = 0;          // user zoom and canvas position

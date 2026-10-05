@@ -1,0 +1,5 @@
+{
+  "secret": "CHANGE-ME-to-a-long-random-string-32-chars",
+  "ntfy_url_channel": "https://ntfy.sh/CHANGE-ME-url-channel-name",
+  "ntfy_wake_url": "https://ntfy.sh/YOUR-WAKE-CHANNEL"
+}

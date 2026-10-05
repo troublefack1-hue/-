@@ -167,13 +167,17 @@ class Hub:
                 async with s.post(url, data=b"wake", timeout=15) as r:
                     ok = r.status == 200
         except Exception as e:  # noqa: BLE001
-            return web.json_response({"ok": False, "error": str(e)})
-        return web.json_response({"ok": ok})
+            return web.json_response({"ok": False, "error": str(e)}, headers=CORS)
+        return web.json_response({"ok": ok}, headers=CORS)
 
     async def status_handler(self, request: web.Request):
+        # CORS: the launcher page lives on another origin (local mode)
         if not self.check_token(request):
-            raise web.HTTPForbidden()
-        return web.json_response(self.status())
+            raise web.HTTPForbidden(headers=CORS)
+        return web.json_response(self.status(), headers=CORS)
+
+
+CORS = {"Access-Control-Allow-Origin": "*"}
 
 
 async def index(_request):

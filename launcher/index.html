@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1117">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Мой ПК</title>
+<style>
+  :root { --bg:#0f1117; --panel:#181b24; --panel2:#222633; --text:#eef0f5; --muted:#8e94a6;
+          --accent:#4f8cff; --ok:#38d070; --bad:#ef5350; --warn:#f5b84a; --border:#2a2f3d; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); display:flex; align-items:center;
+         justify-content:center; padding:24px 16px; font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .card { width:100%; max-width:360px; background:var(--panel); border:1px solid var(--border); border-radius:20px;
+          padding:28px 22px; display:flex; flex-direction:column; gap:12px; text-align:center; box-shadow:0 20px 60px #0008; }
+  h1 { margin:0; font-size:26px; } p { margin:0; } .muted { color:var(--muted); }
+  .logo { width:72px; height:72px; margin:0 auto 4px; border-radius:18px; }
+  .field { display:flex; flex-direction:column; gap:6px; text-align:left; }
+  .field span { font-size:13px; color:var(--muted); }
+  input { font:inherit; padding:12px; border-radius:12px; border:1px solid var(--border); background:var(--bg); color:var(--text); width:100%; }
+  button { font:inherit; color:var(--text); background:var(--panel2); border:1px solid var(--border); border-radius:12px; padding:14px; font-size:16px; }
+  .primary { background:linear-gradient(180deg,#4f8cff,#3b6fd8); border-color:transparent; color:#fff; font-weight:600; }
+  .status { display:flex; align-items:center; gap:10px; justify-content:center; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--bad); box-shadow:0 0 8px currentColor; }
+  .dot.on { background:var(--ok); color:var(--ok); } .dot.wait { background:var(--warn); color:var(--warn); }
+  .power { width:96px; height:96px; border-radius:50%; margin:6px auto; color:var(--accent); display:grid; place-items:center; padding:0; }
+  .power svg { width:48px; height:48px; } .power.busy { color:var(--warn); animation:pulse 1.2s infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 14px rgba(245,184,74,.15);} }
+  a.link { color:var(--muted); font-size:12px; word-break:break-all; }
+</style>
+</head>
+<body>
+<div class="card">
+  <svg class="logo" viewBox="0 0 128 128"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset="1" stop-color="#2c57c4"/></linearGradient></defs><rect width="128" height="128" rx="28" fill="url(#g)"/><rect x="22" y="30" width="84" height="54" rx="8" fill="#0f1117"/><rect x="28" y="36" width="72" height="42" rx="4" fill="#1b2a4a"/><rect x="52" y="86" width="24" height="6" fill="#0f1117"/><rect x="40" y="92" width="48" height="6" rx="3" fill="#0f1117"/><path d="M64 46v14m9-10.5a12.7 12.7 0 1 1-18 0" fill="none" stroke="#38d070" stroke-width="4" stroke-linecap="round"/></svg>
+  <h1>Мой ПК</h1>
+
+  <div id="setup">
+    <p class="muted">Один раз: данные из установки на ПК</p>
+    <label class="field"><span>Канал адреса (ntfy)</span><input id="chan" placeholder="https://ntfy.sh/pcremote-url-…"></label>
+    <label class="field"><span>Канал включения (ntfy, можно пустым)</span><input id="wake" placeholder="https://ntfy.sh/pcwake-…"></label>
+    <label class="field"><span>Секрет</span><input id="secret" type="password"></label>
+    <button id="save" class="primary">Сохранить</button>
+  </div>
+
+  <div id="main" hidden>
+    <div class="status"><span id="dot" class="dot wait"></span><span id="state">Ищу ПК…</span></div>
+    <p id="sub" class="muted"></p>
+    <button id="open" class="primary" hidden>Открыть экран ПК</button>
+    <button id="wakeBtn" class="power" title="Включить ПК" hidden>
+      <svg viewBox="0 0 24 24"><path d="M12 3v9m5.66-5.66a8 8 0 1 1-11.32 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+    <a id="url" class="link" hidden></a>
+    <button id="reset" style="font-size:13px;color:var(--muted)">Сбросить настройки</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const cfg = JSON.parse(localStorage.getItem("pcr_launcher") || "null");
+  if (cfg) { $("setup").hidden = true; $("main").hidden = false; start(cfg); }
+
+  $("save").onclick = () => {
+    const c = { chan: $("chan").value.trim().replace(/\/+$/, ""), wake: $("wake").value.trim(), secret: $("secret").value.trim() };
+    if (!c.chan || !c.secret) return alert("Нужны канал адреса и секрет");
+    localStorage.setItem("pcr_launcher", JSON.stringify(c)); location.reload();
+  };
+  $("reset").onclick = () => { localStorage.removeItem("pcr_launcher"); location.reload(); };
+
+  async function start(c) {
+    $("wakeBtn").hidden = !c.wake;
+    $("wakeBtn").onclick = async () => {
+      $("wakeBtn").classList.add("busy"); $("sub").textContent = "Команда отправлена, жду ПК…";
+      try { await fetch(c.wake, { method: "POST", body: "wake" }); } catch (e) { $("sub").textContent = "Ошибка: " + e; }
+    };
+    let url = null;
+    async function check() {
+      // latest URL the PC published (last 24 h), then see if it answers
+      try {
+        const r = await fetch(`${c.chan}/json?poll=1&since=24h`, { cache: "no-store" });
+        const lines = (await r.text()).trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+        const last = lines.filter((m) => m.event === "message" && /^https?:\/\//.test(m.message)).pop();
+        url = last ? last.message.trim() : null;
+      } catch (e) { setState("wait", "Нет связи с ntfy", String(e)); return; }
+      if (!url) { setState("off", "ПК не в сети", "адрес ещё не опубликован"); return; }
+      try {
+        const ctl = new AbortController(); setTimeout(() => ctl.abort(), 6000);
+        const r = await fetch(`${url}/api/status?token=${encodeURIComponent(c.secret)}`, { signal: ctl.signal, cache: "no-store" });
+        if (r.status === 403) { setState("off", "Неверный секрет", ""); return; }
+        const s = await r.json();
+        if (s.pc_online) { setState("on", "ПК в сети", ""); $("open").hidden = false; $("wakeBtn").classList.remove("busy"); }
+        else setState("wait", "Туннель есть, агент ещё не подключился", "");
+      } catch { setState("off", "ПК не в сети", "адрес не отвечает"); }
+    }
+    function setState(cls, text, sub) {
+      $("dot").className = "dot " + cls; $("state").textContent = text; $("sub").textContent = sub;
+      $("open").hidden = cls !== "on";
+      if (url) { $("url").hidden = false; $("url").textContent = url; $("url").href = url; }
+    }
+    $("open").onclick = () => { if (url) location.href = url + "/#" + encodeURIComponent(c.secret); };
+    await check(); setInterval(check, 5000);
+  }
+})();
+</script>
+</body>
+</html>
