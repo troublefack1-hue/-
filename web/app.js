@@ -91,7 +91,11 @@
 
   $("loginBtn").onclick = () => { secret = $("secret").value.trim(); if (secret) connect(); };
   $("secret").addEventListener("keydown", (e) => { if (e.key === "Enter") $("loginBtn").click(); });
-  $("logoutBtn").onclick = () => { localStorage.removeItem("pcr_secret"); location.reload(); };
+  $("logoutBtn").onclick = () => {
+    localStorage.removeItem("pcr_secret");
+    if (window.PcRemoteApp) window.PcRemoteApp.repair();  // inside the Android app: re-pair
+    else location.reload();
+  };
   if (secret) connect(); else connecting.hidden = true;
 
   // ------------------------------------------------------------- frames

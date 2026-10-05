@@ -60,6 +60,37 @@ class Hub:
         self.phones: set[web.WebSocketResponse] = set()
         self.last_frame: bytes | None = None
         self.failed_auth: dict[str, list[float]] = {}
+        # pairing: the PC app sets a 6-digit code that is valid for 5 minutes;
+        # the phone app exchanges it once for the secret
+        self.pair_code: str | None = None
+        self.pair_until: float = 0
+        self.on_paired = None  # callback(remote_ip) for the PC app's UI
+
+    def start_pairing(self) -> str:
+        import secrets
+        self.pair_code = f"{secrets.randbelow(10**6):06d}"
+        self.pair_until = time.time() + 300
+        return self.pair_code
+
+    async def pair_handler(self, request: web.Request):
+        ip = request.remote or "?"
+        now = time.time()
+        attempts = [t for t in self.failed_auth.get(ip, []) if now - t < 600]
+        if len(attempts) >= 10:
+            raise web.HTTPForbidden()
+        code = request.query.get("code", "")
+        ok = (self.pair_code is not None and now < self.pair_until
+              and hmac.compare_digest(code, self.pair_code))
+        if not ok:
+            attempts.append(now)
+            self.failed_auth[ip] = attempts
+            log.warning("bad pairing code from %s", ip)
+            raise web.HTTPForbidden()
+        self.pair_code = None  # single use
+        log.info("phone paired from %s", ip)
+        if self.on_paired:
+            self.on_paired(ip)
+        return web.json_response({"secret": self.cfg["secret"]})
 
     # --- auth -----------------------------------------------------------
     def check_token(self, request: web.Request) -> bool:
@@ -199,7 +230,9 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_get("/ws/phone", hub.phone_handler)
     app.router.add_post("/api/wake", hub.wake_handler)
     app.router.add_get("/api/status", hub.status_handler)
+    app.router.add_get("/api/pair", hub.pair_handler)
     app.router.add_static("/static", WEB_DIR)
+    app["hub"] = hub
     if cfg["ca_cert"]:
         # the phone downloads and installs this once, then trusts the relay
         async def ca(_request):
@@ -210,8 +243,8 @@ def make_app(cfg: dict) -> web.Application:
     return app
 
 
-async def serve(cfg: dict):
-    runner = web.AppRunner(make_app(cfg), access_log=None)  # URLs carry the token: no access log
+async def serve(cfg: dict, app: web.Application | None = None):
+    runner = web.AppRunner(app or make_app(cfg), access_log=None)  # URLs carry the token: no access log
     await runner.setup()
     await web.TCPSite(runner, cfg["host"], cfg["port"]).start()
     log.info("listening on http://%s:%s", cfg["host"], cfg["port"])

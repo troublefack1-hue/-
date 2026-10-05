@@ -7,3 +7,8 @@ Caddyfile
 __pycache__/
 *.key
 *.crt
+android/build/
+android/out/
+pcapp/build/
+pcapp/dist/
+*.spec

@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""
+PC Remote — the desktop app.
+
+One window, no setup: on first run it creates the secret and certificates,
+opens the firewall port, registers itself to start with Windows and runs the
+relay (HTTPS on the public port) and the screen agent in the background.
+"Привязать телефон" shows a 6-digit code the phone app uses once to pair.
+
+Build to a single exe with build_exe.ps1, or run: python main.py
+"""
+import asyncio
+import ctypes
+import json
+import logging
+import os
+import secrets
+import subprocess
+import sys
+import threading
+import time
+import tkinter as tk
+import urllib.request
+from pathlib import Path
+from tkinter import ttk
+
+# relay/ and agent/ live next to this file in the repo, or are bundled by PyInstaller
+BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+sys.path[:0] = [str(BASE / "relay"), str(BASE / "agent")]
+import agent as agent_mod  # noqa: E402
+import relay as relay_mod  # noqa: E402
+from certs import ensure_certs, fingerprint  # noqa: E402
+
+APP_NAME = "PC Remote"
+DATA = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "pc-remote"
+CONFIG = DATA / "config.json"
+log = logging.getLogger("pcapp")
+
+
+# ----------------------------------------------------------------- config ---
+
+def public_ip() -> str:
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"):
+        try:
+            with urllib.request.urlopen(url, timeout=6) as r:
+                ip = r.read().decode().strip()
+                if ip.count(".") == 3:
+                    return ip
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
+def load_config() -> dict:
+    DATA.mkdir(parents=True, exist_ok=True)
+    first_run = not CONFIG.exists()
+    cfg = json.loads(CONFIG.read_text("utf-8")) if CONFIG.exists() else {}
+    changed = first_run
+    if not cfg.get("secret"):
+        cfg["secret"] = secrets.token_urlsafe(30)
+        changed = True
+    cfg.setdefault("port", 8443)
+    cfg.setdefault("ntfy_wake_url", "")
+    cfg.setdefault("max_width", 1280)
+    cfg.setdefault("quality", 55)
+    cfg.setdefault("fps", 12)
+    cfg.setdefault("monitor", 1)
+    if not cfg.get("public_ip"):
+        cfg["public_ip"] = public_ip()
+        changed = True
+    if changed:
+        save_config(cfg)
+    cfg["_first_run"] = first_run
+    return cfg
+
+
+def save_config(cfg: dict):
+    data = {k: v for k, v in cfg.items() if not k.startswith("_")}
+    CONFIG.write_text(json.dumps(data, indent=2, ensure_ascii=False), "utf-8")
+
+
+# ---------------------------------------------------------------- windows ---
+
+def is_admin() -> bool:
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def firewall_open(port: int) -> bool:
+    """Add an inbound rule once. Needs admin; otherwise asks for elevation."""
+    name = f"PC Remote {port}"
+    check = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"],
+                           capture_output=True, text=True, creationflags=0x08000000)
+    if check.returncode == 0 and name in check.stdout:
+        return True
+    args = f'advfirewall firewall add rule name="{name}" dir=in action=allow protocol=TCP localport={port}'
+    if is_admin():
+        subprocess.run("netsh " + args, shell=True, creationflags=0x08000000)
+        return True
+    # UAC prompt for just this one command
+    rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", "netsh", args, None, 0)
+    return rc > 32
+
+
+def autostart(enable: bool):
+    import winreg
+    exe = sys.executable if getattr(sys, "frozen", False) else f'"{sys.executable}" "{Path(__file__).resolve()}"'
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
+                        0, winreg.KEY_SET_VALUE) as k:
+        if enable:
+            winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, f'{exe} --minimized')
+        else:
+            try:
+                winreg.DeleteValue(k, APP_NAME)
+            except FileNotFoundError:
+                pass
+
+
+def autostart_enabled() -> bool:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+            winreg.QueryValueEx(k, APP_NAME)
+            return True
+    except FileNotFoundError:
+        return False
+
+
+# ---------------------------------------------------------------- backend ---
+
+class Backend:
+    """Relay + agent in one asyncio loop on a background thread."""
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.loop = asyncio.new_event_loop()
+        self.hub = None
+        self.agent = None
+        self.error = ""
+        self.paired_ip = ""
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        asyncio.set_event_loop(self.loop)
+        try:
+            self.loop.run_until_complete(self._main())
+        except Exception as e:  # noqa: BLE001
+            self.error = str(e)
+            log.exception("backend failed")
+
+    async def _main(self):
+        ensure_certs(DATA, [self.cfg["public_ip"] or "127.0.0.1"])
+        relay_cfg = {
+            "secret": self.cfg["secret"], "host": "127.0.0.1", "port": 8787,
+            "ntfy_wake_url": self.cfg["ntfy_wake_url"],
+            "tls_host": "0.0.0.0", "tls_port": self.cfg["port"],
+            "tls_cert": str(DATA / "server.crt"), "tls_key": str(DATA / "server.key"),
+            "ca_cert": str(DATA / "ca.crt"),
+        }
+        app = relay_mod.make_app(relay_cfg)
+        self.hub = app["hub"]
+        self.hub.on_paired = lambda ip: setattr(self, "paired_ip", ip)
+        agent_cfg = {"relay_url": "http://127.0.0.1:8787", "secret": self.cfg["secret"],
+                     "max_width": self.cfg["max_width"], "quality": self.cfg["quality"],
+                     "fps": self.cfg["fps"], "monitor": self.cfg["monitor"]}
+        self.agent = agent_mod.Agent(agent_cfg)
+        await asyncio.gather(relay_mod.serve(relay_cfg, app), self.agent.run())
+
+    def pair_code(self) -> str:
+        fut = asyncio.run_coroutine_threadsafe(self._pair(), self.loop)
+        return fut.result(5)
+
+    async def _pair(self):
+        return self.hub.start_pairing()
+
+
+# -------------------------------------------------------------------- GUI ---
+
+class App(tk.Tk):
+    def __init__(self, cfg: dict, backend: Backend, minimized: bool):
+        super().__init__()
+        self.cfg, self.backend = cfg, backend
+        self.title(APP_NAME)
+        self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self.iconify)  # close = hide to taskbar, keep running
+        pad = {"padx": 14, "pady": 4}
+        f = ttk.Frame(self, padding=12)
+        f.grid()
+
+        ttk.Label(f, text=APP_NAME, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
+        self.status = ttk.Label(f, text="запуск…", foreground="#888")
+        self.status.grid(row=1, column=0, columnspan=2, sticky="w", **pad)
+
+        ttk.Label(f, text="Адрес для телефона:").grid(row=2, column=0, sticky="w", **pad)
+        self.addr = ttk.Entry(f, width=28)
+        self.addr.insert(0, f"{cfg['public_ip'] or '?'}:{cfg['port']}")
+        self.addr.configure(state="readonly")
+        self.addr.grid(row=2, column=1, sticky="w", **pad)
+
+        ttk.Button(f, text="Привязать телефон", command=self.show_pair).grid(row=3, column=0, sticky="w", **pad)
+        self.code = ttk.Label(f, text="", font=("Consolas", 22, "bold"), foreground="#1d6fe0")
+        self.code.grid(row=3, column=1, sticky="w", **pad)
+        self.code_hint = ttk.Label(f, text="", foreground="#888")
+        self.code_hint.grid(row=4, column=0, columnspan=2, sticky="w", **pad)
+
+        self.auto = tk.BooleanVar(value=autostart_enabled())
+        ttk.Checkbutton(f, text="Запускать вместе с Windows", variable=self.auto,
+                        command=lambda: autostart(self.auto.get())).grid(row=5, column=0, columnspan=2, sticky="w", **pad)
+
+        hint = ("На роутере пробросьте TCP-порт %d на этот ПК.\n"
+                "Данные: %s" % (cfg["port"], DATA))
+        ttk.Label(f, text=hint, foreground="#888", justify="left").grid(row=6, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Button(f, text="Выход", command=self.destroy).grid(row=7, column=1, sticky="e", **pad)
+
+        self.pair_until = 0
+        self.after(500, self.tick)
+        if minimized:
+            self.iconify()
+
+    def show_pair(self):
+        try:
+            code = self.backend.pair_code()
+        except Exception as e:  # noqa: BLE001
+            self.code_hint.configure(text=f"Ошибка: {e}")
+            return
+        self.pair_until = time.time() + 300
+        self.code.configure(text=f"{code[:3]} {code[3:]}")
+        self.backend.paired_ip = ""
+
+    def tick(self):
+        b = self.backend
+        if b.error:
+            self.status.configure(text=f"Ошибка: {b.error}", foreground="#d33")
+        elif b.hub is None:
+            self.status.configure(text="запуск…", foreground="#888")
+        else:
+            phones = len(b.hub.phones)
+            txt = f"Работает · https://{self.cfg['public_ip']}:{self.cfg['port']}"
+            txt += f" · телефонов подключено: {phones}" if phones else " · ждёт подключения"
+            self.status.configure(text=txt, foreground="#2a9d4a")
+        left = int(self.pair_until - time.time())
+        if b.paired_ip:
+            self.code.configure(text="✓")
+            self.code_hint.configure(text=f"Телефон привязан ({b.paired_ip})")
+        elif left > 0:
+            self.code_hint.configure(text=f"Введите код в приложении на телефоне. Действует ещё {left // 60}:{left % 60:02d}")
+        elif self.code.cget("text") not in ("", "✓"):
+            self.code.configure(text="")
+            self.code_hint.configure(text="Код истёк, нажмите ещё раз")
+        self.after(1000, self.tick)
+
+
+def main():
+    DATA.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                        handlers=[logging.FileHandler(DATA / "pcapp.log", encoding="utf-8")])
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:  # noqa: BLE001
+        pass
+    cfg = load_config()
+    try:
+        firewall_open(cfg["port"])
+    except Exception:  # noqa: BLE001
+        log.exception("firewall")
+    if cfg["_first_run"]:
+        try:
+            autostart(True)
+        except Exception:  # noqa: BLE001
+            log.exception("autostart")
+    backend = Backend(cfg)
+    backend.start()
+    App(cfg, backend, minimized="--minimized" in sys.argv).mainloop()
+
+
+if __name__ == "__main__":
+    main()
