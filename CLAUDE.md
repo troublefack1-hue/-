@@ -57,6 +57,9 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
   Осталось: `pycaw unavailable ('AudioDevice' object has no attribute 'Activate')` — громкость только медиаклавишами.
 - Белый IP 78.29.49.124, проброс TCP 8443 на роутере SNR работает (подключения снаружи доходят).
   Kill Switch AmneziaVPN режет входящие даже для исключённых программ — держать выключенным.
+- С включённым VPN окно показывало и вшивало в QR адрес VPN-сервера (77.91.69.203), а `watch_public_ip`
+  слал его телефону. `public_ip()` теперь при VPN спрашивает адрес через физический адаптер
+  (`relay.lan_interface_index`, сокет с `IP_UNICAST_IF`, HTTP к ipify/icanhazip/ifconfig.me); проверено: 78.29.49.124.
 
 ## Что ещё НЕ проверялось на живом железе (проверить в первую очередь)
 

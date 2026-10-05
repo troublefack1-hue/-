@@ -54,7 +54,42 @@ log = logging.getLogger("pcapp")
 
 # ----------------------------------------------------------------- config ---
 
+def _public_ip_via(if_index: int) -> str:
+    """External address as seen through the given adapter, bypassing the VPN route.
+
+    Plain HTTP over a socket pinned with IP_UNICAST_IF: urllib would follow the
+    default route, which is the VPN when it is on, and report the VPN server.
+    """
+    import socket
+    for host, path in (("api.ipify.org", "/"), ("icanhazip.com", "/"), ("ifconfig.me", "/ip")):
+        try:
+            addr = socket.gethostbyname(host)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(6)
+                s.setsockopt(socket.IPPROTO_IP, 31, socket.htonl(if_index).to_bytes(4, "little"))  # IP_UNICAST_IF
+                s.connect((addr, 80))
+                s.sendall(f"GET {path} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: curl/8\r\n\r\n".encode())
+                data = b""
+                while chunk := s.recv(4096):
+                    data += chunk
+            ip = data.split(b"\r\n\r\n", 1)[-1].decode(errors="replace").strip()
+            if ip.count(".") == 3:
+                return ip
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
 def public_ip() -> str:
+    # With a VPN on, ask through the physical adapter: the phone must reach the home router, not the VPN.
+    try:
+        lan = relay_mod.lan_interface_index()
+        if lan and lan != relay_mod.internet_interface_index():
+            ip = _public_ip_via(lan)
+            if ip:
+                return ip
+    except Exception as e:  # noqa: BLE001
+        log.info("public ip via lan adapter failed: %s", e)
     for url in ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"):
         try:
             with urllib.request.urlopen(url, timeout=6) as r:
