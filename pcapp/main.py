@@ -680,7 +680,8 @@ class App(tk.Tk):
                     self.tray.notify(f"Внешний адрес ПК изменился: {ip}. Телефон получит его сам.")
             except Exception:  # noqa: BLE001
                 log.exception("public ip watch")
-            time.sleep(15 * 60)
+            # no address yet (first start without internet): try every minute until we have one
+            time.sleep(60 if not self.cfg.get("public_ip") else 15 * 60)
 
     def _show_ip(self, ip: str):
         self.addr.configure(state="normal")

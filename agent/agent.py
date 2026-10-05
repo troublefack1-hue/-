@@ -378,6 +378,9 @@ def run_command(name: str) -> str:
     if name not in cmds:
         return f"unknown command: {name}"
     try:
+        if name in ("shutdown", "reboot") and os.name == "nt":
+            # a pending timer (shutdown /t N) makes a second shutdown call fail with "already scheduled"
+            subprocess.run(["shutdown", "/a"], creationflags=subprocess.CREATE_NO_WINDOW, capture_output=True)
         if name == "sleep" and os.name == "nt":
             # rundll32 passes its argument as a string pointer, so SetSuspendState sees "hibernate"
             # as true whenever hibernation is enabled; the direct call sleeps as asked
@@ -1199,6 +1202,8 @@ class Agent:
                     self.input.combo([str(k) for k in ev["keys"]])
                 elif t == "cmd":
                     res = run_command(str(ev.get("cmd")))
+                    if ev.get("cmd") in ("cancel", "shutdown", "reboot"):
+                        self.timers.timers.clear()   # the Windows-scheduled timer is gone either way
                     log.info("cmd %s -> %s", ev.get("cmd"), res)
                     await ws.send_str(json.dumps({"t": "cmd_result", "cmd": ev.get("cmd"), "result": res}))
             except Exception as e:  # noqa: BLE001
