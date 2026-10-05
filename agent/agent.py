@@ -725,6 +725,7 @@ class Audio:
         self.enc = None            # OpusEncoder when the phone can decode Opus and ffmpeg has libopus
         self.prev_default = ""     # output device to restore after a temporary switch
         self.device_name = ""
+        self.only_warn = ""        # why "only on the phone" could not be honoured, for the phone's toast
 
     def available(self) -> bool:
         try:
@@ -733,15 +734,23 @@ class Audio:
         except ImportError:
             return False
 
-    def start(self, source: str = "speakers", device: str = "", opus_ffmpeg: str | None = None, bitrate: str = "24k"):
-        """device: output endpoint id to switch to while streaming ("" = whatever is default);
+    def start(self, source: str = "speakers", only: bool = False, device: str = "", opus_ffmpeg: str | None = None, bitrate: str = "24k"):
+        """only: the sound should play on the phone and NOT in the room: move Windows' default output to a
+        silent endpoint (device id, or the best guess) for as long as we capture, restore in stop().
         opus_ffmpeg: path to ffmpeg with libopus, or None for raw PCM frames."""
         import pyaudiowpatch as pyaudio
-        if source != "mic" and device:
+        self.only_warn = ""
+        if source != "mic" and only:
             cur = audio_out.default_id()
-            if cur and cur != device and audio_out.set_default(device):
-                self.prev_default = cur
-                time.sleep(0.4)   # let the audio engine bring the endpoint up before we open loopback on it
+            target = device or ((audio_out.pick_silent(cur) or {}).get("id", ""))
+            if not target:
+                self.only_warn = "На ПК только один выход звука: динамики будут играть вместе с телефоном. Добавьте HDMI монитора/S-PDIF или VB-Cable."
+            elif cur and cur != target:
+                if audio_out.set_default(target):
+                    self.prev_default = cur
+                    time.sleep(0.4)   # let the audio engine bring the endpoint up before we open loopback on it
+                else:
+                    self.only_warn = "Windows не дала переключить выход: звук будет и на ПК."
         self.pa = pyaudio.PyAudio()
         wasapi = self.pa.get_host_api_info_by_type(pyaudio.paWASAPI)
         if source == "mic":
@@ -825,7 +834,8 @@ class Agent:
         self.last_input = time.monotonic()   # activity-adaptive frame rate: idle hands -> fewer frames
         self.reconnects = 0
         self.audio_source = "speakers"
-        self.audio_device = ""       # output endpoint to switch to while the phone listens ("" = don't touch)
+        self.audio_device = ""       # output endpoint for "only on the phone" ("" = pick a silent one)
+        self.audio_only = False      # sound on the phone only: the room stays quiet while it listens
         self.audio_opus = False      # phone announced an Opus decoder
         self.bw = 0.0                # measured link throughput, bytes/s (from acks of big frames)
         self.bw_at = 0.0             # when the last throughput sample came in
@@ -1115,13 +1125,16 @@ class Agent:
             if not self.audio.stream:
                 try:
                     bitrate = "16k" if self.screen.profile_name == "tiny" else "24k"
-                    await loop.run_in_executor(None, self.audio.start, self.audio_source, self.audio_device,
+                    await loop.run_in_executor(None, self.audio.start, self.audio_source, self.audio_only, self.audio_device,
                                                self.ffmpeg if (self.audio_opus and opus.available(self.ffmpeg)) else None, bitrate)
                 except Exception as e:  # noqa: BLE001
                     log.warning("audio unavailable: %s", e)
                     self.audio_on = False
                     await ws.send_str(json.dumps({"t": "audio", "on": False, "error": str(e)}))
                     continue
+                await ws.send_str(json.dumps({"t": "audio", "on": True, "via": self.audio.device_name,
+                                              "only": bool(self.audio.prev_default), "warn": self.audio.only_warn,
+                                              "codec": "opus" if self.audio.enc else "pcm"}))
             for chunk in await loop.run_in_executor(None, self.audio.read):
                 await ws.send_bytes(chunk)
 
@@ -1262,7 +1275,11 @@ class Agent:
                 elif t == "audio_source":
                     self.audio_source = "mic" if ev.get("src") == "mic" else "speakers"
                     self.audio_device = str(ev.get("device") or "")[:512]
-                    if self.audio.stream:
+                    only = bool(ev.get("only"))
+                    changed = (self.audio_source, self.audio_device, only) != getattr(self, "_audio_cfg", None)
+                    self._audio_cfg = (self.audio_source, self.audio_device, only)
+                    self.audio_only = only
+                    if self.audio.stream and changed:
                         self.audio.stop()  # restarts with the new source/device on the next loop
                 elif t == "adapt":
                     self.adaptive = bool(ev.get("on", True))

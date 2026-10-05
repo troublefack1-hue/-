@@ -51,6 +51,21 @@ def device_name(dev_id: str) -> str:
     return ""
 
 
+SILENT_HINTS = ("hdmi", "displayport", "digital", "spdif", "s/pdif", "optical", "nvidia", "amd high definition", "intel(r) display", "монитор", "monitor", "virtual", "cable")
+
+
+def pick_silent(current: str = "") -> dict | None:
+    """An output that will not be heard in the room while the phone listens: a monitor's HDMI/DisplayPort
+    audio, S/PDIF, a virtual cable — anything but the current default. None when the PC has only one output."""
+    devs = [d for d in list_render_devices() if d["id"] != (current or default_id())]
+    if not devs:
+        return None
+    for d in devs:
+        if any(h in d["name"].lower() for h in SILENT_HINTS):
+            return d
+    return devs[0]
+
+
 def _policy():
     from ctypes import HRESULT, POINTER, c_int, c_void_p, c_wchar_p
     import comtypes

@@ -230,8 +230,9 @@
       <h3>Звук с ПК</h3>
       <div class="seg" id="audioSrc"><span class="lbl">Источник</span><button data-src="speakers" class="on">Динамики</button><button data-src="mic">Микрофон ПК</button></div>
       <div id="audioDevBox" hidden>
-        <label class="row sel"><span>Выход ПК, пока телефон слушает</span><select id="audioDev"></select></label>
-        <p class="muted small">Звук с ПК идёт в телефон после общей громкости Windows: с выключенными динамиками будет тишина. Выберите «молчащий» выход (HDMI монитора, S/PDIF, пустое гнездо наушников): на время прослушивания ПК переключится на него, динамики замолчат, телефон услышит всё. Если такого выхода нет, поможет бесплатный VB-Cable.</p>
+        <label class="row switch"><span>Только на телефон: пока телефон слушает, динамики ПК молчат</span><input type="checkbox" id="audioOnly"><i></i></label>
+        <label class="row sel" id="audioDevRow" hidden><span>Через выход ПК</span><select id="audioDev"></select></label>
+        <p class="muted small">Windows отдаёт звук наружу уже после общей громкости, поэтому при выключенном звуке ПК телефон слышал бы тишину. С этим переключателем ПК на время прослушивания сам уходит на «молчащий» выход (HDMI монитора, S/PDIF, виртуальный кабель) и возвращается обратно. Если второго выхода нет, звук будет и там, и там; поможет бесплатный VB-Cable.</p>
       </div>
       <h3>Автоматика</h3>
       <label class="row switch"><span>Будить монитор при подключении</span><input type="checkbox" id="ruleMonOn"><i></i></label>

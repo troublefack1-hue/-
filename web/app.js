@@ -234,6 +234,9 @@
         show("Скопировано на ПК · нажмите, чтобы взять", 3500);
       } else if (m.t === "audio" && m.on === false) {
         audioOn = false; $("audioBtn").classList.remove("active"); if (m.error) show("Звук недоступен: " + m.error, 4000);
+      } else if (m.t === "audio" && m.on) {
+        if (m.warn) { show(m.warn, 6000); pcrError(m.warn); }
+        else if (prefs.audioOnly) show(`Звук только на телефоне · ПК играет в «${m.via || "?"}»`, 3000);
       }
     };
     ws.onclose = (e) => {
@@ -761,16 +764,22 @@
     const b = e.target.closest("button[data-accent]"); if (!b) return;
     prefs.accent = b.dataset.accent; savePrefs(); applyAccent(); buzz(8);
   });
-  const sendAudioSrc = () => send({ t: "audio_source", src: prefs.audioSrc || "speakers", device: prefs.audioDevice || "" });
+  // "only on the phone": a switch, not a device. The PC picks a silent output itself; the
+  // dropdown under it is only for overriding that guess and shows only while the switch is on.
+  const sendAudioSrc = () => send({ t: "audio_source", src: prefs.audioSrc || "speakers", only: !!prefs.audioOnly, device: prefs.audioDevice || "" });
   function renderAudioDevices(items) {
     const sel = $("audioDev"); sel.innerHTML = "";
-    const o0 = document.createElement("option"); o0.value = ""; o0.textContent = "как на ПК (звук слышно и на ПК)"; sel.appendChild(o0);
+    const o0 = document.createElement("option"); o0.value = ""; o0.textContent = "авто (HDMI монитора, S/PDIF, виртуальный кабель)"; sel.appendChild(o0);
     for (const d of items || []) { const o = document.createElement("option"); o.value = d.id; o.textContent = d.name + (d.default ? " (сейчас по умолчанию)" : ""); sel.appendChild(o); }
     if (prefs.audioDevice && ![...sel.options].some((o) => o.value === prefs.audioDevice)) { const o = document.createElement("option"); o.value = prefs.audioDevice; o.textContent = "(устройство не найдено)"; sel.appendChild(o); }
     sel.value = prefs.audioDevice || "";
     $("audioDevBox").hidden = !(items && items.length);
+    $("audioDevRow").hidden = !prefs.audioOnly;
   }
-  $("audioDev").onchange = () => { prefs.audioDevice = $("audioDev").value; savePrefs(); sendAudioSrc(); buzz(8); show(prefs.audioDevice ? "Пока телефон слушает, ПК играет в выбранное устройство" : "Звук с устройства по умолчанию"); };
+  $("audioOnly").checked = !!prefs.audioOnly;
+  $("audioOnly").onchange = () => { prefs.audioOnly = $("audioOnly").checked; savePrefs(); $("audioDevRow").hidden = !prefs.audioOnly; sendAudioSrc(); buzz(8);
+    show(prefs.audioOnly ? "Пока телефон слушает, динамики ПК молчат" : "Звук слышно и на ПК, и на телефоне"); };
+  $("audioDev").onchange = () => { prefs.audioDevice = $("audioDev").value; savePrefs(); sendAudioSrc(); buzz(8); };
   document.querySelectorAll("#audioSrc button").forEach((b) => {
     b.classList.toggle("on", b.dataset.src === (prefs.audioSrc || "speakers"));
     b.onclick = () => { prefs.audioSrc = b.dataset.src; savePrefs(); document.querySelectorAll("#audioSrc button").forEach((x) => x.classList.toggle("on", x === b)); sendAudioSrc(); buzz(8); };
