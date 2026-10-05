@@ -704,8 +704,10 @@
     const btn = $("wakeBtn"); btn.classList.add("busy"); buzz(20);
     $("wakeMsg").textContent = "Отправляю команду…";
     try {
-      const r = await fetch("/api/wake", { method: "POST", headers: authHeaders() });
-      const j = await r.json();
+      const r = await fetch("/api/wake", { method: "POST", headers: authHeaders() }).catch(() => null);
+      const viaPhone = !r && window.PcRemoteApp && window.PcRemoteApp.wakePc && window.PcRemoteApp.wakePc();
+      if (!r && !viaPhone) throw new Error("нет связи с ПК");
+      const j = viaPhone ? { ok: true } : await r.json();
       if (j.ok) {
         pendingWake = true; $("wakeMsg").textContent = "Команда отправлена, ПК загружается…";
         $("pcArt").classList.add("booting"); startWakeTimer();

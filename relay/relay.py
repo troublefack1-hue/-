@@ -319,7 +319,7 @@ class Hub:
         if self.on_paired:
             self.on_paired(ip)
         secret = self.cfg["guest_secret"] if (self.pair_guest and self.cfg.get("guest_secret")) else self.cfg["secret"]
-        return web.json_response({"secret": secret, "ntfy": self.cfg.get("ntfy_phone_url", "")})
+        return web.json_response({"secret": secret, "ntfy": self.cfg.get("ntfy_phone_url", ""), "wake": self.cfg.get("ntfy_wake_url", "")})
 
     # --- status broadcast ----------------------------------------------
     def status(self) -> dict:

@@ -57,7 +57,7 @@ public class RemoteService extends Service {
     private long lastFrameAt = 0;
     private PhoneFs fs;
     private final java.util.concurrent.ExecutorService fsPool = java.util.concurrent.Executors.newSingleThreadExecutor();
-    public static final String ACTION_TERM = "term";
+    public static final String ACTION_TERM = "term", ACTION_WAKE = "wake", ACTION_CMD = "cmd";
 
     @Override public void onCreate() {
         super.onCreate();
@@ -79,6 +79,8 @@ public class RemoteService extends Service {
         else if (ACTION_MUTE.equals(a)) setPhoneMuted(intent.getBooleanExtra("on", false));
         else if (ACTION_STOP_RING.equals(a)) RingActivity.stop();
         else if (ACTION_TERM.equals(a)) termSend(intent.getStringExtra("id"), intent.getStringExtra("data"));
+        else if (ACTION_WAKE.equals(a)) wake(this);
+        else if (ACTION_CMD.equals(a)) sendCmd(intent.getStringExtra("cmd"));
         return START_STICKY;
     }
 
@@ -196,6 +198,34 @@ public class RemoteService extends Service {
         b.addAction(new Notification.Action.Builder(null, "Да", PendingIntent.getService(this, 4, yes, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT)).build());
         b.addAction(new Notification.Action.Builder(null, "Нет", PendingIntent.getService(this, 5, no, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT)).build());
         getSystemService(NotificationManager.class).notify(7, b.build());
+    }
+
+    /** POST to the ntfy wake channel: the PC's wake helper (or router) turns the PC on. */
+    public static void wake(Context ctx) {
+        final String url = ctx.getSharedPreferences("pcremote", MODE_PRIVATE).getString("wake", "");
+        if (url.isEmpty()) { toast(ctx, "Канал включения не настроен на ПК (ntfy_wake_url)"); return; }
+        new Thread(() -> {
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                c.setRequestMethod("POST"); c.setDoOutput(true); c.setConnectTimeout(8000); c.setReadTimeout(8000);
+                c.setRequestProperty("Title", "wake");
+                c.getOutputStream().write("wake".getBytes());
+                int code = c.getResponseCode();
+                toast(ctx, code < 300 ? "Сигнал включения отправлен" : "ntfy ответил " + code);
+            } catch (Exception e) { toast(ctx, "Не удалось отправить: " + e.getMessage()); }
+        }, "wake").start();
+    }
+
+    /** sleep / lock / reboot / shutdown from the widget. */
+    private void sendCmd(String cmd) {
+        WsClient c = ws;
+        if (c == null || !c.isOpen()) { toast(this, "ПК не на связи"); return; }
+        try { c.sendText("{\"t\":\"cmd\",\"cmd\":\"" + cmd + "\"}"); toast(this, "sleep".equals(cmd) ? "ПК засыпает" : "lock".equals(cmd) ? "ПК заблокирован" : "Команда отправлена"); }
+        catch (Exception e) { toast(this, "Не удалось: " + e.getMessage()); }
+    }
+
+    private static void toast(Context ctx, String msg) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show());
     }
 
     private void termSend(String id, String data) {

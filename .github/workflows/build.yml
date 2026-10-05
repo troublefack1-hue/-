@@ -14,6 +14,22 @@ env:
   VERSION: 1.${{ github.run_number }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -r relay/requirements.txt cryptography Pillow
+      - name: Relay attack suite
+        run: python tests/test_relay_attacks.py
+      - name: Phone files end to end
+        run: python tests/test_phone_cli.py
+      - name: Web client syntax
+        run: node -e "new Function(require('fs').readFileSync('web/app.js','utf8')); new Function(require('fs').readFileSync('web/cc_ru.js','utf8')); console.log('js ok')"
+
   exe:
     runs-on: windows-latest
     steps:
@@ -23,11 +39,15 @@ jobs:
           python-version: "3.12"
       - name: Stamp version
         run: Set-Content -Path VERSION -Value "${{ env.VERSION }}" -NoNewline
+      - name: Check the phone CLI parses (PowerShell)
+        run: |
+          $null = [scriptblock]::Create((Get-Content pcapp/phone_cli/phone.ps1 -Raw))
+          Write-Host "phone.ps1 ok"
       - name: Build
         run: |
           pip install -r agent/requirements.txt -r relay/requirements.txt cryptography pystray pyinstaller
           pyinstaller --noconfirm --clean --onefile --windowed --name "PC Remote" `
-            --add-data "relay;relay" --add-data "agent;agent" --add-data "web;web" --add-data "VERSION;." `
+            --add-data "relay;relay" --add-data "agent;agent" --add-data "web;web" --add-data "VERSION;." --add-data "pcapp/phone_cli;pcapp/phone_cli" `
             --hidden-import mss.windows --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 --collect-all winpty --collect-all comtypes --collect-all pycaw `
             pcapp/main.py
           Rename-Item "dist/PC Remote.exe" "PC-Remote.exe"
@@ -67,7 +87,7 @@ jobs:
           path: android/out/pcremote.apk
 
   release:
-    needs: [exe, apk]
+    needs: [test, exe, apk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

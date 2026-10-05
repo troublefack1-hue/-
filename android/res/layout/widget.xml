@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="#E6151823"
+    android:padding="6dp">
+    <Button android:id="@+id/w_wake" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:text="Включить ПК" android:textAllCaps="false" android:textColor="#FFFFFF" android:background="#4F8CFF" android:layout_marginEnd="4dp" android:textSize="12sp" />
+    <Button android:id="@+id/w_sleep" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:text="Сон" android:textAllCaps="false" android:textColor="#E6E9F0" android:background="#232838" android:layout_marginEnd="4dp" android:textSize="12sp" />
+    <Button android:id="@+id/w_lock" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:text="Блок." android:textAllCaps="false" android:textColor="#E6E9F0" android:background="#232838" android:layout_marginEnd="4dp" android:textSize="12sp" />
+    <Button android:id="@+id/w_open" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:text="Открыть" android:textAllCaps="false" android:textColor="#E6E9F0" android:background="#232838" android:textSize="12sp" />
+</LinearLayout>

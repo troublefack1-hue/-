@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
                 try {
                     Pairing.Result r = Pairing.pair(h, port, c);
                     prefs.edit().putString("hostport", hp).putString("host", h).putInt("port", port)
-                            .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).apply();
+                            .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).putString("wake", r.wake).apply();
                     runOnUiThread(this::startRemote);
                 } catch (Exception e) {
                     runOnUiThread(() -> { btn.setEnabled(true); err.setTextColor(0xFFEF5350);
@@ -202,6 +202,13 @@ public class MainActivity extends Activity {
         root.setPadding(dp(24), dp(24), dp(24), dp(24));
         TextView t = text(msg, 16, TEXT); t.setGravity(Gravity.CENTER); root.addView(t);
         TextView h = text("Повторяю через 5 секунд…", 14, MUTED); h.setGravity(Gravity.CENTER); h.setPadding(0, dp(10), 0, dp(20)); root.addView(h);
+        if (!prefs.getString("wake", "").isEmpty()) {
+            Button wake = new Button(this); wake.setText("Включить ПК"); wake.setAllCaps(false);
+            wake.setBackgroundColor(ACCENT); wake.setTextColor(0xFFFFFFFF); wake.setTypeface(null, Typeface.BOLD);
+            wake.setOnClickListener(v -> { RemoteService.wake(this); wake.setText("Сигнал отправлен, жду ПК…"); wake.setEnabled(false); });
+            root.addView(wake, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+            TextView sp = text("", 6, MUTED); root.addView(sp);
+        }
         Button again = new Button(this); again.setText("Привязать заново"); again.setAllCaps(false);
         again.setOnClickListener(v -> { prefs.edit().remove("secret").apply(); showSetup(null); });
         root.addView(again);
@@ -225,6 +232,8 @@ public class MainActivity extends Activity {
             startService(new Intent(MainActivity.this, RemoteService.class).setAction(RemoteService.ACTION_CAST_STOP));
         }
         @JavascriptInterface public boolean isCasting() { return RemoteService.casting; }
+        /** "Включить ПК" straight from the phone (the PC's relay is down while it sleeps). */
+        @JavascriptInterface public boolean wakePc() { if (prefs.getString("wake", "").isEmpty()) return false; RemoteService.wake(MainActivity.this); return true; }
         /** Phone files for the PC (Claude): "All files access" on Android 11+, storage permission before. */
         @JavascriptInterface public boolean filesGranted() {
             if (Build.VERSION.SDK_INT >= 30) return android.os.Environment.isExternalStorageManager();
