@@ -35,7 +35,7 @@ import extras
 
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.json"
-FRAME_VIDEO, FRAME_AUDIO = b"\x01", b"\x02"
+FRAME_VIDEO, FRAME_AUDIO, FRAME_ZONE = b"\x01", b"\x02", b"\x05"
 log = logging.getLogger("agent")
 
 # Quality profiles the phone can switch between. "idle" = app in background.
@@ -240,6 +240,88 @@ def open_url(url: str) -> str:
     os.startfile(url)  # noqa: S606 - validated scheme
     return "ok"
 
+# ------------------------------------------------------------ windows ---
+# The phone's "□" button shows the open windows like Android's recents.
+
+_EnumProc = (ctypes.WINFUNCTYPE if hasattr(ctypes, "WINFUNCTYPE") else ctypes.CFUNCTYPE)(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+_DWM = None
+
+
+def _cloaked(hwnd) -> bool:
+    """UWP windows that are suspended/hidden stay 'visible' but cloaked."""
+    global _DWM
+    try:
+        if _DWM is None:
+            _DWM = ctypes.WinDLL("dwmapi")
+        v = ctypes.c_int(0)
+        _DWM.DwmGetWindowAttribute(ctypes.c_void_p(hwnd), 14, ctypes.byref(v), ctypes.sizeof(v))
+        return bool(v.value)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def list_windows() -> list:
+    out = []
+    fg = user32.GetForegroundWindow()
+    me = os.getpid()
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
+
+    def cb(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        ex = user32.GetWindowLongW(hwnd, -20)
+        if ex & 0x80 and not ex & 0x40000:  # tool window without app-window flag
+            return True
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n == 0:
+            return True
+        buf = ctypes.create_unicode_buffer(n + 1)
+        user32.GetWindowTextW(hwnd, buf, n + 1)
+        title = buf.value.strip()
+        if not title or title in ("Program Manager", "Windows Input Experience") or _cloaked(hwnd):
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == me:
+            return True
+        proc = ""
+        if psutil:
+            try:
+                proc = psutil.Process(pid.value).name().rsplit(".", 1)[0]
+            except Exception:  # noqa: BLE001
+                proc = ""
+        out.append({"hwnd": int(hwnd), "title": title[:80], "proc": proc, "active": hwnd == fg,
+                    "min": bool(user32.IsIconic(hwnd))})
+        return True
+    user32.EnumWindows(_EnumProc(cb), 0)
+    return out[:40]
+
+
+def window_action(op: str, hwnd: int) -> str:
+    hwnd = int(hwnd)
+    if not user32.IsWindow(hwnd):
+        return "нет окна"
+    if op == "focus":
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        # Windows refuses SetForegroundWindow from a background process unless a key was just pressed
+        user32.keybd_event(0x12, 0, 0, 0); user32.keybd_event(0x12, 0, 2, 0)  # tap Alt
+        user32.SetForegroundWindow(hwnd)
+        user32.BringWindowToTop(hwnd)
+    elif op == "close":
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+    elif op == "min":
+        user32.ShowWindow(hwnd, 6)
+    elif op == "max":
+        user32.ShowWindow(hwnd, 3)
+    else:
+        return "unknown"
+    return "ok"
+
+
 def run_command(name: str) -> str:
     cmds = {
         "reboot": ["shutdown", "/r", "/t", "3", "/f"],
@@ -381,6 +463,67 @@ class Screen:
         self.quality = self.profile["quality"]
         self.set_width(self.profile["max_width"])
         self._last_hash = b""
+        self.zone = None          # {"x","y","w","h"} fractions of the monitor: streamed in full resolution
+        self._zone_hash = b""
+
+    def set_zone(self, rect):
+        if not rect:
+            self.zone = None
+            return
+        x = min(max(float(rect.get("x", 0)), 0.0), 0.98); y = min(max(float(rect.get("y", 0)), 0.0), 0.98)
+        w = min(max(float(rect.get("w", 0)), 0.02), 1.0 - x); h = min(max(float(rect.get("h", 0)), 0.02), 1.0 - y)
+        self.zone = {"x": x, "y": y, "w": w, "h": h}
+        self._zone_hash = b""
+
+    def grab_zone(self) -> bytes | None:
+        """The HD zone (a video player, say) at native resolution and high JPEG quality.
+        Frame = 0x05 + 4×uint16 (x, y, w, h as 1/10000 of the monitor) + JPEG."""
+        z = self.zone
+        if not z:
+            return None
+        mw, mh = self.mon["width"], self.mon["height"]
+        box = {"left": self.mon["left"] + int(z["x"] * mw), "top": self.mon["top"] + int(z["y"] * mh),
+               "width": max(2, int(z["w"] * mw)), "height": max(2, int(z["h"] * mh))}
+        shot = self.sct.grab(box)
+        digest = hashlib.blake2b(shot.raw, digest_size=8).digest()
+        if digest == self._zone_hash:
+            return None
+        self._zone_hash = digest
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        if img.width > 1920:
+            img = img.resize((1920, int(img.height * 1920 / img.width)), Image.BILINEAR)
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=82, optimize=False)
+        import struct
+        hdr = struct.pack("<4H", *(int(z[k] * 10000) for k in ("x", "y", "w", "h")))
+        return hdr + buf.getvalue()
+
+    def detect_zone(self, shots: int = 6, gap: float = 0.12):
+        """Find where the picture moves (a playing video) by diffing a few small greyscale shots."""
+        from PIL import ImageChops
+        prev = None
+        acc = None
+        for _ in range(shots):
+            shot = self.sct.grab(self.mon)
+            g = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX").convert("L")
+            g = g.resize((320, max(1, int(320 * shot.height / shot.width))), Image.BILINEAR)
+            if prev is not None:
+                d = ImageChops.difference(g, prev).point(lambda p: 255 if p > 24 else 0)
+                acc = d if acc is None else ImageChops.lighter(acc, d)
+            prev = g
+            time.sleep(gap)
+        if acc is None:
+            return None
+        bbox = acc.getbbox()
+        if not bbox:
+            return None
+        W, H = acc.size
+        x0, y0, x1, y1 = bbox
+        if (x1 - x0) * (y1 - y0) < 0.02 * W * H:
+            return None
+        pad = 0.01
+        return {"x": max(0.0, x0 / W - pad), "y": max(0.0, y0 / H - pad),
+                "w": min(1.0, (x1 - x0) / W + 2 * pad), "h": min(1.0, (y1 - y0) / H + 2 * pad)}
 
     def set_monitor(self, index: int):
         """0 = all monitors as one picture, 1..n = a single monitor."""
@@ -554,7 +697,7 @@ class Agent:
                             "term": Term.available(), "shells": list(Term.shells().keys()),
                             "projects": self.cfg.get("projects", []), **{"volume": self.volume.get()}}))
                         tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws)),
-                                 asyncio.create_task(self.watch_clipboard(ws))]
+                                 asyncio.create_task(self.watch_clipboard(ws)), asyncio.create_task(self.stream_zone(ws))]
                         try:
                             await self.receive(ws)
                         finally:
@@ -615,6 +758,26 @@ class Agent:
             if int(last_sent) % 3 == 0:
                 self.screen.adapt(self.rtt)
             await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
+
+    async def stream_zone(self, ws):
+        """The HD zone goes beside the normal picture, at its own (higher) frame rate."""
+        loop = asyncio.get_running_loop()
+        while True:
+            if not (self.screen.zone and self.viewers and self.screen.profile["fps"]):
+                await asyncio.sleep(0.3)
+                continue
+            fps = 24 if self.rtt < 0.15 else 12 if self.rtt < 0.4 else 6
+            t0 = time.monotonic()
+            try:
+                data = await loop.run_in_executor(None, self.screen.grab_zone)
+            except Exception as e:  # noqa: BLE001
+                log.warning("zone capture failed: %s", e)
+                self.screen.set_zone(None)
+                await ws.send_str(json.dumps({"t": "zone", "rect": None, "error": str(e)[:80]}))
+                continue
+            if data:
+                await ws.send_bytes(FRAME_ZONE + data)
+            await asyncio.sleep(max(0.0, 1 / fps - (time.monotonic() - t0)))
 
     async def stream_audio(self, ws):
         loop = asyncio.get_running_loop()
@@ -706,6 +869,30 @@ class Agent:
                     await ws.send_str(json.dumps({"t": "volume", **self.volume.get()}))
                 elif t == "volume_get":
                     await ws.send_str(json.dumps({"t": "volume", **self.volume.get()}))
+                elif t == "windows_get":
+                    loop = asyncio.get_running_loop()
+                    items = await loop.run_in_executor(None, list_windows)
+                    await ws.send_str(json.dumps({"t": "windows", "items": items}))
+                elif t == "window":
+                    res = window_action(str(ev.get("op")), int(ev.get("hwnd", 0)))
+                    await ws.send_str(json.dumps({"t": "cmd_result", "cmd": "window_" + str(ev.get("op")), "result": res}))
+                    if ev.get("op") in ("close", "min"):
+                        await asyncio.sleep(0.3)
+                        loop = asyncio.get_running_loop()
+                        items = await loop.run_in_executor(None, list_windows)
+                        await ws.send_str(json.dumps({"t": "windows", "items": items}))
+                elif t == "zone":
+                    if ev.get("auto"):
+                        loop = asyncio.get_running_loop()
+                        rect = await loop.run_in_executor(None, self.screen.detect_zone)
+                        self.screen.set_zone(rect)
+                        await ws.send_str(json.dumps({"t": "zone", "rect": rect}))
+                    elif ev.get("off"):
+                        self.screen.set_zone(None)
+                        await ws.send_str(json.dumps({"t": "zone", "rect": None}))
+                    else:
+                        self.screen.set_zone(ev)
+                        await ws.send_str(json.dumps({"t": "zone", "rect": self.screen.zone}))
                 elif t == "audio_source":
                     self.audio_source = "mic" if ev.get("src") == "mic" else "speakers"
                     if self.audio.stream:

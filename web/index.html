@@ -141,6 +141,8 @@
       <button id="settingsBtn"><i>⚙</i>Настройки</button>
       <button id="macrosBtn"><i>⚡</i>Макросы</button>
       <button id="sysBtn"><i>🖥</i>Система</button>
+      <button id="winBtn"><i>🗗</i>Окна</button>
+      <button id="zoneBtn"><i>🎬</i>HD-зона</button>
       <button id="shotBtn"><i>📷</i>Снимок</button>
       <button id="pasteBtn"><i>📋</i>Вставить</button>
       <button id="linkBtn"><i>🔗</i>Ссылка</button>
@@ -159,6 +161,25 @@
     <button id="pcClipBtn" class="row" hidden>📋 Буфер ПК: <span id="pcClipText" class="muted"></span></button>
     <div id="castBox" hidden><label class="row switch" id="muteRow" hidden><span>Заглушить телефон на время трансляции</span><input type="checkbox" id="phoneMute"><i></i></label></div>
   </div>
+
+  <!-- windows: like Android recents -->
+  <div id="winSheet" class="sheet" hidden>
+    <div class="handle"></div>
+    <div class="wlist" id="winList"><div class="empty">Запрашиваю окна…</div></div>
+    <div class="wbar"><button id="winDesktop">Рабочий стол</button><button id="winRefresh">⟳</button></div>
+  </div>
+
+  <!-- HD zone: a piece of the screen (video player) in full resolution -->
+  <div id="zoneSheet" class="sheet" hidden>
+    <div class="handle"></div>
+    <p class="muted zhint">Участок экрана идёт в полном разрешении и с высокой частотой, остальное — в выбранном качестве. Для видео в браузере.</p>
+    <div class="grid three">
+      <button id="zoneAuto"><i>🔍</i>Найти видео</button>
+      <button id="zoneManual"><i>✋</i>Выделить</button>
+      <button id="zoneOff"><i>✕</i>Выключить</button>
+    </div>
+  </div>
+  <div id="zoneSel" hidden><div class="zbox"></div><p>Обведите пальцем область с видео</p></div>
 
   <!-- power -->
   <div id="powerSheet" class="sheet" hidden>

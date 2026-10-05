@@ -39,6 +39,7 @@ import agent as agent_mod  # noqa: E402
 import relay as relay_mod  # noqa: E402
 from certs import ensure_certs  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import deps
 import updater  # noqa: E402
 
 APP_NAME = "PC Remote"
@@ -336,6 +337,69 @@ class CastWindow(tk.Toplevel):
         self.label.configure(image=self.photo)
 
 
+class Bubble(tk.Toplevel):
+    """A small round PC Remote badge that floats over everything while the window is in the tray.
+    Drag it anywhere; a tap brings the window back."""
+
+    SIZE = 46
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        try:
+            self.attributes("-alpha", 0.93)
+            self.attributes("-transparentcolor", "#010101")
+        except tk.TclError:
+            pass
+        self.configure(bg="#010101")
+        c = tk.Canvas(self, width=self.SIZE, height=self.SIZE, bg="#010101", highlightthickness=0, cursor="hand2")
+        c.pack()
+        r = self.SIZE
+        c.create_oval(2, 2, r - 2, r - 2, fill=ACCENT, outline="#ffffff", width=2)
+        # a little monitor in the middle
+        c.create_rectangle(12, 14, r - 12, r - 18, fill="#ffffff", outline="")
+        c.create_rectangle(14, 16, r - 14, r - 20, fill="#1b2a4a", outline="")
+        c.create_rectangle(r // 2 - 3, r - 18, r // 2 + 3, r - 15, fill="#ffffff", outline="")
+        c.create_rectangle(r // 2 - 8, r - 15, r // 2 + 8, r - 13, fill="#ffffff", outline="")
+        self.dot = c.create_oval(r - 14, r - 14, r - 5, r - 5, fill=MUTED, outline="")
+        self.c = c
+        self._drag = None
+        for ev, fn in (("<ButtonPress-1>", self.press), ("<B1-Motion>", self.move), ("<ButtonRelease-1>", self.release)):
+            c.bind(ev, fn)
+        x, y = app.cfg.get("bubble_pos") or (self.winfo_screenwidth() - r - 24, self.winfo_screenheight() - r - 90)
+        self.geometry(f"+{int(x)}+{int(y)}")
+        self.withdraw()
+
+    def press(self, e):
+        self._drag = (e.x_root, e.y_root, self.winfo_x(), self.winfo_y(), False)
+
+    def move(self, e):
+        if not self._drag:
+            return
+        x0, y0, wx, wy, _ = self._drag
+        dx, dy = e.x_root - x0, e.y_root - y0
+        moved = self._drag[4] or abs(dx) > 4 or abs(dy) > 4
+        self._drag = (x0, y0, wx, wy, moved)
+        if moved:
+            self.geometry(f"+{wx + dx}+{wy + dy}")
+
+    def release(self, e):
+        if not self._drag:
+            return
+        moved = self._drag[4]
+        self._drag = None
+        if moved:
+            self.app.cfg["bubble_pos"] = [self.winfo_x(), self.winfo_y()]
+            save_config(self.app.cfg)
+        else:
+            self.app.show_window()
+
+    def set_state(self, online: bool):
+        self.c.itemconfigure(self.dot, fill=OK if online else MUTED)
+
+
 class Tray:
     """System tray icon with a menu; notifications when a phone connects. Optional (pystray)."""
 
@@ -359,7 +423,7 @@ class Tray:
             pystray.MenuItem("Найти телефон", lambda: self.app.after(0, self.app.ring)),
             pystray.MenuItem("Привязать телефон", lambda: self.app.after(0, lambda: (self.app.show_window(), self.app.show_pair()))),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Выход", lambda: self.app.after(0, self.app.destroy)))
+            pystray.MenuItem("Выход", lambda: self.app.after(0, self.app.quit_app)))
         self.icon = pystray.Icon(APP_NAME, img, APP_NAME, menu)
         threading.Thread(target=self.icon.run, daemon=True).start()
 
@@ -452,7 +516,16 @@ class App(tk.Tk):
         hint = ("На роутере пробросьте TCP-порт %d на этот ПК.\n"
                 "Данные: %s" % (cfg["port"], DATA))
         ttk.Label(f, text=hint, style="Muted.TLabel", justify="left").grid(row=7, column=0, columnspan=2, sticky="w", **pad)
-        ttk.Button(f, text="Выход", command=self.destroy).grid(row=8, column=1, sticky="e", **pad)
+        self.bubble_on = tk.BooleanVar(value=cfg.get("bubble", True))
+        ttk.Checkbutton(f, text="Значок на экране, когда окно свёрнуто", variable=self.bubble_on,
+                        command=self.toggle_bubble).grid(row=8, column=0, columnspan=2, sticky="w", **pad)
+        self.deps_msg = ttk.Label(f, text="", style="Muted.TLabel")
+        self.deps_msg.grid(row=9, column=0, sticky="w", **pad)
+        ttk.Button(f, text="Выход", command=self.quit_app).grid(row=9, column=1, sticky="e", **pad)
+        self.bubble = Bubble(self)
+        threading.Thread(target=lambda: deps.ensure(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m})), daemon=True).start()
+        if "--updated" in sys.argv:
+            self.after(1500, lambda: self.tray.notify(f"Обновлено до версии {updater.current_version()}"))
 
         self.pair_until = 0
         self.cast_win: CastWindow | None = None
@@ -533,13 +606,31 @@ class App(tk.Tk):
             self.code.configure(text=f"{code[:3]} {code[3:]}", fg=ACCENT)
 
     def show_window(self):
+        self.bubble.withdraw()
         self.deiconify(); self.lift(); self.focus_force()
 
     def hide_window(self):
+        """Closing the window never stops the link: it goes to the tray (and the floating badge)."""
         if self.tray.icon:
             self.withdraw()
         else:
             self.iconify()
+        if self.bubble_on.get():
+            self.bubble.deiconify(); self.bubble.lift()
+
+    def toggle_bubble(self):
+        self.cfg["bubble"] = self.bubble_on.get()
+        save_config(self.cfg)
+        if not self.bubble_on.get():
+            self.bubble.withdraw()
+
+    def quit_app(self):
+        """Exit only after an explicit confirmation: the phone would lose the PC."""
+        from tkinter import messagebox
+        self.show_window()
+        if messagebox.askyesno(APP_NAME, "Закрыть PC Remote?\n\nТелефон потеряет доступ к ПК, пока программа не будет запущена снова.",
+                               icon="warning", default="no", parent=self):
+            self.destroy()
 
     def destroy(self):
         self.tray.stop()
@@ -594,6 +685,7 @@ class App(tk.Tk):
 
     def tick(self):
         b = self.backend
+        self.bubble.set_state(b.hub is not None and b.phones > 0)
         if b.error:
             self.status.configure(text=f"  ✖ Ошибка: {b.error}  ", fg=BAD)
         elif b.hub is None:

@@ -192,6 +192,11 @@
         sfx(m.result === "ok" ? "ok" : "offline");
       } else if (m.t === "volume") { applyVolume(m);
       } else if (m.t === "role") { setGuest(!!m.guest);
+      } else if (m.t === "windows") { renderWindows(m.items || []);
+      } else if (m.t === "zone") {
+        if (!m.rect) { zoneRect = zoneImg = null; $("zoneBtn").classList.remove("active"); show(m.error ? "HD-зона: " + m.error : (zoneWanted ? "Движение не найдено — выделите область вручную" : "HD-зона выключена")); }
+        else { $("zoneBtn").classList.add("active"); show("HD-зона включена"); sfx("ok"); }
+        zoneWanted = false;
       } else if (m.t === "sys") { renderSys(m);
       } else if (m.t === "procs") { renderProcs(m.items || []);
       } else if (m.t === "timers") { renderTimers(m.items || []); if (m.result && m.result !== "ok") show("Таймер: " + m.result);
@@ -265,6 +270,7 @@
     const type = new Uint8Array(buf, 0, 1)[0];
     if (type === 1) drawFrame(new Blob([buf.slice(1)], { type: "image/jpeg" }));
     else if (type === 2) playAudio(buf);
+    else if (type === 5) drawZone(buf);
   }
   const img = new Image();
   let pendingUrl = null;
@@ -278,12 +284,26 @@
         frameW = img.naturalWidth; frameH = img.naturalHeight;
         canvas.width = frameW; canvas.height = frameH; layout();
       }
-      ctx.drawImage(img, 0, 0);
+      ctx.drawImage(img, 0, 0); paintZone();
       canvas.classList.add("live");
       frames++; lastFrameAt = Date.now();
       send({ t: "ack" });
     };
     img.src = url;
+  }
+  // HD zone: a native-resolution patch drawn over the base picture
+  let zoneRect = null, zoneImg = null, zoneUrl = null;
+  function drawZone(buf) {
+    const v = new DataView(buf, 1, 8);
+    zoneRect = { x: v.getUint16(0, true) / 1e4, y: v.getUint16(2, true) / 1e4, w: v.getUint16(4, true) / 1e4, h: v.getUint16(6, true) / 1e4 };
+    const url = URL.createObjectURL(new Blob([buf.slice(9)], { type: "image/jpeg" }));
+    const im = new Image();
+    im.onload = () => { if (zoneUrl) URL.revokeObjectURL(zoneUrl); zoneUrl = url; zoneImg = im; paintZone(); };
+    im.src = url;
+  }
+  function paintZone() {
+    if (!zoneImg || !zoneRect || !frameW) return;
+    ctx.drawImage(zoneImg, zoneRect.x * frameW, zoneRect.y * frameH, zoneRect.w * frameW, zoneRect.h * frameH);
   }
   function clearCanvas() { frameW = frameH = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.classList.remove("live"); }
   setInterval(() => {
@@ -489,7 +509,7 @@
   $("menuBtn").addEventListener("click", () => { if (pcOnline) send({ t: "volume_get" }); });
 
   // ---- Android-style nav: ◁ back, ○ start menu, □ task view, ▽ minimize window; edge swipes
-  const NAV = { back: () => tapKey("BrowserBack"), home: () => tapKey("Meta"), recent: () => send({ t: "combo", keys: ["Meta", "Tab"] }),
+  const NAV = { back: () => tapKey("BrowserBack"), home: () => tapKey("Meta"), recent: () => openWindows(),
                 min: () => send({ t: "combo", keys: ["Meta", "ArrowDown"] }) };
   $("navbar").addEventListener("click", (e) => { const b = e.target.closest("button[data-nav]"); if (!b || !pcOnline) return; NAV[b.dataset.nav](); buzz(10); });
   $("navbar").addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
@@ -550,12 +570,13 @@
   // --------------------------------------------------------------- menu
   // pages (settings, files, terminal) and sheets (menu, power) + dock state
   const pages = ["settingsPage", "filesPage", "termPanel", "sysPage"];
-  function showPage(id) { for (const p of pages) $(p).hidden = p !== id; menu.hidden = true; $("powerSheet").hidden = true; dockState(id); }
+  const hideSheets = () => { menu.hidden = true; for (const id of ["powerSheet", "winSheet", "zoneSheet"]) $(id).hidden = true; };
+  function showPage(id) { for (const p of pages) $(p).hidden = p !== id; hideSheets(); dockState(id); }
   function closePages() { for (const p of pages) $(p).hidden = true; dockState("screen"); }
   function dockState(id) { for (const [bid, pid] of [["dockScreen", "screen"], ["filesBtn", "filesPage"], ["termBtn", "termPanel"]]) $(bid).classList.toggle("on", pid === id); }
   document.querySelectorAll("[data-close]").forEach((b) => (b.onclick = closePages));
-  $("dockScreen").onclick = () => { closePages(); menu.hidden = true; $("powerSheet").hidden = true; };
-  $("menuBtn").onclick = () => { $("powerSheet").hidden = true; menu.hidden = !menu.hidden; };
+  $("dockScreen").onclick = () => { closePages(); hideSheets(); };
+  $("menuBtn").onclick = () => { const was = menu.hidden; hideSheets(); menu.hidden = !was; };
   $("powerBtn").onclick = () => { menu.hidden = true; $("powerSheet").hidden = false; };
   $("settingsBtn").onclick = () => showPage("settingsPage");
   document.addEventListener("click", async (e) => {
@@ -1038,6 +1059,53 @@
   };
 
   // ================================================================
+  // Windows switcher (□) and HD zone
+  // ================================================================
+  const AV = ["#4f8cff", "#38d070", "#a06bff", "#ff8a3d", "#ff4f8b", "#2bbac5", "#e0c341"];
+  const hue = (s) => AV[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % AV.length];
+  function openWindows() { menu.hidden = true; $("powerSheet").hidden = true; $("zoneSheet").hidden = true; $("winSheet").hidden = false; send({ t: "windows_get" }); }
+  $("winBtn").onclick = openWindows;
+  $("winRefresh").onclick = () => { send({ t: "windows_get" }); buzz(6); };
+  $("winDesktop").onclick = () => { send({ t: "combo", keys: ["Meta", "d"] }); $("winSheet").hidden = true; buzz(10); };
+  function renderWindows(items) {
+    const L = $("winList"); L.innerHTML = items.length ? "" : `<div class="empty">Открытых окон нет</div>`;
+    for (const w of items) {
+      const d = document.createElement("div"); d.className = "w" + (w.active ? " active" : "");
+      const label = (w.proc || w.title).slice(0, 1).toUpperCase();
+      d.innerHTML = `<span class="av" style="background:${hue(w.proc || w.title)}">${label}</span><span class="n"><b>${w.title.replace(/</g, "&lt;")}</b><span>${w.proc || ""}${w.min ? " · свёрнуто" : ""}${w.active ? " · активно" : ""}</span></span><button title="Закрыть">✕</button>`;
+      d.querySelector("button").onclick = (e) => { e.stopPropagation(); closeWin(d, w); };
+      d.onclick = () => { send({ t: "window", op: "focus", hwnd: w.hwnd }); $("winSheet").hidden = true; buzz(10); };
+      // swipe left = close, like Android
+      let sx = null;
+      d.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; e.stopPropagation(); }, { passive: true });
+      d.addEventListener("touchmove", (e) => { if (sx === null) return; const dx = e.touches[0].clientX - sx; if (dx < 0) d.style.transform = `translateX(${dx}px)`; }, { passive: true });
+      d.addEventListener("touchend", (e) => { const dx = e.changedTouches[0].clientX - (sx ?? 0); d.style.transform = ""; if (sx !== null && dx < -90) closeWin(d, w); sx = null; });
+      L.appendChild(d);
+    }
+  }
+  function closeWin(d, w) { d.classList.add("gone"); send({ t: "window", op: "close", hwnd: w.hwnd }); buzz([10, 30, 10]); }
+
+  let zoneWanted = false;
+  $("zoneBtn").onclick = () => { menu.hidden = true; $("zoneSheet").hidden = false; };
+  $("zoneAuto").onclick = () => { $("zoneSheet").hidden = true; if (!pcOnline) return show("ПК не в сети"); zoneWanted = true; send({ t: "zone", auto: true }); show("Ищу движение на экране…", 1800); };
+  $("zoneOff").onclick = () => { $("zoneSheet").hidden = true; send({ t: "zone", off: true }); };
+  $("zoneManual").onclick = () => { $("zoneSheet").hidden = true; $("zoneSel").hidden = false; };
+  (() => {
+    const sel = $("zoneSel"), box = sel.querySelector(".zbox"); let p0 = null;
+    const rect = (a, b) => ({ l: Math.min(a.x, b.x), t: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
+    sel.addEventListener("touchstart", (e) => { e.preventDefault(); e.stopPropagation(); const t = e.touches[0]; p0 = { x: t.clientX, y: t.clientY }; box.style.display = "block"; }, { passive: false });
+    sel.addEventListener("touchmove", (e) => { e.preventDefault(); if (!p0) return; const t = e.touches[0]; const r = rect(p0, { x: t.clientX, y: t.clientY });
+      box.style.left = r.l + "px"; box.style.top = r.t + "px"; box.style.width = r.w + "px"; box.style.height = r.h + "px"; }, { passive: false });
+    sel.addEventListener("touchend", (e) => {
+      e.preventDefault(); sel.hidden = true; box.style.display = "none"; if (!p0) return;
+      const t = e.changedTouches[0]; const a = toPC(p0.x, p0.y), b = toPC(t.clientX, t.clientY); p0 = null;
+      const z = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
+      if (z.w < 0.03 || z.h < 0.03) return show("Слишком маленькая область");
+      send({ t: "zone", ...z }); buzz(12);
+    }, { passive: false });
+  })();
+
+  // ================================================================
   // System page: state / processes / timers / devices / downloads / log
   // ================================================================
   let sysTab = "state", sysTimer = null, guest = false;
@@ -1128,7 +1196,7 @@
   // guest: a relative with the guest code sees the screen and the power buttons, nothing else
   function setGuest(on) {
     guest = on; document.body.classList.toggle("guest", on);
-    if (on) for (const id of ["filesBtn", "termBtn", "kbBtn", "macrosBtn", "shotBtn", "pasteBtn", "linkBtn", "sayBtn", "castBtn", "termMenuBtn", "volRow", "pcClipBtn", "audioBtn"]) $(id).hidden = true;
+    if (on) for (const id of ["filesBtn", "termBtn", "kbBtn", "macrosBtn", "shotBtn", "pasteBtn", "linkBtn", "sayBtn", "castBtn", "termMenuBtn", "volRow", "pcClipBtn", "audioBtn", "winBtn", "zoneBtn"]) $(id).hidden = true;
     document.querySelectorAll("#sysTabs button").forEach((b) => (b.hidden = on && b.dataset.tab !== "state"));
     if (on) pill("Гостевой режим: только просмотр и питание", true, 4000);
   }
