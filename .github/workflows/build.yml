@@ -22,11 +22,15 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: pip install -r relay/requirements.txt cryptography Pillow
+        run: |
+          pip install -r relay/requirements.txt cryptography Pillow playwright
+          python -m playwright install --with-deps chromium
       - name: Relay attack suite
         run: python tests/test_relay_attacks.py
       - name: Phone files end to end
         run: python tests/test_phone_cli.py
+      - name: Web client smoke test (real browser)
+        run: python tests/test_web_smoke.py
       - name: Web client syntax
         run: node -e "new Function(require('fs').readFileSync('web/app.js','utf8')); new Function(require('fs').readFileSync('web/cc_ru.js','utf8')); console.log('js ok')"
 
