@@ -126,6 +126,12 @@ async def main():
         report("stats", st.get("dns_queries") == 5 and st.get("dns_blocked") == 2 and st.get("dns_cached") == 1 and st.get("sessions") == 1 and st.get("dns_upstreams"), m.data[:160])
         hs = await s.get(U + "/api/status", headers={"Authorization": "Bearer " + T}); j = await hs.json()
         report("/api/status carries net stats", j.get("net", {}).get("dns_blocked") == 2, json.dumps(j.get("net"))[:100])
+        # /api/apk: index + file, token required, names sanitised
+        (tmp / "apk").mkdir(); (tmp / "apk" / "index.json").write_text('{"version": "9.9", "files": {"pcremote.apk": {"sha256": "ab"}}}'); (tmp / "apk" / "pcremote.apk").write_bytes(b"PK-fake")
+        hub.cfg["apk_dir"] = str(tmp / "apk")
+        H = {"Authorization": "Bearer " + T}
+        r1 = await s.get(U + "/api/apk", headers=H); r2 = await s.get(U + "/api/apk?name=pcremote.apk", headers=H); r3 = await s.get(U + "/api/apk?name=../index.json", headers=H); r4 = await s.get(U + "/api/apk")
+        report("/api/apk index, file, traversal refused, token required", r1.status == 200 and (await r1.json())["version"] == "9.9" and r2.status == 200 and await r2.read() == b"PK-fake" and r3.status == 404 and r4.status == 403, f"{r1.status} {r2.status} {r3.status} {r4.status}")
         # disabled on the PC -> refused
         hub.netproxy.enabled = False
         ws2 = await ws_net(s, T); m = await ws2.receive()

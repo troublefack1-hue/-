@@ -202,18 +202,23 @@ public class MainActivity extends Activity {
     /** At every launch, silently (one small request to GitHub); from the row, with a word back either way. */
     private void checkUpdate(boolean manual) {
         if (manual && updRow != null) ((TextView) updRow.getChildAt(1)).setText("проверяю…");
+        Updater.pc = prefs.contains("secret") ? new Updater.Pc(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""), prefs.getString("secret", ""), prefs.getString("lan", "")) : null;
         new Thread(() -> {
             try {
                 String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-                Updater.Info info = Updater.check(cur, "pcremote-net.apk");
+                Updater.Info found = null; boolean fromPc = false;
+                if (Updater.pc != null) { try { found = Updater.checkPc(cur, "pcremote-net.apk"); fromPc = found != null; } catch (Exception ignored) {} }
+                if (found == null) found = Updater.check(cur, "pcremote-net.apk");
+                final Updater.Info info = found;
                 if (info == null) {
                     if (manual) runOnUiThread(() -> { Toast.makeText(this, "Это последняя версия (" + cur + ")", Toast.LENGTH_SHORT).show(); if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("версия " + cur + " · это последняя"); });
                     return;
                 }
                 if (manual) runOnUiThread(() -> { if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("скачиваю " + info.version + "…"); });
-                java.io.File apk = Updater.download(info.url, getCacheDir(), info.sha256);
+                java.io.File apk = fromPc ? Updater.downloadPc("pcremote-net.apk", getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
+                final String src = fromPc ? " (с ПК)" : " (с GitHub)";
                 runOnUiThread(() -> {
-                    Toast.makeText(this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "Обновление " + info.version + src + " — установите", Toast.LENGTH_LONG).show();
                     if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("версия " + cur + " → " + info.version + ": установите");
                     startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"),
                             "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK));

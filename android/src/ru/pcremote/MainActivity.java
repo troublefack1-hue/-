@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception ignored) {}
         }
+        syncUpdaterPc();
         if (!handlePairLink(getIntent())) {
             if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); } else showSetup(null);
         }
@@ -120,15 +121,43 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** Tell the shared Updater which PC we are paired with: updates come from it, with its own signing key. */
+    private void syncUpdaterPc() {
+        Updater.pc = prefs.contains("secret") ? new Updater.Pc(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""), prefs.getString("secret", ""), prefs.getString("lan", "")) : null;
+    }
+
+    /** From the page: install or update another of our apps straight from the PC (same key, no GitHub). */
+    void installFromPc(String asset, boolean quiet) {
+        syncUpdaterPc();
+        if (Updater.pc == null) { Toast.makeText(this, "Сначала привяжите ПК", Toast.LENGTH_SHORT).show(); return; }
+        if (!quiet) Toast.makeText(this, "Запрашиваю " + asset + " у ПК…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                Updater.Info info = Updater.checkPc("0", asset);
+                if (info == null) throw new java.io.IOException("на ПК ещё нет этого приложения: откройте окно PC Remote, оно скачает");
+                java.io.File apk = Updater.downloadPc(asset, getCacheDir(), info.sha256);
+                runOnUiThread(() -> {
+                    Toast.makeText(this, asset + " " + info.version + " с ПК — установите", Toast.LENGTH_LONG).show();
+                    startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"), "application/vnd.android.package-archive")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK));
+                });
+            } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Не удалось: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+        }).start();
+    }
+
     // ----------------------------------------------------------- update ---
     /** At every launch: newer release on GitHub -> download -> system "Install" dialog. */
     private void checkUpdate() {
         new Thread(() -> {
             try {
                 String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-                Updater.Info info = Updater.check(cur);
+                syncUpdaterPc();
+                Updater.Info found = null; boolean fromPc = false;
+                if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
+                if (found == null) found = Updater.check(cur);
+                final Updater.Info info = found;
                 if (info == null) return;
-                java.io.File apk = Updater.download(info.url, getCacheDir(), info.sha256);
+                java.io.File apk = fromPc ? Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
                 runOnUiThread(() -> {
                     Toast.makeText(this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
                     Intent i = new Intent(Intent.ACTION_VIEW)
@@ -375,10 +404,15 @@ public class MainActivity extends Activity {
             new Thread(() -> {
                 try {
                     String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-                    Updater.Info info = Updater.check(cur);
+                    syncUpdaterPc();
+                    Updater.Info found = null; boolean fromPc = false;
+                    if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
+                    if (found == null) found = Updater.check(cur);
+                    final Updater.Info info = found;
                     if (info == null) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Это последняя версия (" + cur + ")", Toast.LENGTH_SHORT).show()); return; }
-                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Скачиваю " + info.version + "…", Toast.LENGTH_SHORT).show());
-                    Updater.download(info.url, getCacheDir(), info.sha256);
+                    final String src = fromPc ? " с ПК" : " с GitHub";
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Скачиваю " + info.version + src + "…", Toast.LENGTH_SHORT).show());
+                    if (fromPc) Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256); else Updater.download(info.url, getCacheDir(), info.sha256);
                     runOnUiThread(() -> {
                         Toast.makeText(MainActivity.this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
                         startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"), "application/vnd.android.package-archive")
@@ -387,6 +421,8 @@ public class MainActivity extends Activity {
                 } catch (Exception e) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Не удалось проверить: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
             }).start();
         }
+
+        @JavascriptInterface public void installFromPc(String asset) { runOnUiThread(() -> MainActivity.this.installFromPc(asset, false)); }
 
         @JavascriptInterface public void repair() {
             prefs.edit().remove("secret").apply();

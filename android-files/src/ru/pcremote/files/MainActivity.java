@@ -747,13 +747,18 @@ public class MainActivity extends Activity {
     // ==================================================================== update ===
     private void checkUpdate(boolean manual) {
         if (manual) toast("Проверяю обновления…");
+        Updater.pc = prefs.contains("secret") ? new Updater.Pc(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""), prefs.getString("secret", ""), prefs.getString("lan", "")) : null;
         new Thread(() -> {
             try {
                 String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-                Updater.Info info = Updater.check(cur, "pcremote-files.apk");
+                Updater.Info found = null; boolean fromPc = false;
+                if (Updater.pc != null) { try { found = Updater.checkPc(cur, "pcremote-files.apk"); fromPc = found != null; } catch (Exception ignored) {} }
+                if (found == null) found = Updater.check(cur, "pcremote-files.apk");
+                final Updater.Info info = found;
                 if (info == null) { if (manual) ui.post(() -> toast("Это последняя версия (" + cur + ")")); return; }
-                if (manual) ui.post(() -> toast("Скачиваю " + info.version + "…"));
-                File apk = Updater.download(info.url, getCacheDir(), info.sha256);
+                final String src = fromPc ? " с ПК" : " с GitHub";
+                if (manual) ui.post(() -> toast("Скачиваю " + info.version + src + "…"));
+                File apk = fromPc ? Updater.downloadPc("pcremote-files.apk", getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
                 ui.post(() -> { toast("Обновление " + info.version + " — установите"); startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(FileProvider.uriFor(apk), "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)); });
             } catch (Exception e) { if (manual) ui.post(() -> toast("Не удалось проверить: " + e.getMessage())); }
         }).start();

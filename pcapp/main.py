@@ -253,7 +253,7 @@ class Backend:
             "ca_cert": str(DATA / "ca.crt"),
             "upload_dir": self.cfg["upload_dir"], "share_dirs": self.cfg["share_dirs"],
             "guest_secret": self.cfg["guest_secret"],
-            "extra_ports": self.cfg.get("extra_ports", []),
+            "extra_ports": self.cfg.get("extra_ports", []), "apk_dir": str(DATA / "apk"),
             "net_proxy": self.cfg.get("net_proxy", True), "net_block_ads": self.cfg.get("net_block_ads", True),
             "net_dir": str(DATA / "net"),
         }
@@ -590,6 +590,10 @@ class App(tk.Tk):
 
         def deps_worker():
             deps.ensure(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}), want_video=self.cfg.get("video", True))
+            try:   # the phone apps, re-signed with this PC's key, so the phones update from here
+                updater.refresh_apks(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}))
+            except Exception:  # noqa: BLE001
+                log.exception("apk refresh")
             try:
                 import video as video_mod
                 if self.backend.agent:

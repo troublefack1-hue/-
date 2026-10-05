@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -62,7 +63,7 @@ def expected_sha256(sums_url: str | None, name: str) -> str | None:
     return None
 
 
-def download(url: str, dest: Path, sha256: str | None = None) -> Path:
+def download(url: str, dest: Path, sha256: str | None = None, exe: bool = True) -> Path:
     import hashlib
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(".part")
@@ -72,9 +73,13 @@ def download(url: str, dest: Path, sha256: str | None = None) -> Path:
         while chunk := r.read(1 << 16):
             f.write(chunk)
             h.update(chunk)
-    if part.stat().st_size < 1_000_000 or part.read_bytes()[:2] != b"MZ":
+    head = part.read_bytes()[:2] if part.stat().st_size >= 2 else b""
+    if exe and (part.stat().st_size < 1_000_000 or head != b"MZ"):
         part.unlink(missing_ok=True)
         raise RuntimeError("downloaded file is not a valid exe")
+    if not exe and head != b"PK":
+        part.unlink(missing_ok=True)
+        raise RuntimeError("downloaded file is not a valid apk")
     if sha256 and h.hexdigest() != sha256:
         part.unlink(missing_ok=True)
         raise RuntimeError("checksum mismatch: the download does not match the published SHA256SUMS")
@@ -97,3 +102,59 @@ def apply(new_exe: Path, version: str = "") -> bool:
         "del \"%~f0\"\r\n", encoding="cp866")
     subprocess.Popen(["cmd", "/c", str(script)], creationflags=0x00000008 | 0x00000200)  # DETACHED, NEW_PROCESS_GROUP
     return True
+
+
+# ------------------------------------------------------------ phone apps ---
+APK_NAMES = ["pcremote.apk", "pcremote-net.apk", "pcremote-files.apk"]
+
+
+def refresh_apks(data: Path, status=None) -> dict | None:
+    """Fetch the release's phone apps, check their sums, re-sign them with this PC's key (apksign.py)
+    and keep them in data/apk for the phones to update from. Returns the index, None if nothing to do."""
+    import json
+    import apksign
+    folder = data / "apk"
+    folder.mkdir(parents=True, exist_ok=True)
+    index_path = folder / "index.json"
+    try:
+        index = json.loads(index_path.read_text("utf-8")) if index_path.exists() else {}
+    except ValueError:
+        index = {}
+    try:
+        req = urllib.request.Request(API, headers={"User-Agent": "pc-remote", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            rel = json.load(r)
+    except Exception as e:  # noqa: BLE001
+        log.info("apk refresh: release unavailable: %s", e)
+        return index or None
+    version = str(rel.get("tag_name", "")).lstrip("v")
+    if not version:
+        return index or None
+    assets = {a.get("name"): a.get("browser_download_url") for a in rel.get("assets", [])}
+    sums_url = assets.get("SHA256SUMS")
+    key, cert = apksign.ensure_key(data)
+    fp = apksign.cert_sha256(cert)
+    if index.get("version") == version and index.get("cert") == fp and all((folder / n).exists() for n in index.get("files", {})):
+        return index
+    files = {}
+    for name in APK_NAMES:
+        url = assets.get(name)
+        if not url:
+            continue
+        if status:
+            status(f"приложения для телефона: {name} {version}…")
+        try:
+            raw = download(url, folder / (name + ".download"), expected_sha256(sums_url, name), exe=False)
+            sha = apksign.sign(raw, folder / name, key, cert)
+            raw.unlink(missing_ok=True)
+            files[name] = {"sha256": sha, "size": (folder / name).stat().st_size}
+        except Exception as e:  # noqa: BLE001
+            log.warning("apk %s: %s", name, e)
+    if not files:
+        return index or None
+    index = {"version": version, "cert": fp, "files": files, "at": time.time()}
+    index_path.write_text(json.dumps(index, ensure_ascii=False, indent=1), "utf-8")
+    if status:
+        status(f"приложения для телефона готовы: {version}, подпись этого ПК")
+    log.info("phone apps re-signed: %s (%s)", version, ", ".join(files))
+    return index

@@ -18,6 +18,62 @@ public final class Updater {
     static final String API = "https://api.github.com/repos/" + REPO + "/releases/latest";
     static final String ASSET = "pcremote.apk";
 
+    /** The paired PC, if any: updates come from it first (same signing key every time, no GitHub secrets). */
+    public static final class Pc { public final String host, pin, secret, lan; public final int port; public Pc(String h, int p, String pin, String s, String lan) { host = h; port = p; this.pin = pin; secret = s; this.lan = lan == null ? "" : lan; } }
+    public static volatile Pc pc;
+
+    /** GET from the paired PC over pinned TLS; returns the body (Content-Length or chunked both handled). */
+    public static byte[] pcGet(String path, java.io.File saveTo, String sha256) throws IOException {
+        Pc p = pc; if (p == null) throw new IOException("ПК не привязан");
+        try (javax.net.ssl.SSLSocket s = Pinned.connectPreferLan(p.lan, p.host, p.port, p.pin, null, 10000, true)) {
+            s.setSoTimeout(60000);
+            java.io.OutputStream out = s.getOutputStream();
+            out.write(("GET " + path + " HTTP/1.1\r\nHost: " + p.host + "\r\nAuthorization: Bearer " + p.secret + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII)); out.flush();
+            java.io.InputStream in = s.getInputStream();
+            String status = readLine(in); if (status == null || !status.contains(" 200 ")) throw new IOException("ПК ответил: " + status);
+            String l; long len = -1; boolean chunked = false;
+            while ((l = readLine(in)) != null && !l.isEmpty()) { String k = l.toLowerCase(); if (k.startsWith("content-length:")) len = Long.parseLong(l.substring(15).trim()); if (k.startsWith("transfer-encoding:") && k.contains("chunked")) chunked = true; }
+            java.io.ByteArrayOutputStream mem = saveTo == null ? new java.io.ByteArrayOutputStream() : null;
+            java.io.OutputStream dst = saveTo == null ? mem : new java.io.FileOutputStream(saveTo);
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            try {
+                byte[] buf = new byte[65536]; long got = 0;
+                if (chunked) {
+                    while (true) {
+                        String hl = readLine(in); while (hl != null && hl.isEmpty()) hl = readLine(in); if (hl == null) break;
+                        int semi = hl.indexOf(';'); long left = Long.parseLong((semi >= 0 ? hl.substring(0, semi) : hl).trim(), 16); if (left == 0) break;
+                        while (left > 0) { int r = in.read(buf, 0, (int) Math.min(buf.length, left)); if (r < 0) throw new IOException("обрыв"); dst.write(buf, 0, r); md.update(buf, 0, r); left -= r; }
+                        readLine(in);
+                    }
+                } else {
+                    int r; while ((len < 0 || got < len) && (r = in.read(buf)) > 0) { dst.write(buf, 0, r); md.update(buf, 0, r); got += r; }
+                }
+            } finally { dst.close(); }
+            if (sha256 != null && !sha256.isEmpty()) { StringBuilder h = new StringBuilder(); for (byte b : md.digest()) h.append(String.format("%02x", b)); if (!h.toString().equalsIgnoreCase(sha256)) { if (saveTo != null) saveTo.delete(); throw new IOException("файл с ПК повреждён (сумма не совпала)"); } }
+            return mem == null ? null : mem.toByteArray();
+        } catch (java.security.NoSuchAlgorithmException e) { throw new IOException(e); }
+    }
+
+    static String readLine(java.io.InputStream in) throws IOException {
+        StringBuilder sb = new StringBuilder(); int c;
+        while ((c = in.read()) >= 0) { if (c == '\n') break; if (c != '\r') sb.append((char) c); }
+        return c < 0 && sb.length() == 0 ? null : sb.toString();
+    }
+
+    /** The PC's copy of {@code asset} if newer than {@code current}: version + sha256 from /api/apk (index). */
+    public static Info checkPc(String current, String asset) throws IOException {
+        String json = new String(pcGet("/api/apk", null, null), StandardCharsets.UTF_8);
+        int i = json.indexOf("\"" + asset + "\""); if (i < 0) return null;
+        String version = Pairing.jsonString(json, "version"); String sha = Pairing.jsonString(json.substring(i), "sha256");
+        if (version == null || compare(version, current) <= 0) return null;
+        return new Info(version, "/api/apk?name=" + asset, sha);
+    }
+
+    /** Download {@code asset} from the PC into dir/update.apk, checking the published sum. */
+    public static File downloadPc(String asset, File dir, String sha256) throws IOException {
+        File f = new File(dir, "update.apk"); pcGet("/api/apk?name=" + asset, f, sha256); return f;
+    }
+
     public static final class Info {
         public final String version, url, sha256;
         Info(String v, String u, String h) { version = v; url = u; sha256 = h; }

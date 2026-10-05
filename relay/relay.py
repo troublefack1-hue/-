@@ -75,6 +75,7 @@ def load_config() -> dict:
     cfg.setdefault("upload_dir", "")
     cfg.setdefault("share_dirs", [])
     # the phone's internet through this PC (second phone app): see netproxy.py
+    cfg.setdefault("apk_dir", "")          # phone apps re-signed by this PC (pcapp/updater.refresh_apks) for /api/apk
     cfg.setdefault("extra_ports", [])      # more TLS listeners (same app) for the phone's "which port is faster" probe
     cfg.setdefault("net_proxy", True)
     cfg.setdefault("net_block_ads", True)
@@ -640,6 +641,26 @@ class Hub:
             raise web.HTTPForbidden(headers=CORS)
         return web.json_response(self.status(), headers=CORS)
 
+    async def apk_handler(self, request: web.Request):
+        """The phone apps, re-signed with this PC's key: /api/apk -> index.json, /api/apk?name=x.apk -> the file."""
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        folder = Path(self.cfg.get("apk_dir") or "")
+        name = request.query.get("name", "")
+        if not self.cfg.get("apk_dir") or not folder.is_dir():
+            return web.json_response({"error": "на ПК ещё нет приложений для телефона"}, status=404, headers=CORS)
+        if not name:
+            idx = folder / "index.json"
+            if not idx.exists():
+                return web.json_response({"error": "ПК ещё не скачал приложения"}, status=404, headers=CORS)
+            return web.Response(body=idx.read_bytes(), content_type="application/json", headers={**CORS, "Cache-Control": "no-store"})
+        safe = Path(name).name
+        p = folder / safe
+        if not safe.endswith(".apk") or not p.is_file():
+            raise web.HTTPNotFound(headers=CORS)
+        return web.FileResponse(p, headers={**CORS, "Content-Type": "application/vnd.android.package-archive",
+                                            "Content-Disposition": f'attachment; filename="{safe}"', "Cache-Control": "no-store"})
+
     async def ping_handler(self, request: web.Request):
         """n bytes of incompressible data for the phone's link probe (RTT = time to first byte, then throughput)."""
         if not self.check_header(request, owner_only=False):
@@ -1020,6 +1041,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_post("/api/wake", hub.wake_handler)
     app.router.add_get("/api/status", hub.status_handler)
     app.router.add_get("/api/ping", hub.ping_handler)
+    app.router.add_get("/api/apk", hub.apk_handler)
     app.router.add_get("/api/pair", hub.pair_handler)
     app.router.add_get("/api/events", hub.events_handler)
     app.router.add_post("/api/upload", hub.upload_handler)
