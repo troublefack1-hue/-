@@ -47,6 +47,17 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 ```
 Коммит только когда всё зелёное: один красный коммит уже ломал страницу телефона.
 
+## Проверено на живом железе
+
+- 05.10.2026, exe v1.105 падал при запуске: «No module named 'aiohttp'». Причина: `main.py` подключает
+  `relay`/`agent` через `sys.path` во время работы, PyInstaller их не анализировал и не упаковывал их
+  зависимости. Починено `--paths relay --paths agent --paths pcapp` и явными `--hidden-import` модулей
+  проекта и `send2trash/psutil/pyaudiowpatch/qrcode`, `--collect-all aiohttp` (CI и `build_exe.ps1`).
+  Локальная сборка с этими ключами: окно открылось, слушает 8443 и 8787, захват DXGI, агент подключился.
+  Осталось: `pycaw unavailable ('AudioDevice' object has no attribute 'Activate')` — громкость только медиаклавишами.
+- Белый IP 78.29.49.124, проброс TCP 8443 на роутере SNR работает (подключения снаружи доходят).
+  Kill Switch AmneziaVPN режет входящие даже для исключённых программ — держать выключенным.
+
 ## Что ещё НЕ проверялось на живом железе (проверить в первую очередь)
 
 - Захват экрана при масштабе Windows 125–150 % и на двух мониторах; HD-зона; смена разрешения. DXGI через dxcam (`agent/capture.py`): реально ли быстрее GDI на этой видеокарте, откат на GDI при полноэкранной игре, `--collect-all dxcam` в PyInstaller (numpy внутри).

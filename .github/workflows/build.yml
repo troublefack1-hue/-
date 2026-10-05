@@ -64,6 +64,9 @@ jobs:
           pip install -r agent/requirements.txt -r relay/requirements.txt cryptography pystray qrcode dxcam pyinstaller
           pyinstaller --noconfirm --clean --onefile --windowed --name "PC Remote" `
             --add-data "relay;relay" --add-data "agent;agent" --add-data "web;web" --add-data "VERSION;." --add-data "pcapp/phone_cli;pcapp/phone_cli" `
+            --paths relay --paths agent --paths pcapp `
+            --hidden-import agent --hidden-import relay --hidden-import certs --hidden-import netproxy --hidden-import audio_out --hidden-import capture --hidden-import extras --hidden-import notify_watch --hidden-import opus --hidden-import video --hidden-import apksign --hidden-import deps --hidden-import updater `
+            --hidden-import send2trash --hidden-import psutil --hidden-import pyaudiowpatch --hidden-import qrcode --collect-all aiohttp `
             --hidden-import mss.windows --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 --collect-all winpty --collect-all comtypes --collect-all pycaw --collect-all dxcam `
             pcapp/main.py
           Rename-Item "dist/PC Remote.exe" "PC-Remote.exe"
