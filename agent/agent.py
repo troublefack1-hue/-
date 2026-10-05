@@ -31,6 +31,8 @@ import aiohttp
 import mss
 from PIL import Image
 
+import extras
+
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.json"
 FRAME_VIDEO, FRAME_AUDIO = b"\x01", b"\x02"
@@ -459,16 +461,19 @@ class Audio:
         except ImportError:
             return False
 
-    def start(self):
+    def start(self, source: str = "speakers"):
         import pyaudiowpatch as pyaudio
         self.pa = pyaudio.PyAudio()
         wasapi = self.pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-        dev = self.pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
-        if not dev.get("isLoopbackDevice"):
-            for d in self.pa.get_loopback_device_info_generator():
-                if dev["name"] in d["name"]:
-                    dev = d
-                    break
+        if source == "mic":
+            dev = self.pa.get_device_info_by_index(wasapi["defaultInputDevice"])
+        else:
+            dev = self.pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
+            if not dev.get("isLoopbackDevice"):
+                for d in self.pa.get_loopback_device_info_generator():
+                    if dev["name"] in d["name"]:
+                        dev = d
+                        break
         self.src_rate = int(dev["defaultSampleRate"])
         self.channels = int(dev["maxInputChannels"])
         self.stream = self.pa.open(format=pyaudio.paInt16, channels=self.channels, rate=self.src_rate,
@@ -513,6 +518,19 @@ class Agent:
         self.terms: dict[str, Term] = {}
         self.volume = Volume()
         self.screen_ok = True
+        self.stats = extras.Stats()
+        self.timers = extras.Timers(run_command)
+        self.downloads = extras.Downloads(os.path.join(os.path.expanduser("~"), "Downloads", "PC Remote"), self._notify)
+        self.rules = {"on_connect_monitor": False, "on_disconnect_lock": False, "on_disconnect_monitor_off": False}
+        self.audio_source = "speakers"
+        self._ws = None
+
+    async def _notify(self, msg: dict):
+        if self._ws is not None:
+            try:
+                await self._ws.send_str(json.dumps(msg))
+            except Exception:  # noqa: BLE001
+                pass
 
     def ws_url(self) -> str:
         base = self.cfg["relay_url"].rstrip("/")
@@ -526,6 +544,7 @@ class Agent:
                 async with aiohttp.ClientSession() as s:
                     async with s.ws_connect(self.ws_url(), heartbeat=20, max_msg_size=64 * 1024) as ws:
                         await ws.send_str(json.dumps({"t": "auth", "token": self.cfg["secret"]}))
+                        self._ws = ws
                         log.info("connected to relay")
                         delay = 2
                         await ws.send_str(json.dumps({
@@ -607,7 +626,7 @@ class Agent:
                 continue
             if not self.audio.stream:
                 try:
-                    await loop.run_in_executor(None, self.audio.start)
+                    await loop.run_in_executor(None, self.audio.start, self.audio_source)
                 except Exception as e:  # noqa: BLE001
                     log.warning("audio unavailable: %s", e)
                     self.audio_on = False
@@ -675,11 +694,71 @@ class Agent:
                     # keep the PC awake while someone is connected (monitor may be off)
                     ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
                     kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if self.viewers else 0))
+                    if self.viewers and self.rules.get("on_connect_monitor"):
+                        extras.monitor_power(True)
+                    if not self.viewers:
+                        if self.rules.get("on_disconnect_lock"):
+                            run_command("lock")
+                        if self.rules.get("on_disconnect_monitor_off"):
+                            extras.monitor_power(False)
                 elif t == "volume":
                     self.volume.set(ev.get("level"), ev.get("mute"), self.input)
                     await ws.send_str(json.dumps({"t": "volume", **self.volume.get()}))
                 elif t == "volume_get":
                     await ws.send_str(json.dumps({"t": "volume", **self.volume.get()}))
+                elif t == "audio_source":
+                    self.audio_source = "mic" if ev.get("src") == "mic" else "speakers"
+                    if self.audio.stream:
+                        self.audio.stop()  # restarts with the new source on the next loop
+                elif t == "rules":
+                    for k in self.rules:
+                        if k in ev:
+                            self.rules[k] = bool(ev[k])
+                elif t == "sys_get":
+                    loop = asyncio.get_running_loop()
+                    snap = await loop.run_in_executor(None, self.stats.snapshot, bool(ev.get("temps")))
+                    await ws.send_str(json.dumps({"t": "sys", **snap}))
+                elif t == "procs_get":
+                    loop = asyncio.get_running_loop()
+                    rows = await loop.run_in_executor(None, self.stats.processes)
+                    await ws.send_str(json.dumps({"t": "procs", "items": rows}))
+                elif t == "proc_kill":
+                    res = self.stats.kill(int(ev.get("pid", 0)))
+                    await ws.send_str(json.dumps({"t": "cmd_result", "cmd": "kill", "result": res}))
+                elif t == "timer_set":
+                    res = await self.timers.set(str(ev.get("action")), int(ev.get("seconds", 0)))
+                    await ws.send_str(json.dumps({"t": "timers", "items": self.timers.list(), "result": res}))
+                elif t == "timer_cancel":
+                    await self.timers.cancel_all()
+                    await ws.send_str(json.dumps({"t": "timers", "items": []}))
+                elif t == "timers_get":
+                    await ws.send_str(json.dumps({"t": "timers", "items": self.timers.list()}))
+                elif t == "device":
+                    op = ev.get("op")
+                    if op == "monitor_off":
+                        res = extras.monitor_power(False)
+                    elif op == "monitor_on":
+                        res = extras.monitor_power(True)
+                    elif op == "powerplan":
+                        res = extras.set_power_plan(str(ev.get("value", "")))
+                    else:
+                        res = "unknown"
+                    await ws.send_str(json.dumps({"t": "cmd_result", "cmd": op, "result": res}))
+                elif t == "powerplans_get":
+                    await ws.send_str(json.dumps({"t": "powerplans", "items": extras.power_plans()}))
+                elif t == "say":
+                    extras.say(str(ev.get("text", "")))
+                elif t == "print":
+                    res = extras.print_file(str(ev.get("path", "")))
+                    await ws.send_str(json.dumps({"t": "cmd_result", "cmd": "print", "result": res}))
+                elif t == "download":
+                    res = await self.downloads.start(str(ev.get("url", "")), ev.get("dir"))
+                    await ws.send_str(json.dumps({"t": "downloads", "items": self.downloads.list(), "result": res}))
+                elif t == "downloads_get":
+                    await ws.send_str(json.dumps({"t": "downloads", "items": self.downloads.list()}))
+                elif t == "download_cancel":
+                    self.downloads.cancel(str(ev.get("id", "")))
+                    await ws.send_str(json.dumps({"t": "downloads", "items": self.downloads.list()}))
                 elif t == "profile":
                     self.screen.set_profile(str(ev.get("name", "normal")))
                 elif t == "audio":

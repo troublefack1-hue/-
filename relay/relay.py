@@ -75,7 +75,12 @@ def load_config() -> dict:
     cfg.setdefault("pin_interface", True)
     # push channel to nudge phones when the PC side changed (derived from the wake channel)
     cfg.setdefault("ntfy_phone_url", (cfg["ntfy_wake_url"] + "-phone") if cfg["ntfy_wake_url"] else "")
+    # a second phone with limited rights: see, wake, power — nothing else
+    cfg.setdefault("guest_secret", "")
     return cfg
+
+
+GUEST_ALLOW = {"ping", "ack", "profile", "cmd", "hello_phone", "monitor", "sys_get"}
 
 
 LAN_IP = {"ip": None}
@@ -230,6 +235,8 @@ class Hub:
         # the phone app exchanges it once for the secret
         self.pair_code: str | None = None
         self.pair_until: float = 0
+        self.pair_guest = False
+        self.guests: set = set()
         self.on_paired = None  # callback(remote_ip) for the PC app's UI
         self.on_cast = None    # callback(kind, data): phone screen (0x03 jpeg) / sound (0x04 pcm) -> PC app; (0, None) = stopped
         self.on_phones = None  # callback(count, names) for the PC app's UI
@@ -244,9 +251,13 @@ class Hub:
 
     # --- auth -----------------------------------------------------------
     def token_ok(self, token: str) -> bool:
-        return hmac.compare_digest(token.encode(), self.cfg["secret"].encode())
+        return hmac.compare_digest(token.encode(), self.cfg["secret"].encode()) or self.is_guest_token(token)
 
-    def check_header(self, request: web.Request) -> bool:
+    def is_guest_token(self, token: str) -> bool:
+        g = self.cfg.get("guest_secret") or ""
+        return bool(g) and hmac.compare_digest(token.encode(), g.encode())
+
+    def check_header(self, request: web.Request, owner_only: bool = True) -> bool:
         ip = client_ip(request)
         if self.lockout.blocked(ip):
             return False
@@ -254,7 +265,7 @@ class Hub:
         token = auth[7:] if auth.startswith("Bearer ") else ""
         if self.token_ok(token):
             self.lockout.ok(ip)
-            return True
+            return not (owner_only and self.is_guest_token(token))
         self.lockout.fail(ip)
         log.warning("bad token from %s", ip)
         return False
@@ -269,6 +280,8 @@ class Hub:
             ev = json.loads(msg.data) if msg.type == WSMsgType.TEXT else {}
             if ev.get("t") == "auth" and self.token_ok(str(ev.get("token", ""))):
                 self.lockout.ok(ip)
+                if self.is_guest_token(str(ev.get("token", ""))):
+                    self.guests.add(ws)
                 return True
         except (asyncio.TimeoutError, ValueError, TypeError, AttributeError):
             pass
@@ -278,9 +291,10 @@ class Hub:
         return False
 
     # --- pairing ----------------------------------------------------------
-    def start_pairing(self) -> str:
+    def start_pairing(self, guest: bool = False) -> str:
         self.pair_code = f"{secrets.randbelow(10**6):06d}"
         self.pair_until = time.time() + 300
+        self.pair_guest = guest
         return self.pair_code
 
     async def pair_handler(self, request: web.Request):
@@ -299,7 +313,8 @@ class Hub:
         self.log_event(f"телефон привязан ({ip})")
         if self.on_paired:
             self.on_paired(ip)
-        return web.json_response({"secret": self.cfg["secret"], "ntfy": self.cfg.get("ntfy_phone_url", "")})
+        secret = self.cfg["guest_secret"] if (self.pair_guest and self.cfg.get("guest_secret")) else self.cfg["secret"]
+        return web.json_response({"secret": secret, "ntfy": self.cfg.get("ntfy_phone_url", "")})
 
     # --- status broadcast ----------------------------------------------
     def status(self) -> dict:
@@ -384,6 +399,8 @@ class Hub:
         self.log_event(f"телефон подключился ({ip})")
         self.phones_changed()
         await ws.send_str(json.dumps(self.status()))
+        if ws in self.guests:
+            await ws.send_str(json.dumps({"t": "role", "guest": True}))
         await self.tell_pc_viewers()
         if self.last_frame:
             await ws.send_bytes(self.last_frame)
@@ -422,9 +439,16 @@ class Hub:
                 if msg.data.startswith('{"t":"ping"') or msg.data.startswith('{"t": "ping"'):
                     await ws.send_str(json.dumps({"t": "pong", "ts": time.time(), "pc_online": self.pc is not None}))
                     continue
+                if ws in self.guests:
+                    try:
+                        if json.loads(msg.data).get("t") not in GUEST_ALLOW:
+                            continue
+                    except ValueError:
+                        continue
                 await self.send_pc(msg.data)  # everything else goes to the agent
         finally:
             self.phones.discard(ws)
+            self.guests.discard(ws)
             self.phone_names.pop(ws, None)
             self.log_event(f"телефон отключился ({ip})")
             if self.pc is not None:
@@ -478,7 +502,7 @@ class Hub:
 
     # --- HTTP API ----------------------------------------------------------
     async def wake_handler(self, request: web.Request):
-        if not self.check_header(request):
+        if not self.check_header(request, owner_only=False):
             raise web.HTTPForbidden(headers=CORS)
         url = self.cfg.get("ntfy_wake_url")
         if not url:
@@ -492,7 +516,7 @@ class Hub:
         return web.json_response({"ok": ok}, headers=CORS)
 
     async def status_handler(self, request: web.Request):
-        if not self.check_header(request):
+        if not self.check_header(request, owner_only=False):
             raise web.HTTPForbidden(headers=CORS)
         return web.json_response(self.status(), headers=CORS)
 

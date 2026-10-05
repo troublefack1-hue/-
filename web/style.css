@@ -347,3 +347,27 @@ label.btn { display: block; }
 .vol #volVal { min-width: 28px; text-align: right; font-variant-numeric: tabular-nums; }
 .vol.muted #muteBtn { color: var(--bad); }
 #noScreen { background: var(--bg); z-index: 1; }
+
+/* ---- system page ---- */
+.stabs { display: flex; gap: 4px; overflow-x: auto; flex: 1; scrollbar-width: none; }
+.stabs::-webkit-scrollbar { display: none; }
+.stabs button { padding: 7px 11px; font-size: 12px; border-radius: 10px; background: transparent; border-color: transparent; white-space: nowrap; color: var(--muted); }
+.stabs button.on { background: var(--accent); color: #fff; }
+.gauges { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.gauge { background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; display: flex; align-items: center; gap: 10px; }
+.gauge .ring { --p: 0; width: 52px; height: 52px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 12px; font-weight: 600;
+  background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--border) 0); }
+.gauge .ring::before { content: attr(data-v); width: 40px; height: 40px; border-radius: 50%; background: var(--panel2); display: grid; place-items: center; }
+.gauge .ring.hot { background: conic-gradient(var(--bad) calc(var(--p) * 1%), var(--border) 0); }
+.gauge .t { min-width: 0; } .gauge .t b { display: block; font-size: 13px; font-weight: 500; } .gauge .t span { font-size: 11px; color: var(--muted); }
+.bars { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.bar { font-size: 12px; } .bar .h { display: flex; justify-content: space-between; color: var(--muted); margin-bottom: 3px; }
+.bar .b { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; } .bar .b i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.bar.hot .b i { background: var(--bad); }
+.grid.two { grid-template-columns: repeat(2, 1fr); }
+.flist .it button.x { padding: 4px 9px; font-size: 12px; border-radius: 8px; }
+.flist .it .prog { height: 4px; border-radius: 2px; background: var(--border); margin-top: 4px; overflow: hidden; } .flist .it .prog i { display: block; height: 100%; background: var(--accent); }
+#timerCustom, #dlUrl { flex: 1; }
+body.guest #screen { pointer-events: none; } body.guest #navbar { display: none; }
+.pbody .tinput { padding: 0; background: transparent; border: 0; }
+.pbody .tinput input { font-family: inherit; }

@@ -183,10 +183,21 @@
         renderMonitors();
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
+        sendRules(); sendAudioSrc();
       } else if (m.t === "cmd_result") {
-        show(m.result === "ok" ? (m.cmd === "open_url" ? "Ссылка открыта на ПК" : "Команда отправлена на ПК") : "Ошибка: " + m.result);
+        const okText = { open_url: "Ссылка открыта на ПК", print: "Отправлено на печать", kill: "Процесс завершён", monitor_off: "Экран выключен", monitor_on: "Экран включён", powerplan: "Схема питания изменена" };
+        show(m.result === "ok" ? (okText[m.cmd] || "Команда отправлена на ПК") : "Ошибка: " + m.result);
+        if (m.result === "ok" && m.cmd === "kill") send({ t: "procs_get" });
+        if (m.result === "ok" && m.cmd === "powerplan") send({ t: "powerplans_get" });
         sfx(m.result === "ok" ? "ok" : "offline");
       } else if (m.t === "volume") { applyVolume(m);
+      } else if (m.t === "role") { setGuest(!!m.guest);
+      } else if (m.t === "sys") { renderSys(m);
+      } else if (m.t === "procs") { renderProcs(m.items || []);
+      } else if (m.t === "timers") { renderTimers(m.items || []); if (m.result && m.result !== "ok") show("Таймер: " + m.result);
+      } else if (m.t === "powerplans") { renderPlans(m.items || []);
+      } else if (m.t === "downloads") { renderDl(m.items || []); if (m.result && m.result !== "ok") show("Загрузка: " + m.result);
+      } else if (m.t === "dl") { dlUpdate(m);
       } else if (m.t === "screen") {
         $("noScreen").hidden = !!m.ok; if (!m.ok) pill("Экран ПК недоступен — управление работает", true, 4000);
       } else if (m.t === "net") {
@@ -348,8 +359,30 @@
 
   // -------------------------------------------------------------- touch
   const trackpad = $("trackpad");
-  trackpad.checked = localStorage.getItem("pcr_trackpad") === "1";
-  trackpad.onchange = () => { localStorage.setItem("pcr_trackpad", trackpad.checked ? "1" : "0"); placeCursor(); };
+  let mouseMode = localStorage.getItem("pcr_mouse") || (localStorage.getItem("pcr_trackpad") === "1" ? "trackpad" : "direct");
+  function setMouseMode(mode) {
+    mouseMode = mode; localStorage.setItem("pcr_mouse", mode); trackpad.checked = mode !== "direct";
+    document.querySelectorAll("#mouseMode button").forEach((b) => b.classList.toggle("on", b.dataset.mouse === mode));
+    placeCursor(); gyro(mode === "gyro");
+  }
+  // gyroscope: tilt the phone to glide the cursor (relative, like an air mouse)
+  let gyroOn = false, gyroLast = 0;
+  function onMotion(e) {
+    const r = e.rotationRate; if (!r || !pcOnline || !frameW || document.hidden) return;
+    const now = performance.now(); if (now - gyroLast < 33) return; gyroLast = now;
+    const dx = -(r.alpha || 0) * 0.0025, dy = -(r.beta || 0) * 0.0025;   // deg/s -> screen fraction per tick
+    if (Math.abs(dx) < 0.0015 && Math.abs(dy) < 0.0015) return;
+    cur.x = Math.min(1, Math.max(0, cur.x + dx)); cur.y = Math.min(1, Math.max(0, cur.y + dy));
+    placeCursor(); send({ t: "move", ...cur });
+  }
+  async function gyro(on) {
+    if (on && !gyroOn) {
+      try { if (DeviceMotionEvent.requestPermission) await DeviceMotionEvent.requestPermission(); } catch { show("Нет доступа к гироскопу"); return; }
+      window.addEventListener("devicemotion", onMotion); gyroOn = true; show("Гироскоп: наклоняйте телефон, касание — клик");
+    } else if (!on && gyroOn) { window.removeEventListener("devicemotion", onMotion); gyroOn = false; }
+  }
+  document.querySelectorAll("#mouseMode button").forEach((b) => (b.onclick = () => { setMouseMode(b.dataset.mouse); buzz(8); }));
+  setTimeout(() => setMouseMode(mouseMode), 0);
 
   let pts = new Map(), t0 = null, longTimer = null, dragging = false, moved = false;
   let cur = { x: 0.5, y: 0.5 }, lastTap = 0, scrollAcc = 0, pinch = null;
@@ -516,7 +549,7 @@
 
   // --------------------------------------------------------------- menu
   // pages (settings, files, terminal) and sheets (menu, power) + dock state
-  const pages = ["settingsPage", "filesPage", "termPanel"];
+  const pages = ["settingsPage", "filesPage", "termPanel", "sysPage"];
   function showPage(id) { for (const p of pages) $(p).hidden = p !== id; menu.hidden = true; $("powerSheet").hidden = true; dockState(id); }
   function closePages() { for (const p of pages) $(p).hidden = true; dockState("screen"); }
   function dockState(id) { for (const [bid, pid] of [["dockScreen", "screen"], ["filesBtn", "filesPage"], ["termBtn", "termPanel"]]) $(bid).classList.toggle("on", pid === id); }
@@ -567,6 +600,17 @@
     const b = e.target.closest("button[data-accent]"); if (!b) return;
     prefs.accent = b.dataset.accent; savePrefs(); applyAccent(); buzz(8);
   });
+  const sendAudioSrc = () => send({ t: "audio_source", src: prefs.audioSrc || "speakers" });
+  document.querySelectorAll("#audioSrc button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.src === (prefs.audioSrc || "speakers"));
+    b.onclick = () => { prefs.audioSrc = b.dataset.src; savePrefs(); document.querySelectorAll("#audioSrc button").forEach((x) => x.classList.toggle("on", x === b)); sendAudioSrc(); buzz(8); };
+  });
+  const RULES = { ruleMonOn: "on_connect_monitor", ruleMonOff: "on_disconnect_monitor_off", ruleLock: "on_disconnect_lock" };
+  const sendRules = () => { const r = { t: "rules" }; for (const k in RULES) r[RULES[k]] = !!(prefs.rules || {})[RULES[k]]; send(r); };
+  for (const id in RULES) {
+    $(id).checked = !!(prefs.rules || {})[RULES[id]];
+    $(id).onchange = () => { prefs.rules = prefs.rules || {}; prefs.rules[RULES[id]] = $(id).checked; savePrefs(); sendRules(); };
+  }
   $("sfx").checked = prefs.sfx === true; $("haptic").checked = prefs.haptic !== false;
   $("sfx").onchange = () => { prefs.sfx = $("sfx").checked; savePrefs(); sfx("ok"); };
   $("haptic").onchange = () => { prefs.haptic = $("haptic").checked; savePrefs(); buzz(20); };
@@ -859,6 +903,11 @@
   $("fSelect").onclick = () => { fSelecting = !fSelecting; if (!fSelecting) fSel.clear(); renderFiles(); };
   $("fCancelSel").onclick = () => { fSel.clear(); fSelecting = false; renderFiles(); };
   $("fOpenPC").onclick = () => { for (const it of selItems()) send({ t: "open_path", path: it.path }); show("Открываю на ПК"); $("fCancelSel").click(); };
+  $("fPrint").onclick = async () => {
+    const files = selItems().filter((it) => !it.dir); if (!files.length) return show("Выберите файлы");
+    if (!(await ask(`Напечатать на принтере ПК: ${files.length} файл(ов)?`))) return;
+    for (const it of files) send({ t: "print", path: it.path }); $("fCancelSel").click();
+  };
   $("fDownload").onclick = async () => { for (const it of selItems()) if (!it.dir) await downloadFile(it); $("fCancelSel").click(); };
   $("fRename").onclick = () => { const it = selItems()[0]; if (!it) return;
     textDialog("Новое имя", it.name, async (v) => { if (await fsOp({ op: "rename", path: it.path, name: v.trim() })) loadFiles(fPath); });
@@ -989,14 +1038,98 @@
   };
 
   // ================================================================
-  // Event log
+  // System page: state / processes / timers / devices / downloads / log
   // ================================================================
-  $("logBtn").onclick = async () => {
-    menu.hidden = true; $("logDlg").hidden = false; $("logList").innerHTML = `<div class="empty">Загружаю…</div>`;
+  let sysTab = "state", sysTimer = null, guest = false;
+  const TABS = { state: "sysState", procs: "sysProcs", timers: "sysTimers", devices: "sysDevices", dl: "sysDl", log: "sysLog" };
+  function sysRequest() {
+    if (sysTab === "state") send({ t: "sys_get", temps: true });
+    else if (sysTab === "procs") send({ t: "procs_get" });
+    else if (sysTab === "timers") send({ t: "timers_get" });
+    else if (sysTab === "devices") send({ t: "powerplans_get" });
+    else if (sysTab === "dl") send({ t: "downloads_get" });
+    else if (sysTab === "log") loadLog();
+  }
+  function sysShowTab(tab) {
+    sysTab = tab; for (const k in TABS) $(TABS[k]).hidden = k !== tab;
+    document.querySelectorAll("#sysTabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+    clearInterval(sysTimer); sysRequest();
+    if (tab === "state" || tab === "procs") sysTimer = setInterval(() => { if (!$("sysPage").hidden && !document.hidden) sysRequest(); }, tab === "state" ? 3000 : 5000);
+  }
+  $("sysBtn").onclick = () => { showPage("sysPage"); if (!pcOnline) show("ПК не в сети"); sysShowTab(guest ? "state" : sysTab); };
+  document.querySelectorAll("#sysTabs button").forEach((b) => (b.onclick = () => { sysShowTab(b.dataset.tab); buzz(6); }));
+  $("sysRefresh").onclick = () => { sysRequest(); buzz(6); };
+  const _closePages = closePages;
+  document.querySelectorAll("#sysPage [data-close]").forEach((b) => (b.onclick = () => { clearInterval(sysTimer); _closePages(); }));
+
+  const fmtUp = (s) => s >= 86400 ? `${(s / 86400) | 0} д ${((s % 86400) / 3600) | 0} ч` : s >= 3600 ? `${(s / 3600) | 0} ч ${((s % 3600) / 60) | 0} мин` : `${(s / 60) | 0} мин`;
+  const fmtRate = (b) => b > 1e6 ? `${(b / 1e6).toFixed(1)} МБ/с` : `${Math.round(b / 1024)} КБ/с`;
+  const gauge = (label, pct, value, sub) => `<div class="gauge"><div class="ring${pct >= 90 ? " hot" : ""}" style="--p:${Math.round(pct)}" data-v="${value}"></div><div class="t"><b>${label}</b><span>${sub || ""}</span></div></div>`;
+  function renderSys(m) {
+    if (m.error) { $("gauges").innerHTML = `<div class="empty">${m.error}</div>`; return; }
+    const ramP = m.ram_total ? m.ram_used / m.ram_total * 100 : 0;
+    let g = gauge("Процессор", m.cpu || 0, `${Math.round(m.cpu || 0)}%`, `${m.cpu_cores || "?"} ядер${m.cpu_freq ? " · " + (m.cpu_freq / 1000).toFixed(1) + " ГГц" : ""}${m.cpu_temp ? " · " + m.cpu_temp + "°" : ""}`);
+    g += gauge("Память", ramP, `${Math.round(ramP)}%`, `${(m.ram_used / 1e9).toFixed(1)} из ${(m.ram_total / 1e9).toFixed(0)} ГБ`);
+    if (m.gpu) g += gauge("Видеокарта", m.gpu.load, `${m.gpu.load}%`, `${m.gpu.name.replace(/NVIDIA |GeForce /g, "")} · ${m.gpu.temp}° · ${(m.gpu.mem_used / 1024).toFixed(1)}/${(m.gpu.mem_total / 1024).toFixed(0)} ГБ`);
+    if (m.battery) g += gauge("Батарея", m.battery.percent, `${Math.round(m.battery.percent)}%`, m.battery.plugged ? "от сети" : "от батареи");
+    $("gauges").innerHTML = g;
+    $("sysDisks").innerHTML = (m.disks || []).map((d) => { const p = d.total ? d.used / d.total * 100 : 0;
+      return `<div class="bar${p >= 92 ? " hot" : ""}"><div class="h"><span>${d.name}</span><span>${(d.used / 1e9).toFixed(0)} / ${(d.total / 1e9).toFixed(0)} ГБ свободно ${((d.total - d.used) / 1e9).toFixed(0)}</span></div><div class="b"><i style="width:${p}%"></i></div></div>`; }).join("");
+    $("sysMisc").textContent = `Работает ${fmtUp(m.uptime || 0)} · сеть ПК ↓${fmtRate(m.net_down || 0)} ↑${fmtRate(m.net_up || 0)}`;
+  }
+  function renderProcs(items) {
+    const L = $("procList"); L.innerHTML = items.length ? "" : `<div class="empty">Пусто</div>`;
+    for (const p of items) { const d = document.createElement("div"); d.className = "it";
+      d.innerHTML = `<span class="n"><b>${p.name}</b><span class="m">${p.cpu.toFixed(0)}% · ${fmtSize(p.mem)}</span></span><button class="x" title="Завершить">✕</button>`;
+      d.querySelector("button").onclick = async () => { if (await ask(`Завершить ${p.name} (${p.pid})?`)) send({ t: "proc_kill", pid: p.pid }); };
+      L.appendChild(d); }
+  }
+  let timerAct = "shutdown", timerMin = 30;
+  document.querySelectorAll("#timerAct button").forEach((b) => (b.onclick = () => { timerAct = b.dataset.act; document.querySelectorAll("#timerAct button").forEach((x) => x.classList.toggle("on", x === b)); }));
+  document.querySelectorAll("#timerMin button").forEach((b) => (b.onclick = () => { timerMin = +b.dataset.min; $("timerCustom").value = ""; document.querySelectorAll("#timerMin button").forEach((x) => x.classList.toggle("on", x === b)); }));
+  $("timerStart").onclick = () => {
+    const min = +$("timerCustom").value || timerMin; if (!pcOnline) return show("ПК не в сети");
+    send({ t: "timer_set", action: timerAct, seconds: min * 60 }); buzz(15); show(`Таймер: ${min} мин`);
+  };
+  $("timerCancel").onclick = () => { send({ t: "timer_cancel" }); buzz(10); };
+  const NAMES = { shutdown: "Выключение", reboot: "Перезагрузка", sleep: "Сон", lock: "Блокировка" };
+  function renderTimers(items) {
+    const L = $("timerList"); L.innerHTML = items.length ? "" : `<div class="empty">Нет таймеров</div>`;
+    for (const t of items) { const d = document.createElement("div"); d.className = "it";
+      d.innerHTML = `<i>⏱</i><span class="n"><b>${NAMES[t.action] || t.action}</b><span class="m">через ${fmtUp(t.left)} · в ${new Date(t.at * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span></span>`; L.appendChild(d); }
+  }
+  document.querySelectorAll("#sysDevices button[data-dev]").forEach((b) => (b.onclick = () => { send({ t: "device", op: b.dataset.dev }); buzz(10); }));
+  function renderPlans(items) {
+    const L = $("planList"); L.innerHTML = items.length ? "" : `<div class="empty">Схемы не найдены</div>`;
+    for (const p of items) { const d = document.createElement("div"); d.className = "it" + (p.active ? " sel" : "");
+      d.innerHTML = `<i>${p.active ? "✓" : "○"}</i><span class="n">${p.name}</span>`; d.onclick = () => send({ t: "device", op: "powerplan", value: p.guid }); L.appendChild(d); }
+  }
+  $("dlStart").onclick = () => { const u = $("dlUrl").value.trim(); if (!u) return; if (!pcOnline) return show("ПК не в сети"); send({ t: "download", url: u }); $("dlUrl").value = ""; buzz(10); };
+  const dlItems = new Map();
+  function renderDl(items) { dlItems.clear(); for (const it of items) dlItems.set(it.id, it); paintDl(); }
+  function dlUpdate(m) { dlItems.set(m.id, m); paintDl(); if (m.status === "готово") { sfx("ok"); show(`Скачано: ${m.name}`); } }
+  function paintDl() {
+    const L = $("dlList"); const items = [...dlItems.values()].reverse(); L.innerHTML = items.length ? "" : `<div class="empty">Пока ничего</div>`;
+    for (const it of items) { const d = document.createElement("div"); d.className = "it"; const p = it.total ? Math.min(100, it.done / it.total * 100) : 0;
+      d.innerHTML = `<span class="n"><b>${it.name}</b><span class="m">${it.status} · ${fmtSize(it.done)}${it.total ? " из " + fmtSize(it.total) : ""}</span>${it.status === "идёт" ? `<div class="prog"><i style="width:${p}%"></i></div>` : ""}</span>${it.status === "идёт" ? '<button class="x">✕</button>' : ""}`;
+      const x = d.querySelector("button"); if (x) x.onclick = () => send({ t: "download_cancel", id: it.id });
+      L.appendChild(d); }
+  }
+  async function loadLog() {
+    $("logList").innerHTML = `<div class="empty">Загружаю…</div>`;
     const r = await fetch("/api/events", { headers: authHeaders() }); const j = r.ok ? await r.json() : [];
     $("logList").innerHTML = j.length ? "" : `<div class="empty">Пока пусто</div>`;
     for (const e of j) { const d = document.createElement("div"); d.className = "it";
       d.innerHTML = `<span class="s">${new Date(e.ts * 1000).toLocaleString("ru-RU", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</span><span class="n">${e.text}</span>`; $("logList").appendChild(d); }
-  };
-  $("logClose").onclick = () => ($("logDlg").hidden = true);
+  }
+  // say: the PC reads text aloud
+  $("sayBtn").onclick = () => textDialog("Сказать вслух на ПК", "Текст, который ПК произнесёт", (v) => { send({ t: "say", text: v }); show("ПК говорит…"); });
+
+  // guest: a relative with the guest code sees the screen and the power buttons, nothing else
+  function setGuest(on) {
+    guest = on; document.body.classList.toggle("guest", on);
+    if (on) for (const id of ["filesBtn", "termBtn", "kbBtn", "macrosBtn", "shotBtn", "pasteBtn", "linkBtn", "sayBtn", "castBtn", "termMenuBtn", "volRow", "pcClipBtn", "audioBtn"]) $(id).hidden = true;
+    document.querySelectorAll("#sysTabs button").forEach((b) => (b.hidden = on && b.dataset.tab !== "state"));
+    if (on) pill("Гостевой режим: только просмотр и питание", true, 4000);
+  }
 })();

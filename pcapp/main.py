@@ -70,6 +70,9 @@ def load_config() -> dict:
         cfg["secret"] = secrets.token_urlsafe(30)
         changed = True
     cfg.setdefault("port", 8443)
+    if not cfg.get("guest_secret"):
+        cfg["guest_secret"] = secrets.token_urlsafe(30)
+        changed = True
     cfg.setdefault("ntfy_wake_url", "")
     cfg.setdefault("max_width", 1280)
     cfg.setdefault("quality", 55)
@@ -212,6 +215,7 @@ class Backend:
             "tls_cert": str(DATA / "server.crt"), "tls_key": str(DATA / "server.key"),
             "ca_cert": str(DATA / "ca.crt"),
             "upload_dir": self.cfg["upload_dir"], "share_dirs": self.cfg["share_dirs"],
+            "guest_secret": self.cfg["guest_secret"],
         }
         app = relay_mod.make_app(relay_cfg)
         self.hub = app["hub"]
@@ -245,11 +249,11 @@ class Backend:
             rate = int.from_bytes(data[:2], "little")
             threading.Thread(target=self.audio_out.play, args=(rate, data[2:]), daemon=True).start()
 
-    def pair_code(self) -> str:
-        return asyncio.run_coroutine_threadsafe(self._pair(), self.loop).result(5)
+    def pair_code(self, guest: bool = False) -> str:
+        return asyncio.run_coroutine_threadsafe(self._pair(guest), self.loop).result(5)
 
-    async def _pair(self):
-        return self.hub.start_pairing()
+    async def _pair(self, guest: bool):
+        return self.hub.start_pairing(guest)
 
     def ring(self):
         asyncio.run_coroutine_threadsafe(self.hub.ring_phones(), self.loop).result(5)
@@ -427,7 +431,10 @@ class App(tk.Tk):
         self.addr.configure(state="readonly")
         self.addr.grid(row=2, column=1, sticky="w", **pad)
 
-        ttk.Button(f, text="Привязать телефон", style="Accent.TButton", command=self.show_pair).grid(row=3, column=0, sticky="w", **pad)
+        pf = ttk.Frame(f)
+        pf.grid(row=3, column=0, sticky="w", **pad)
+        ttk.Button(pf, text="Привязать телефон", style="Accent.TButton", command=self.show_pair).pack(side="left")
+        ttk.Button(pf, text="Код для гостя", command=lambda: self.show_pair(True)).pack(side="left", padx=(6, 0))
         self.code = tk.Label(f, text="", font=("Consolas", 26, "bold"), fg=ACCENT, bg=BG)
         self.code.grid(row=3, column=1, sticky="w", **pad)
         self.code_hint = ttk.Label(f, text="", style="Muted.TLabel")
@@ -538,15 +545,16 @@ class App(tk.Tk):
         self.tray.stop()
         super().destroy()
 
-    def show_pair(self):
+    def show_pair(self, guest: bool = False):
         try:
-            code = self.backend.pair_code()
+            code = self.backend.pair_code(guest)
         except Exception as e:  # noqa: BLE001
             self.code_hint.configure(text=f"Ошибка: {e}")
             return
         self.pair_until = time.time() + 300
         self.roll_code(code)
         self.backend.paired_ip = ""
+        self.pair_kind = "гость (только смотреть, включать и выключать)" if guest else "полный доступ"
 
     def ring(self):
         try:
@@ -613,7 +621,7 @@ class App(tk.Tk):
             self.code.configure(text="✓")
             self.code_hint.configure(text=f"Телефон привязан ({b.paired_ip})")
         elif left > 0:
-            self.code_hint.configure(text=f"Введите код в приложении на телефоне. Действует ещё {left // 60}:{left % 60:02d}")
+            self.code_hint.configure(text=f"Введите код в приложении на телефоне ({getattr(self, 'pair_kind', 'полный доступ')}). Действует ещё {left // 60}:{left % 60:02d}")
         elif self.code.cget("text") not in ("", "✓"):
             self.code.configure(text="")
             self.code_hint.configure(text="Код истёк, нажмите ещё раз")
