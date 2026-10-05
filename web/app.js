@@ -238,6 +238,10 @@
       if (!authed) {
         if (app.hidden || e.code === 4003) { failLogin(); return; }
       }
+      if (e.code === 4029) {   // too many wrong attempts from this network: hammering only prolongs the lockout
+        setState("Адрес временно заблокирован", "off", "много неверных попыток, повтор через минуту");
+        reconnectTimer = setTimeout(connect, 60000); return;
+      }
       setState("Нет связи с сервером", "off", `повтор через ${Math.round(backoff / 1000)} с`);
       reconnectTimer = setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 8000);
