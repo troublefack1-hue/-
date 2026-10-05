@@ -188,7 +188,12 @@ public class MainActivity extends Activity {
                     String why = "pin-mismatch".equals(tunnel.lastError)
                             ? "Сертификат ПК изменился. Привяжите телефон заново."
                             : "ПК недоступен: " + e.getDescription() + ". Проверьте, что ПК включён и порт проброшен.";
-                    v.postDelayed(() -> { if (web != null) web.reload(); }, 5000);
+                    v.postDelayed(() -> {
+                        if (web == null) return;
+                        // the background service may have learned a new PC address meanwhile
+                        if (tunnel != null && !tunnel.host().equals(prefs.getString("host", ""))) { stopRemote(); startRemote(); }
+                        else web.reload();
+                    }, 5000);
                     runOnUiThread(() -> showRetry(why));
                 }
             }

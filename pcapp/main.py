@@ -141,7 +141,8 @@ def firewall_open(port: int) -> bool:
 
 def autostart(enable: bool):
     import winreg
-    exe = sys.executable if getattr(sys, "frozen", False) else f'"{sys.executable}" "{Path(__file__).resolve()}"'
+    # always quoted: "C:\\Program Files\\PC Remote\\PC-Remote.exe" would otherwise break at the space
+    exe = f'"{sys.executable}"' if getattr(sys, "frozen", False) else f'"{sys.executable}" "{Path(__file__).resolve()}"'
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
                         0, winreg.KEY_SET_VALUE) as k:
         if enable:
@@ -384,7 +385,9 @@ class Bubble(tk.Toplevel):
         for ev, fn in (("<ButtonPress-1>", self.press), ("<B1-Motion>", self.move), ("<ButtonRelease-1>", self.release)):
             c.bind(ev, fn)
         x, y = app.cfg.get("bubble_pos") or (self.winfo_screenwidth() - r - 24, self.winfo_screenheight() - r - 90)
-        self.geometry(f"+{int(x)}+{int(y)}")
+        # a position saved on a monitor that is no longer there would leave the badge unreachable
+        x = max(0, min(int(x), self.winfo_screenwidth() - r)); y = max(0, min(int(y), self.winfo_screenheight() - r))
+        self.geometry(f"+{x}+{y}")
         self.withdraw()
 
     def press(self, e):
@@ -551,6 +554,7 @@ class App(tk.Tk):
             except Exception:  # noqa: BLE001
                 pass
         threading.Thread(target=deps_worker, daemon=True).start()
+        threading.Thread(target=self.watch_public_ip, daemon=True).start()
         upd = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--updated=")), None)
         if upd is not None:
             if upd == updater.current_version():
@@ -657,6 +661,32 @@ class App(tk.Tk):
             self.iconify()
         if self.bubble_on.get():
             self.bubble.deiconify(); self.bubble.lift()
+
+    def watch_public_ip(self):
+        """The provider changed our address: save it, show it, and tell the phones through ntfy
+        so their background service can reconnect to the new one."""
+        time.sleep(60)
+        while True:
+            try:
+                ip = public_ip()
+                if ip and ip != self.cfg.get("public_ip"):
+                    old = self.cfg.get("public_ip")
+                    self.cfg["public_ip"] = ip
+                    save_config(self.cfg)
+                    log.info("public ip changed %s -> %s", old, ip)
+                    self.after(0, self._show_ip, ip)
+                    if self.backend.hub is not None:
+                        asyncio.run_coroutine_threadsafe(self.backend.hub.nudge_phones(f"ip={ip}"), self.backend.loop)
+                    self.tray.notify(f"Внешний адрес ПК изменился: {ip}. Телефон получит его сам.")
+            except Exception:  # noqa: BLE001
+                log.exception("public ip watch")
+            time.sleep(15 * 60)
+
+    def _show_ip(self, ip: str):
+        self.addr.configure(state="normal")
+        self.addr.delete(0, "end")
+        self.addr.insert(0, f"{ip}:{self.cfg['port']}")
+        self.addr.configure(state="readonly")
 
     def toggle_video(self):
         self.cfg["video"] = self.video_on.get()

@@ -111,6 +111,15 @@ public class RemoteService extends Service {
                         String line;
                         while (running && ws == null && (line = r.readLine()) != null) {
                             if (line.contains("\"event\":\"message\"") && line.contains("reconnect")) {
+                                String msg = Pairing.jsonString(line, "message");
+                                int k = msg == null ? -1 : msg.indexOf("ip=");
+                                if (k >= 0) {   // the PC's public address changed: follow it
+                                    String ip = msg.substring(k + 3).trim();
+                                    if (ip.matches("[0-9.]{7,15}") && !ip.equals(prefs.getString("host", ""))) {
+                                        prefs.edit().putString("host", ip).putString("hostport", ip + ":" + prefs.getInt("port", 8443)).apply();
+                                        update("Связь с ПК", "новый адрес " + ip);
+                                    }
+                                }
                                 synchronized (wake) { wake.notifyAll(); }
                             }
                         }

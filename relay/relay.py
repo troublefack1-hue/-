@@ -543,7 +543,7 @@ class Hub:
         """PC-initiated reconnect: a push the phone's background service listens
         for while its own link is down. Rate-limited to one per 10 s."""
         url = self.cfg.get("ntfy_phone_url")
-        if not url or time.time() - self._last_nudge < 10:
+        if not url or (time.time() - self._last_nudge < 10 and not reason.startswith("ip=")):
             return
         self._last_nudge = time.time()
         try:

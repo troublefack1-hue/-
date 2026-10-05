@@ -37,6 +37,7 @@ public final class Tunnel implements Runnable {
     }
 
     public int localPort() { return server.getLocalPort(); }
+    public String host() { return host; }
 
     public void start() { Thread t = new Thread(this, "tunnel"); t.setDaemon(true); t.start(); }
 
