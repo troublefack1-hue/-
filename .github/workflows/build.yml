@@ -128,7 +128,7 @@ jobs:
           if [ -f /tmp/release.keystore ]; then KS="--keystore /tmp/release.keystore --ks-pass $KS_PASS"; else KS=""; fi
           python3 android/build.py --sdk "$ANDROID_HOME" --project android-net --out-name pcremote-net.apk --native-libs hev/libs \
             --extra-src android/src/ru/pcremote/Pinned.java --extra-src android/src/ru/pcremote/Pairing.java \
-            --extra-src android/src/ru/pcremote/WsClient.java --extra-src android/src/ru/pcremote/Updater.java \
+            --extra-src android/src/ru/pcremote/WsClient.java --extra-src android/src/ru/pcremote/Updater.java --extra-src android/src/ru/pcremote/Paths.java \
             --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" $KS
       - uses: actions/upload-artifact@v4
         with:
