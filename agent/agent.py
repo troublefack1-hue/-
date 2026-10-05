@@ -898,6 +898,7 @@ class Agent:
         self.audio_only = False      # sound on the phone only: the room stays quiet while it listens
         self.audio_opus = False      # phone announced an Opus decoder
         self.bw = 0.0                # measured link throughput, bytes/s (from acks of big frames)
+        self.rtt_min = 0.0           # the link's own latency (a VPN may add 300+ ms); the ladder reacts to time above it
         self.bw_at = 0.0             # when the last throughput sample came in
         self.sent_bytes = 0
         self.adaptive = True         # walk the LADDER with the link (phone setting)
@@ -1045,6 +1046,23 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
 
+    def on_ack(self, sample: float, size: int):
+        """The phone decoded a frame of `size` bytes `sample` seconds after we sent it.
+
+        Throughput is size / (time above the link's base latency), from big frames only. Since the video went
+        to constant quality (05.10.2026) a still screen sends 1-3 KB frames; over a VPN with 400 ms of latency
+        size/sample read as 5-10 KB/s and the ladder dropped a 300 KB/s link to 320x180 within ten seconds."""
+        self.rtt = sample if not self.rtt else self.rtt * 0.7 + sample * 0.3
+        if not self.rtt_min or sample < self.rtt_min:
+            self.rtt_min = sample
+        else:
+            self.rtt_min += (sample - self.rtt_min) * 0.01   # creep up slowly if the route really got longer
+        transfer = sample - self.rtt_min
+        if size >= 16000 and transfer > 0.015:
+            bw = size / transfer
+            self.bw = bw if not self.bw else self.bw * 0.7 + bw * 0.3
+            self.bw_at = time.monotonic()
+
     def pick_rung(self) -> int:
         """Where on the LADDER the link puts us right now (see LADDER). Down fast, up slowly."""
         if not self.adaptive:
@@ -1063,12 +1081,12 @@ class Agent:
                 afford = 0
             if afford > rung:
                 rung = afford                                   # down: at once
-            elif afford < rung and self.rtt < 0.4 and now - self.rung_at > 4:
+            elif afford < rung and self.rtt - self.rtt_min < 0.25 and now - self.rung_at > 4:
                 rung -= 1                                       # up: one rung per 4 s, only with headroom and quick acks
-        elif rung > 0 and self.rtt < 0.25 and now - self.rung_at > 6:
+        elif rung > 0 and self.rtt - self.rtt_min < 0.15 and now - self.rung_at > 6:
             rung -= 1                                           # no recent measurement, acks are quick: probe upward
-        if self.rtt > 0.6 and now - self.rung_at > 2:
-            rung = min(len(LADDER) - 1, rung + 1)               # acks late: step down regardless of throughput
+        if self.rtt - self.rtt_min > 0.5 and now - self.rung_at > 2:
+            rung = min(len(LADDER) - 1, rung + 1)               # a queue builds up (acks late beyond the base latency): step down
         if self.screen.profile_name == "tiny":
             rung = max(rung, TINY_RUNG)
         if rung != self.rung:
@@ -1272,12 +1290,7 @@ class Agent:
             try:
                 if t == "ack":
                     if self.sent_at:
-                        sample = time.monotonic() - self.sent_at
-                        self.rtt = sample if not self.rtt else self.rtt * 0.7 + sample * 0.3
-                        if self.sent_bytes >= 2000 and sample > 0.02:   # tiny frames say nothing about throughput
-                            bw = self.sent_bytes / sample
-                            self.bw = bw if not self.bw else self.bw * 0.7 + bw * 0.3
-                            self.bw_at = time.monotonic()
+                        self.on_ack(time.monotonic() - self.sent_at, self.sent_bytes)
                     self.ack.set()
                 elif t == "viewers":
                     self.viewers = int(ev.get("n", 0))
