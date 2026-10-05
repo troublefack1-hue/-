@@ -1128,7 +1128,9 @@ class Agent:
             self.rtt *= 0.98   # no ack pending: let a stale "slow" verdict fade so we can try the full tier again
         if raw is None:
             # nothing changed: the decoder keeps the last picture; still restart on demand
-            if self.enc and (self.enc.key[4] != self.video_gen or not self.enc.alive):
+            # key[4] is the bitrate (None at full quality), not the generation: comparing it with video_gen closed
+            # the encoder on every still frame — 1212 restarts in an evening, a fresh key frame each time
+            if self.enc and (self.enc.key[5] != self.video_gen or not self.enc.alive):
                 self.video_close()
                 self.screen._last_hash = b""
             await asyncio.sleep(interval)
