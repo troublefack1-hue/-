@@ -260,6 +260,8 @@ public class MainActivity extends Activity {
         /** "Включить ПК" straight from the phone (the PC's relay is down while it sleeps). */
         /** Stream a file from the PC into the phone's Downloads/PC Remote, with a progress notification. */
         @JavascriptInterface public void download(String url, String name, long size) { Downloader.start(MainActivity.this, url, name, size); }
+        /** A screenshot or a photo already shown on the page: write the bytes into Pictures/PC Remote. */
+        @JavascriptInterface public void saveImage(String name, String b64, String mime) { Downloader.saveBytes(MainActivity.this, name, android.util.Base64.decode(b64, android.util.Base64.DEFAULT), mime); }
         @JavascriptInterface public boolean wakePc() { if (prefs.getString("wake", "").isEmpty()) return false; RemoteService.wake(MainActivity.this); return true; }
         /** Phone files for the PC (Claude): "All files access" on Android 11+, storage permission before. */
         @JavascriptInterface public boolean filesGranted() {

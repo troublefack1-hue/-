@@ -1115,7 +1115,19 @@
     }
   }, { passive: true });
   $("imgBack").onclick = () => { $("imgView").hidden = true; };
-  $("imgSave").onclick = () => { const a = document.createElement("a"); a.href = imgBlobUrl; a.download = imgName; a.click(); show("Сохранено на телефон"); sfx("ok"); };
+  $("imgSave").onclick = async () => {
+    // inside the Android app a blob: link cannot be "downloaded" by the WebView: hand the bytes to the app
+    if (window.PcRemoteApp && window.PcRemoteApp.saveImage) {
+      try {
+        const buf = new Uint8Array(await (await fetch(imgBlobUrl)).arrayBuffer());
+        let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+        window.PcRemoteApp.saveImage(imgName, btoa(bin), imgName.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg");
+        show("Сохранено в Pictures/PC Remote"); sfx("ok");
+      } catch (e) { show("Не удалось сохранить: " + e); }
+      return;
+    }
+    const a = document.createElement("a"); a.href = imgBlobUrl; a.download = imgName; a.click(); show("Сохранено на телефон"); sfx("ok");
+  };
   // ================================================================
   // Macros: named step lists, shown as buttons in the keyboard panel
   // ================================================================

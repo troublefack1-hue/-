@@ -68,6 +68,38 @@ public final class Downloader {
         Toast.makeText(ctx, "Скачиваю в Загрузки/PC Remote", Toast.LENGTH_SHORT).show();
     }
 
+    /** Bytes already on the phone (a screenshot, a viewed photo) -> Pictures/PC Remote. */
+    public static void saveBytes(Context ctx, String name, byte[] data, String mime) {
+        final Context app = ctx.getApplicationContext();
+        new Thread(() -> {
+            String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            NotificationManager nm = app.getSystemService(NotificationManager.class);
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    android.content.ContentValues v = new android.content.ContentValues();
+                    v.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, safe);
+                    v.put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime);
+                    v.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/PC Remote");
+                    android.content.ContentResolver cr = app.getContentResolver();
+                    android.net.Uri item = cr.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+                    if (item == null) throw new java.io.IOException("MediaStore insert failed");
+                    try (java.io.OutputStream f = cr.openOutputStream(item)) { f.write(data); }
+                } else {
+                    File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "PC Remote");
+                    dir.mkdirs();
+                    File out = new File(dir, safe);
+                    try (FileOutputStream f = new FileOutputStream(out)) { f.write(data); }
+                    app.sendBroadcast(new android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, android.net.Uri.fromFile(out)));
+                }
+                nm.notify(nextId++, new Notification.Builder(app, RemoteService.CHANNEL_PC).setSmallIcon(R.drawable.ic_launcher)
+                        .setContentTitle("Сохранено: " + safe).setContentText("Pictures/PC Remote").setAutoCancel(true).build());
+            } catch (Exception e) {
+                nm.notify(nextId++, new Notification.Builder(app, RemoteService.CHANNEL_PC).setSmallIcon(R.drawable.ic_launcher)
+                        .setContentTitle("Не удалось сохранить " + safe).setContentText(String.valueOf(e.getMessage())).setAutoCancel(true).build());
+            }
+        }, "save-image").start();
+    }
+
     private static void viaMediaStore(Context app, NotificationManager nm, int id, String url, String safe, long size) throws Exception {
         android.content.ContentValues v = new android.content.ContentValues();
         v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safe);
