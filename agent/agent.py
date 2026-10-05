@@ -573,10 +573,18 @@ class Screen:
         self.cap = None
         self.cap_retry_at = 0.0
         self.cap_switches = 0
+        # the main stream and the HD zone grab from executor threads while the network loop may swap the backend:
+        # without a lock _grab once met self.cap = None mid-swap ('NoneType' has no attribute 'last_ms'), and DXGI
+        # is not meant to be driven from two threads at once
+        self._cap_lock = threading.RLock()
         self.grab_ms = 0.0
         self._make_capture()
 
     def _make_capture(self, prefer_gdi: bool = False):
+        with self._cap_lock:
+            self._make_capture_locked(prefer_gdi)
+
+    def _make_capture_locked(self, prefer_gdi: bool):
         if self.cap is not None:
             self.cap.close()
             self.cap = None
@@ -600,6 +608,10 @@ class Screen:
 
     def _grab(self, region=None, force=False):
         """One frame from the current backend; a DXGI failure flips to GDI and schedules a retry."""
+        with self._cap_lock:
+            return self._grab_locked(region, force)
+
+    def _grab_locked(self, region, force):
         now = time.monotonic()
         if self.cap.name == "gdi" and self.capture_mode in ("auto", "dxgi") and self.cap_retry_at and now > self.cap_retry_at and self.mon_index >= 1:
             self.cap_retry_at = 0.0
