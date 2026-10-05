@@ -631,14 +631,21 @@ class Hub:
             dest = dest_dir / f"{Path(name).stem} ({n}){Path(name).suffix}"
             n += 1
         size = 0
-        with open(dest, "wb") as f:
-            async for chunk in request.content.iter_chunked(1 << 16):
-                size += len(chunk)
-                if size > 2 * 1024 ** 3:
-                    f.close()
-                    dest.unlink(missing_ok=True)
-                    return web.json_response({"ok": False, "error": "file too large"}, headers=CORS)
-                f.write(chunk)
+        part = dest.with_name(dest.name + ".part")   # a dropped connection must not leave a truncated "complete" file
+        try:
+            with open(part, "wb") as f:
+                async for chunk in request.content.iter_chunked(1 << 16):
+                    size += len(chunk)
+                    if size > 2 * 1024 ** 3:
+                        raise ValueError("file too large")
+                    f.write(chunk)
+            part.replace(dest)
+        except ValueError as e:
+            part.unlink(missing_ok=True)
+            return web.json_response({"ok": False, "error": str(e)}, headers=CORS)
+        except Exception:
+            part.unlink(missing_ok=True)
+            raise
         self.log_event(f"файл с телефона: {dest.name} ({size // 1024} КБ)")
         return web.json_response({"ok": True, "name": dest.name, "size": size}, headers=CORS)
 
