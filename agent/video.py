@@ -24,6 +24,11 @@ FRAME_VIDEO_CODEC = b"\x09"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 BITRATE = {"tiny": "48k", "low": "250k", "eco": "500k", "normal": "2500k", "hq": "6000k"}   # "tiny" ≈ 10 KB/s link, "low" = slow link fallback
+# Constant quality under the profile's bitrate ceiling: a still desktop costs almost nothing, motion takes what it
+# needs up to the ceiling. Measured 05.10.2026 on a 1920x1080 desktop, 20 fps, GTX 1660 SUPER: NVENC CBR 6000k sent
+# 732 KB/s even on a still screen (SSIM 0.985); cq 24 sent 87 KB/s still / 359 KB/s scrolling at SSIM 0.984.
+# libx264 needs ~3 more crf for the same picture. Thin links (tiny, low rungs) stay on CBR: there the link is the limit.
+CQ = {"eco": 30, "normal": 26, "hq": 24}
 
 
 def find_ffmpeg() -> str | None:
@@ -124,18 +129,28 @@ class Encoder:
         br = bitrate or BITRATE.get(profile, BITRATE["normal"])
         self.bitrate = br
         thin = profile == "tiny" or _kbit(br) <= 150
-        gop = str(self.fps * (10 if thin else 2))   # thin link: key frames are the expensive part
+        # the link is TCP: nothing is lost, so key frames are only for a new viewer (the agent restarts the encoder
+        # for one) and as a slow safety refresh; a 1920 key frame of a photo wallpaper is ~200 KB
+        gop = str(self.fps * (10 if thin else 30))
+        cq = None if thin else CQ.get(profile)
         if codec == "h264":
             name, args = h264_encoder(ffmpeg) or H264_CHAIN[-1]
             self.encoder_name = name
-            venc = [*args, "-b:v", br, "-maxrate", br, "-bufsize", br, "-g", gop]
+            if cq is not None and name == "h264_nvenc":
+                args = [a for i, a in enumerate(args) if not (a == "-rc" or (i and args[i - 1] == "-rc"))]
+                venc = [*args, "-rc", "vbr", "-cq", str(cq), "-b:v", "0", "-maxrate", br, "-bufsize", br, "-g", gop]
+            elif cq is not None and name == "libx264":
+                venc = [*args, "-crf", str(cq + 3), "-maxrate", br, "-bufsize", br, "-g", gop]
+            else:
+                venc = [*args, "-b:v", br, "-maxrate", br, "-bufsize", br, "-g", gop]
             if name != "libx264":
                 # hardware encoders do not emit AUD/repeat headers via x264-params: use the bitstream filter
                 venc += ["-bsf:v", "h264_metadata=aud=insert", "-flags", "-global_header"]
             fmt = ["-f", "h264"]
         else:
             self.encoder_name = "libvpx"
-            venc = ["-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", br, "-maxrate", br, "-bufsize", br,
+            vq = ["-crf", str(min(63, cq + 6))] if cq is not None else []   # constrained quality: crf under the -b:v ceiling
+            venc = ["-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", *vq, "-b:v", br, "-maxrate", br, "-bufsize", br,
                     "-g", gop, "-lag-in-frames", "0", "-error-resilient", "1", "-auto-alt-ref", "0"]
             fmt = ["-f", "ivf"]
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0", "-f", "rawvideo", "-pix_fmt", pix_fmt, "-s", f"{width}x{height}",
