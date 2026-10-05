@@ -265,8 +265,10 @@ class Downloads:
                     item["total"] = int(r.headers.get("Content-Length") or 0)
                     cd = r.headers.get("Content-Disposition", "")
                     if "filename=" in cd:
-                        nm = cd.split("filename=")[-1].strip('"; ')
-                        if nm:
+                        # the server picks the name: keep only a bare file name, never a path
+                        nm = cd.split("filename=")[-1].strip('"; ').replace("\\", "/").rsplit("/", 1)[-1]
+                        nm = "".join(c for c in nm if c not in '<>:"/\\|?*' and ord(c) >= 32).strip(". ")[:120]
+                        if nm and nm not in (".", ".."):
                             item["name"] = nm
                     last = 0
                     while chunk := r.read(1 << 17):
