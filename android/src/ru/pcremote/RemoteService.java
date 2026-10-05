@@ -170,7 +170,15 @@ public class RemoteService extends Service {
         if (s.contains("\"t\":\"ring\"") || s.contains("\"t\": \"ring\"")) {
             Intent i = new Intent(this, RingActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            startActivity(i);
+            // Android 10+ blocks activity starts from the background: a full-screen notification is
+            // the sanctioned way to bring the ring screen up over the lock screen.
+            PendingIntent fsi = PendingIntent.getActivity(this, 8, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            Notification n = new Notification.Builder(this, CHANNEL_RING)
+                    .setSmallIcon(R.drawable.ic_launcher).setContentTitle("Телефон здесь!").setContentText("Сигнал с вашего ПК — нажмите, чтобы выключить")
+                    .setCategory(Notification.CATEGORY_ALARM).setPriority(Notification.PRIORITY_MAX)
+                    .setFullScreenIntent(fsi, true).setContentIntent(fsi).setAutoCancel(true).build();
+            getSystemService(NotificationManager.class).notify(9, n);
+            try { startActivity(i); } catch (Exception ignored) {}   // works when we are already in front
         } else if (s.startsWith("{\"t\":\"pfs\"") || s.startsWith("{\"t\": \"pfs\"")) {
             final PhoneFs f = fs;
             if (f == null) return;

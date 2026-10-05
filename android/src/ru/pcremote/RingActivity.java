@@ -70,6 +70,7 @@ public class RingActivity extends Activity {
     public static void stop() { if (current != null) current.finish(); }
 
     @Override protected void onDestroy() {
+        try { getSystemService(android.app.NotificationManager.class).cancel(9); } catch (Exception ignored) {}
         if (player != null) { player.stop(); player.release(); }
         if (vib != null) vib.cancel();
         if (savedVolume >= 0) ((AudioManager) getSystemService(AUDIO_SERVICE)).setStreamVolume(AudioManager.STREAM_ALARM, savedVolume, 0);

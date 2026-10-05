@@ -49,6 +49,17 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(BG);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
+        // Android 14: full-screen notifications ("Найти телефон" over the lock screen) need an explicit grant
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+                if (!nm.canUseFullScreenIntent() && !prefs.getBoolean("fsi_asked", false)) {
+                    prefs.edit().putBoolean("fsi_asked", true).apply();
+                    Toast.makeText(this, "Разрешите «Полноэкранные уведомления», чтобы «Найти телефон» работал на заблокированном экране", Toast.LENGTH_LONG).show();
+                    startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, android.net.Uri.parse("package:" + getPackageName())));
+                }
+            } catch (Exception ignored) {}
+        }
         if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); } else showSetup(null);
         checkUpdate();
     }
