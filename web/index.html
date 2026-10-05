@@ -208,7 +208,8 @@
     <header class="tbar"><button class="icon back" data-close="settingsPage"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button><h2>Настройки</h2></header>
     <div class="pbody">
       <h3>Картинка</h3>
-      <div class="seg" id="profile"><span class="lbl">Качество</span><button data-profile="eco">Эконом</button><button data-profile="normal" class="on">Обычное</button><button data-profile="hq">Макс.</button></div>
+      <div class="seg" id="profile"><span class="lbl">Качество</span><button data-profile="tiny">10 КБ/с</button><button data-profile="eco">Эконом</button><button data-profile="normal" class="on">Обычное</button><button data-profile="hq">Макс.</button></div>
+      <p class="muted small">«10 КБ/с» — для очень тонкого канала: 480p при 4 к/с, один кадр в полёте, звук Opus 16 кбит/с. ПК сам переходит на него, когда канал проседает.</p>
       <label class="row switch"><span>По сети: Wi-Fi — обычное, мобильная — эконом</span><input type="checkbox" id="autoProfile"><i></i></label>
       <label class="row switch"><span>Видео-поток H.264/VP8 вместо кадров JPEG (плавнее, меньше трафика)</span><input type="checkbox" id="videoOn"><i></i></label>
       <div class="seg" id="monitors" hidden><span class="lbl">Монитор</span></div>
@@ -227,6 +228,10 @@
       </div>
       <h3>Звук с ПК</h3>
       <div class="seg" id="audioSrc"><span class="lbl">Источник</span><button data-src="speakers" class="on">Динамики</button><button data-src="mic">Микрофон ПК</button></div>
+      <div id="audioDevBox" hidden>
+        <label class="row sel"><span>Выход ПК, пока телефон слушает</span><select id="audioDev"></select></label>
+        <p class="muted small">Звук с ПК идёт в телефон после общей громкости Windows: с выключенными динамиками будет тишина. Выберите «молчащий» выход (HDMI монитора, S/PDIF, пустое гнездо наушников): на время прослушивания ПК переключится на него, динамики замолчат, телефон услышит всё. Если такого выхода нет, поможет бесплатный VB-Cable.</p>
+      </div>
       <h3>Автоматика</h3>
       <label class="row switch"><span>Будить монитор при подключении</span><input type="checkbox" id="ruleMonOn"><i></i></label>
       <label class="row switch"><span>Гасить монитор после отключения</span><input type="checkbox" id="ruleMonOff"><i></i></label>

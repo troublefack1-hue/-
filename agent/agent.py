@@ -9,7 +9,7 @@ commands (reboot, shutdown, lock, sleep).
 
 Binary frames: first byte is the type.
   0x01 + JPEG                          video frame
-  0x02 + rate(uint16 LE) + PCM16 mono  audio chunk
+  0x02 + rate(uint16 LE) + PCM16 mono  audio chunk (0x0A + packet when the phone decodes Opus, see opus.py)
 
 Config: config.json next to this file (see config.example.json).
 """
@@ -32,8 +32,10 @@ import aiohttp
 import mss
 from PIL import Image
 
+import audio_out
 import extras
 import notify_watch
+import opus
 import video
 
 HERE = Path(__file__).resolve().parent
@@ -43,6 +45,7 @@ log = logging.getLogger("agent")
 
 # Quality profiles the phone can switch between. "idle" = app in background.
 PROFILES = {
+    "tiny":   {"fps": 4,  "max_width": 480,  "quality": 22},   # ~10 KB/s link: 48 kbit/s video, Opus 16 kbit/s
     "eco":    {"fps": 2,  "max_width": 640,  "quality": 30},
     "normal": {"fps": 12, "max_width": 1280, "quality": 55},
     "hq":     {"fps": 20, "max_width": 1920, "quality": 75},
@@ -696,6 +699,9 @@ class Audio:
         self.pa = None
         self.src_rate = 48000
         self.channels = 2
+        self.enc = None            # OpusEncoder when the phone can decode Opus and ffmpeg has libopus
+        self.prev_default = ""     # output device to restore after a temporary switch
+        self.device_name = ""
 
     def available(self) -> bool:
         try:
@@ -704,8 +710,15 @@ class Audio:
         except ImportError:
             return False
 
-    def start(self, source: str = "speakers"):
+    def start(self, source: str = "speakers", device: str = "", opus_ffmpeg: str | None = None, bitrate: str = "24k"):
+        """device: output endpoint id to switch to while streaming ("" = whatever is default);
+        opus_ffmpeg: path to ffmpeg with libopus, or None for raw PCM frames."""
         import pyaudiowpatch as pyaudio
+        if source != "mic" and device:
+            cur = audio_out.default_id()
+            if cur and cur != device and audio_out.set_default(device):
+                self.prev_default = cur
+                time.sleep(0.4)   # let the audio engine bring the endpoint up before we open loopback on it
         self.pa = pyaudio.PyAudio()
         wasapi = self.pa.get_host_api_info_by_type(pyaudio.paWASAPI)
         if source == "mic":
@@ -717,6 +730,13 @@ class Audio:
                     if dev["name"] in d["name"]:
                         dev = d
                         break
+        self.device_name = dev["name"]
+        if opus_ffmpeg:
+            try:
+                self.enc = opus.OpusEncoder(opus_ffmpeg, self.RATE, bitrate)
+            except Exception as e:  # noqa: BLE001
+                log.warning("opus encoder: %s (raw PCM instead)", e)
+                self.enc = None
         self.src_rate = int(dev["defaultSampleRate"])
         self.channels = int(dev["maxInputChannels"])
         self.stream = self.pa.open(format=pyaudio.paInt16, channels=self.channels, rate=self.src_rate,
@@ -732,9 +752,15 @@ class Audio:
         if self.pa:
             self.pa.terminate()
             self.pa = None
+        if self.enc:
+            self.enc.close()
+            self.enc = None
+        if self.prev_default:
+            audio_out.set_default(self.prev_default)   # the PC's speakers come back
+            self.prev_default = ""
 
-    def read(self) -> bytes:
-        """One ~50 ms chunk as 16 kHz mono PCM16, framed for the relay."""
+    def read(self) -> list:
+        """One ~50 ms chunk as frames for the relay: Opus packets (0x0A) or one PCM16 chunk (0x02)."""
         raw = self.stream.read(self.src_rate // 20, exception_on_overflow=False)
         s = array.array("h", raw)
         ch, step = self.channels, max(1, round(self.src_rate / self.RATE))
@@ -743,7 +769,10 @@ class Audio:
         for i in range(0, n, step):
             base = i * ch
             out.append(sum(s[base:base + ch]) // ch)
-        return FRAME_AUDIO + self.RATE.to_bytes(2, "little") + out.tobytes()
+        if self.enc is not None and self.enc.alive:
+            self.enc.write(out.tobytes())
+            return [opus.FRAME_AUDIO_OPUS + p for p in self.enc.packets()]
+        return [FRAME_AUDIO + self.RATE.to_bytes(2, "little") + out.tobytes()]
 
 
 class Agent:
@@ -773,6 +802,10 @@ class Agent:
         self.last_input = time.monotonic()   # activity-adaptive frame rate: idle hands -> fewer frames
         self.reconnects = 0
         self.audio_source = "speakers"
+        self.audio_device = ""       # output endpoint to switch to while the phone listens ("" = don't touch)
+        self.audio_opus = False      # phone announced an Opus decoder
+        self.bw = 0.0                # measured link throughput, bytes/s (from acks of big frames)
+        self.sent_bytes = 0
         self._ws = None
 
     async def _notify(self, msg: dict):
@@ -886,6 +919,7 @@ class Agent:
                 jpeg = await loop.run_in_executor(None, self.screen.grab)
             self.ack.clear()
             self.sent_at = time.monotonic()
+            self.sent_bytes = len(jpeg)
             await ws.send_bytes(FRAME_VIDEO + jpeg)
             last_sent = self.sent_at
             if int(last_sent) % 3 == 0:
@@ -897,7 +931,8 @@ class Agent:
                 "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available(),
                 "monitors": len(self.screen.sct.monitors) - 1, "monitor": self.screen.mon_index,
                 "term": Term.available(), "shells": list(Term.shells().keys()),
-                "projects": self.cfg.get("projects", []), "volume": self.volume.get()}
+                "projects": self.cfg.get("projects", []), "volume": self.volume.get(),
+                "opus": opus.available(self.ffmpeg), "audio_devices": audio_out.list_render_devices()}
 
     async def resend_hello(self):
         """Settings changed on the PC (project folders): tell the phones without reconnecting."""
@@ -942,10 +977,15 @@ class Agent:
             await asyncio.sleep(interval)
             return
         data, pix_fmt, size = raw
-        # slow link (acks come back late): drop to the low tier and half the frame rate until it recovers
+        # slow link (acks come back late, or measured throughput is tiny): drop a tier and halve the
+        # frame rate until it recovers; on the "tiny" profile only one frame is ever in flight
+        thin = self.screen.profile_name == "tiny" or (0 < self.bw < 12 * 1024)
         slow = self.rtt > 0.6
-        tier = "low" if slow else self.screen.profile_name
-        enc_fps = max(4, fps // 2) if slow else fps
+        tier = "tiny" if thin else "low" if slow else self.screen.profile_name
+        enc_fps = min(fps, 4) if thin else max(4, fps // 2) if slow else fps
+        if thin and not self.ack.is_set() and time.monotonic() - self.sent_at < 1.5:
+            await asyncio.sleep(interval)   # the previous frame is still on the wire: don't pile up behind it
+            return
         key = (codec, size, enc_fps, tier, self.video_gen, pix_fmt)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
@@ -967,6 +1007,8 @@ class Agent:
                 break
             is_key, pts, payload = item
             self.sent_at = time.monotonic()   # the phone acks decoded frames: that gives us the RTT
+            self.sent_bytes = len(payload)
+            self.ack.clear()
             await ws.send_bytes(video.FRAME_VIDEO_CODEC + bytes([1 if is_key else 0, cid]) + pts.to_bytes(8, "little") + payload)
             if not self.enc.out.qsize():
                 break
@@ -1002,14 +1044,16 @@ class Agent:
                 continue
             if not self.audio.stream:
                 try:
-                    await loop.run_in_executor(None, self.audio.start, self.audio_source)
+                    bitrate = "16k" if self.screen.profile_name == "tiny" else "24k"
+                    await loop.run_in_executor(None, self.audio.start, self.audio_source, self.audio_device,
+                                               self.ffmpeg if (self.audio_opus and opus.available(self.ffmpeg)) else None, bitrate)
                 except Exception as e:  # noqa: BLE001
                     log.warning("audio unavailable: %s", e)
                     self.audio_on = False
                     await ws.send_str(json.dumps({"t": "audio", "on": False, "error": str(e)}))
                     continue
-            chunk = await loop.run_in_executor(None, self.audio.read)
-            await ws.send_bytes(chunk)
+            for chunk in await loop.run_in_executor(None, self.audio.read):
+                await ws.send_bytes(chunk)
 
     async def watch_notifications(self, ws):
         """Windows toasts -> the phone, as long as the rule is on."""
@@ -1087,6 +1131,9 @@ class Agent:
                     if self.sent_at:
                         sample = time.monotonic() - self.sent_at
                         self.rtt = sample if not self.rtt else self.rtt * 0.7 + sample * 0.3
+                        if self.sent_bytes >= 6000 and sample > 0.02:   # small frames say nothing about throughput
+                            bw = self.sent_bytes / sample
+                            self.bw = bw if not self.bw else self.bw * 0.7 + bw * 0.3
                     self.ack.set()
                 elif t == "viewers":
                     self.viewers = int(ev.get("n", 0))
@@ -1139,11 +1186,15 @@ class Agent:
                         self.codecs = []
                     elif isinstance(ev.get("codecs"), list):
                         self.codecs = [c for c in ev["codecs"] if c in ("avc1", "vp8")][:4]
+                        self.audio_opus = "opus" in ev["codecs"]
                     self.video_gen += 1
                 elif t == "audio_source":
                     self.audio_source = "mic" if ev.get("src") == "mic" else "speakers"
+                    self.audio_device = str(ev.get("device") or "")[:512]
                     if self.audio.stream:
-                        self.audio.stop()  # restarts with the new source on the next loop
+                        self.audio.stop()  # restarts with the new source/device on the next loop
+                elif t == "audio_devices_get":
+                    await ws.send_str(json.dumps({"t": "audio_devices", "items": audio_out.list_render_devices()}))
                 elif t == "rules":
                     for k in self.rules:
                         if k in ev:
@@ -1194,7 +1245,10 @@ class Agent:
                     self.downloads.cancel(str(ev.get("id", "")))
                     await ws.send_str(json.dumps({"t": "downloads", "items": self.downloads.list()}))
                 elif t == "profile":
+                    was = self.screen.profile_name
                     self.screen.set_profile(str(ev.get("name", "normal")))
+                    if (was == "tiny") != (self.screen.profile_name == "tiny") and self.audio.stream:
+                        self.audio.stop()   # Opus bitrate follows the profile
                 elif t == "audio":
                     self.audio_on = bool(ev.get("on"))
                 if t in ("move", "btn", "click", "wheel", "key", "text", "combo", "clip"):
@@ -1205,7 +1259,9 @@ class Agent:
                                                   "enc_fps": self.enc.fps if self.enc else None, "size": list(self.screen.size),
                                                   "profile": self.screen.profile_name, "rtt_ms": int(self.rtt * 1000), "viewers": self.viewers,
                                                   "zone": bool(self.screen.zone), "terms": len(self.terms), "monitor": self.screen.mon_index,
-                                                  "codecs": self.codecs, "reconnects": self.reconnects,
+                                                  "codecs": self.codecs, "reconnects": self.reconnects, "bw_kbs": round(self.bw / 1024, 1),
+                                                  "audio": self.audio.device_name if self.audio.stream else None,
+                                                  "audio_codec": ("opus " + self.audio.enc.bitrate) if (self.audio.stream and self.audio.enc) else ("pcm" if self.audio.stream else None),
                                                   "idle_s": int(time.monotonic() - self.last_input)}))
                 elif t == "move":
                     self.input.move(float(ev["x"]), float(ev["y"]))

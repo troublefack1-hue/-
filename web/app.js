@@ -189,6 +189,7 @@
         pill(`${m.host || "ПК"} · ${m.w}×${m.h}`);
         pcInfo = { term: !!m.term, shells: m.shells || ["shell"], projects: m.projects || [], monitors: m.monitors || 1, monitor: m.monitor || 1 };
         if (m.volume) applyVolume(m.volume);
+        renderAudioDevices(m.audio_devices);
         $("termBtn").hidden = false;
         renderMonitors();
         $("audioBtn").hidden = !pcAudio;
@@ -302,6 +303,7 @@
     const type = new Uint8Array(buf, 0, 1)[0];
     if (type === 1) drawFrame(new Blob([buf.slice(1)], { type: "image/jpeg" }));
     else if (type === 2) playAudio(buf);
+    else if (type === 10) playOpus(buf);
     else if (type === 5) drawZone(buf);
     else if (type === 9) decodeFrame(buf);
   }
@@ -334,10 +336,13 @@
     for (const [name, cfg] of [["avc1", { codec: "avc1.42E01E" }], ["vp8", { codec: "vp8" }]]) {
       try { const r = await VideoDecoder.isConfigSupported({ ...cfg, codedWidth: 1280, codedHeight: 720 }); if (r.supported) codecList.push(name); } catch {}
     }
+    // sound: Opus at 24 kbit/s instead of raw PCM at 256 kbit/s (the PC falls back to PCM if we can't)
+    try { if ("AudioDecoder" in window && (await AudioDecoder.isConfigSupported({ codec: "opus", sampleRate: 48000, numberOfChannels: 1 })).supported) codecList.push("opus"); } catch {}
     return codecList;
   }
   async function announceCodecs() {
-    const list = prefs.video === false ? [] : await probeCodecs();
+    const all = await probeCodecs();
+    const list = prefs.video === false ? all.filter((c) => c === "opus") : all;
     send({ t: "video", codecs: list });
   }
   function ensureDecoder(codec) {
@@ -399,7 +404,7 @@
       if (latency) parts.push(`${latency} мс`);
       subEl.textContent = parts.join(" · ");
       signal.className = "signal " + (latency ? (latency < 120 ? "s3" : latency < 350 ? "s2" : "s1") : "s3");
-      $("stats").textContent = `Профиль: ${{ eco: "эконом", normal: "обычный", hq: "максимум" }[profile]}` +
+      $("stats").textContent = `Профиль: ${{ tiny: "10 КБ/с", eco: "эконом", normal: "обычный", hq: "максимум" }[profile]}` +
         (latency ? ` · задержка ${latency} мс` : "") + ` · трафик ${Math.round(bytes / 1024)} КБ/с`;
     }
     frames = 0; bytes = 0;
@@ -421,6 +426,31 @@
     if (playAt < now + 0.05) playAt = now + 0.08;        // (re)start with a small cushion
     if (playAt > now + 0.6) playAt = now + 0.1;          // fell behind: drop the backlog
     src.start(playAt); playAt += ab.duration;
+  }
+  // Opus packets (0x0A): WebCodecs decodes to 48 kHz float, then the same queue as PCM
+  let adec = null, opusTs = 0;
+  function queuePcmF32(f32, rate) {
+    const ab = actx.createBuffer(1, f32.length, rate);
+    ab.getChannelData(0).set(f32);
+    const src = actx.createBufferSource(); src.buffer = ab; src.connect(actx.destination);
+    const now = actx.currentTime;
+    if (playAt < now + 0.05) playAt = now + 0.08;
+    if (playAt > now + 0.6) playAt = now + 0.1;
+    src.start(playAt); playAt += ab.duration;
+  }
+  function playOpus(buf) {
+    if (!audioOn || !("AudioDecoder" in window)) return;
+    if (!actx) { actx = new (window.AudioContext || window.webkitAudioContext)(); playAt = 0; }
+    if (!adec || adec.state === "closed") {
+      try {
+        adec = new AudioDecoder({
+          output: (ad) => { const f32 = new Float32Array(ad.numberOfFrames); ad.copyTo(f32, { planeIndex: 0, format: "f32-planar" }); queuePcmF32(f32, ad.sampleRate); ad.close(); },
+          error: (e) => { pcrError("Opus: " + e.message); try { adec.close(); } catch {} adec = null; } });
+        adec.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 1 });
+        opusTs = 0;
+      } catch (e) { pcrError("Opus: " + e.message); adec = null; return; }
+    }
+    try { adec.decode(new EncodedAudioChunk({ type: "key", timestamp: opusTs, data: buf.slice(1) })); opusTs += 20000; } catch (e) { try { adec.close(); } catch {} adec = null; }
   }
   $("audioBtn").onclick = () => {
     audioOn = !audioOn;
@@ -688,7 +718,8 @@
     profile = name; localStorage.setItem("pcr_profile", name);
     if (!auto) localStorage.setItem("pcr_profile_manual", name);
     document.querySelectorAll("#profile button").forEach((b) => b.classList.toggle("on", b.dataset.profile === name));
-    $("ecoBadge").hidden = name !== "eco";
+    $("ecoBadge").hidden = name !== "eco" && name !== "tiny";
+    $("ecoBadge").textContent = name === "tiny" ? "10 КБ/с" : "эконом";
     send({ t: "profile", name });
   }
   setProfile(profile);
@@ -727,7 +758,16 @@
     const b = e.target.closest("button[data-accent]"); if (!b) return;
     prefs.accent = b.dataset.accent; savePrefs(); applyAccent(); buzz(8);
   });
-  const sendAudioSrc = () => send({ t: "audio_source", src: prefs.audioSrc || "speakers" });
+  const sendAudioSrc = () => send({ t: "audio_source", src: prefs.audioSrc || "speakers", device: prefs.audioDevice || "" });
+  function renderAudioDevices(items) {
+    const sel = $("audioDev"); sel.innerHTML = "";
+    const o0 = document.createElement("option"); o0.value = ""; o0.textContent = "как на ПК (звук слышно и на ПК)"; sel.appendChild(o0);
+    for (const d of items || []) { const o = document.createElement("option"); o.value = d.id; o.textContent = d.name + (d.default ? " (сейчас по умолчанию)" : ""); sel.appendChild(o); }
+    if (prefs.audioDevice && ![...sel.options].some((o) => o.value === prefs.audioDevice)) { const o = document.createElement("option"); o.value = prefs.audioDevice; o.textContent = "(устройство не найдено)"; sel.appendChild(o); }
+    sel.value = prefs.audioDevice || "";
+    $("audioDevBox").hidden = !(items && items.length);
+  }
+  $("audioDev").onchange = () => { prefs.audioDevice = $("audioDev").value; savePrefs(); sendAudioSrc(); buzz(8); show(prefs.audioDevice ? "Пока телефон слушает, ПК играет в выбранное устройство" : "Звук с устройства по умолчанию"); };
   document.querySelectorAll("#audioSrc button").forEach((b) => {
     b.classList.toggle("on", b.dataset.src === (prefs.audioSrc || "speakers"));
     b.onclick = () => { prefs.audioSrc = b.dataset.src; savePrefs(); document.querySelectorAll("#audioSrc button").forEach((x) => x.classList.toggle("on", x === b)); sendAudioSrc(); buzz(8); };
@@ -1278,7 +1318,8 @@
     const kind = lastDiag ? (d.codec ? `видео ${d.codec} (${d.encoder || "?"}) ${d.enc_fps || "?"} к/с` : "кадры JPEG") : "ПК не ответил";
     return [["Связь", pcOnline ? "ПК в сети" : "ПК не в сети"], ["Задержка", latency ? latency + " мс" : "—"], ["Кадров/с (факт)", String(fpsShown)],
       ["Картинка", kind], ["Размер кадра", d.size ? `${d.size[0]}×${d.size[1]}` : (frameW ? `${frameW}×${frameH}` : "—")],
-      ["Профиль", d.profile || profile], ["RTT по ack на ПК", d.rtt_ms != null ? d.rtt_ms + " мс" : "—"], ["HD-зона", d.zone ? "вкл" : "выкл"],
+      ["Профиль", d.profile || profile], ["RTT по ack на ПК", d.rtt_ms != null ? d.rtt_ms + " мс" : "—"], ["Канал по оценке ПК", d.bw_kbs ? d.bw_kbs + " КБ/с" : "—"],
+      ["Звук", d.audio ? `${d.audio} · ${d.audio_codec || "?"}` : "выкл"], ["HD-зона", d.zone ? "вкл" : "выкл"],
       ["Зрителей", d.viewers ?? "—"], ["Терминалов", d.terms ?? "—"], ["Переподключений ПК↔relay", d.reconnects ?? "—"], ["Переподключений телефона", String(phoneReconnects)],
       ["Кодеки телефона", (codecList || []).join(", ") || "нет WebCodecs"], ["Без касаний, с", d.idle_s ?? "—"], ["Сеть телефона", (navigator.connection && (navigator.connection.effectiveType || navigator.connection.type)) || "—"],
       ["Приложение", window.PcRemoteApp ? "Android" : "браузер"], ["Экран телефона", `${innerWidth}×${innerHeight} @${devicePixelRatio}`]];

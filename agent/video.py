@@ -23,7 +23,7 @@ log = logging.getLogger("agent.video")
 FRAME_VIDEO_CODEC = b"\x09"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
-BITRATE = {"low": "250k", "eco": "500k", "normal": "2500k", "hq": "6000k"}   # "low" = slow link fallback
+BITRATE = {"tiny": "48k", "low": "250k", "eco": "500k", "normal": "2500k", "hq": "6000k"}   # "tiny" ≈ 10 KB/s link, "low" = slow link fallback
 
 
 def find_ffmpeg() -> str | None:
@@ -114,7 +114,7 @@ class Encoder:
         self.key = None
         have = _encoders(ffmpeg)
         br = BITRATE.get(profile, BITRATE["normal"])
-        gop = str(self.fps * 2)
+        gop = str(self.fps * (10 if profile == "tiny" else 2))   # thin link: key frames are the expensive part
         if codec == "h264":
             name, args = h264_encoder(ffmpeg) or H264_CHAIN[-1]
             self.encoder_name = name
@@ -128,7 +128,7 @@ class Encoder:
             venc = ["-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", br, "-maxrate", br, "-bufsize", br,
                     "-g", gop, "-lag-in-frames", "0", "-error-resilient", "1", "-auto-alt-ref", "0"]
             fmt = ["-f", "ivf"]
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", pix_fmt, "-s", f"{width}x{height}",
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0", "-f", "rawvideo", "-pix_fmt", pix_fmt, "-s", f"{width}x{height}",
                "-r", str(self.fps), "-i", "pipe:0", "-an", *venc, "-pix_fmt", "yuv420p", *fmt, "pipe:1"]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      creationflags=CREATE_NO_WINDOW, bufsize=0)
