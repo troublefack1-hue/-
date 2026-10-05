@@ -61,8 +61,56 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception ignored) {}
         }
-        if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); } else showSetup(null);
+        if (!handlePairLink(getIntent())) {
+            if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); } else showSetup(null);
+        }
         checkUpdate();
+    }
+
+    @Override protected void onNewIntent(Intent i) {
+        super.onNewIntent(i);
+        setIntent(i);
+        handlePairLink(i);
+    }
+
+    /** pcremote://pair?host=IP:port&code=…&fp=…&lan=… from a scanned QR: pair without typing anything. */
+    private boolean handlePairLink(Intent i) {
+        if (i == null || !Intent.ACTION_VIEW.equals(i.getAction()) || i.getData() == null) return false;
+        Uri u = i.getData();
+        if (!"pcremote".equals(u.getScheme()) || !"pair".equals(u.getHost())) return false;
+        i.setData(null);   // consumed: a rotation must not pair again
+        String hp = u.getQueryParameter("host"), code = u.getQueryParameter("code"), fp = u.getQueryParameter("fp"), lan = u.getQueryParameter("lan");
+        if (hp == null || code == null) { showSetup("В QR нет адреса или кода"); return true; }
+        String[] parts = hp.split(":");
+        int port = 8443;
+        try { if (parts.length == 2) port = Integer.parseInt(parts[1]); } catch (NumberFormatException e) { showSetup("В QR неверный порт"); return true; }
+        showSetup(null);
+        pairWith(parts[0], port, code.toUpperCase().replaceAll("[^0-9A-Z]", ""), fp == null ? "" : fp.toLowerCase().replace(":", ""), lan == null ? "" : lan, null, null);
+        return true;
+    }
+
+    /** Pair in the background; on success the remote screen opens, on failure the setup card shows the error. */
+    private void pairWith(final String h, final int port, final String c, final String fpExpected, final String lan, final Button btn, final TextView err) {
+        final String hostport = h + ":" + port;
+        if (btn != null) btn.setEnabled(false);
+        if (err != null) { err.setText("Подключаюсь…"); err.setTextColor(MUTED); }
+        else Toast.makeText(this, "Привязываю к " + hostport + "…", Toast.LENGTH_SHORT).show();
+        final boolean wifi = RemoteService.onWifi(this);
+        new Thread(() -> {
+            try {
+                Pairing.Result r = Pairing.pair(h, port, c, fpExpected, lan, wifi);
+                prefs.edit().putString("hostport", hostport).putString("host", h).putInt("port", port)
+                        .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).putString("wake", r.wake)
+                        .putString("lan", r.lan.isEmpty() ? lan : r.lan).apply();
+                runOnUiThread(() -> { RemoteService.ensureRunning(this); startRemote(); });
+            } catch (Exception e) {
+                final String msg = e.getMessage() == null ? e.toString() : e.getMessage();
+                runOnUiThread(() -> {
+                    if (err != null) { btn.setEnabled(true); err.setTextColor(0xFFEF5350); err.setText(msg); }
+                    else showSetup(msg);
+                });
+            }
+        }).start();
     }
 
     // ----------------------------------------------------------- update ---
@@ -153,7 +201,7 @@ public class MainActivity extends Activity {
         final EditText host = input(prefs.getString("hostport", ""), "IP:порт, например 93.100.1.2:8443", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         card.addView(host);
         card.addView(text("Код привязки", 13, MUTED));
-        final EditText code = input("", "6 цифр", InputType.TYPE_CLASS_NUMBER);
+        final EditText code = input("", "код из окна PC Remote (или наведите камеру на QR)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         card.addView(code);
 
         final TextView err = text(error == null ? "" : error, 14, 0xFFEF5350); err.setPadding(0, dp(6), 0, dp(6));
@@ -172,19 +220,7 @@ public class MainActivity extends Activity {
             if (hp.isEmpty() || parts.length > 2 || !(c.length() == 6 || c.length() == 8)) { err.setText("Нужен адрес ПК (IP или IP:порт) и код из окна PC Remote"); return; }
             final String h = parts[0]; final int port;
             try { port = parts.length == 2 ? Integer.parseInt(parts[1]) : 8443; } catch (NumberFormatException e) { err.setText("Порт должен быть числом"); return; }
-            final String hostport = h + ":" + port;
-            btn.setEnabled(false); err.setText("Подключаюсь…"); err.setTextColor(MUTED);
-            new Thread(() -> {
-                try {
-                    Pairing.Result r = Pairing.pair(h, port, c);
-                    prefs.edit().putString("hostport", hostport).putString("host", h).putInt("port", port)
-                            .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).putString("wake", r.wake).putString("lan", r.lan).apply();
-                    runOnUiThread(this::startRemote);
-                } catch (Exception e) {
-                    runOnUiThread(() -> { btn.setEnabled(true); err.setTextColor(0xFFEF5350);
-                        err.setText(e.getMessage() == null ? e.toString() : e.getMessage()); });
-                }
-            }).start();
+            pairWith(h, port, c, "", "", btn, err);
         });
 
         // entrance: card rises and fades in

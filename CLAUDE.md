@@ -48,6 +48,7 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 - ffmpeg: докачка (`deps.py`, ~100 МБ с gyan.dev), `h264_nvenc`/`libx264`, декодирование на телефоне (WebCodecs в WebView).
 - Android: разрешение «Доступ ко всем файлам» для `phone`, трансляция экрана + звук (Android 10+), звонок «Найти телефон» на экране блокировки (полноэкранное уведомление; на Android 14 нужен грант), виджет, фон на MIUI/HyperOS (автозапуск, «без ограничений» по батарее).
 - Уведомления Windows → телефон (`notify_watch.py` читает `wpndatabase.db`).
+- QR-привязка: QR в окне ПК (`draw_qr`, пакет `qrcode`) → ссылка `pcremote://pair?host=…&code=…&fp=…&lan=…` → `MainActivity.handlePairLink`; телефон сверяет отпечаток сертификата с `fp` до отправки кода. Проверить со стандартной камерой и с MIUI-сканером.
 - Обновление exe (`updater.apply` через batch-скрипт) и APK (подпись: нужны секреты `ANDROID_KEYSTORE_B64`/`ANDROID_KEYSTORE_PASS` в репозитории, иначе временный ключ).
 
 ## Сеть и порты

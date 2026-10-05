@@ -21,8 +21,15 @@ public final class Pairing {
     }
 
     public static Result pair(String host, int port, String code) throws IOException {
+        return pair(host, port, code, null, "", false);
+    }
+
+    /** From a QR: the fingerprint is known in advance, so the code is only ever sent to the PC that printed the QR;
+     *  at home the LAN address from the QR is tried first. */
+    public static Result pair(String host, int port, String code, String expectedFp, String lan, boolean tryLan) throws IOException {
         String[] seen = new String[1];
-        try (SSLSocket s = Pinned.connect(host, port, null, seen, 8000)) {
+        String pin = expectedFp == null || expectedFp.isEmpty() ? null : expectedFp;
+        try (SSLSocket s = open(lan, host, port, pin, seen, tryLan)) {
             s.setSoTimeout(8000);
             OutputStream out = s.getOutputStream();
             out.write(("GET /api/pair?code=" + code + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n")
@@ -42,6 +49,15 @@ public final class Pairing {
             String secret = jsonString(body.toString(), "secret");
             if (secret == null) throw new IOException("bad pairing response");
             return new Result(secret, seen[0], jsonString(body.toString(), "ntfy"), jsonString(body.toString(), "wake"), jsonString(body.toString(), "lan"));
+        }
+    }
+
+    private static SSLSocket open(String lan, String host, int port, String pin, String[] seen, boolean tryLan) throws IOException {
+        try {
+            return Pinned.connectPreferLan(lan, host, port, pin, seen, 8000, tryLan);
+        } catch (javax.net.ssl.SSLException e) {
+            if (pin != null) throw new IOException("Сертификат ПК не совпадает с QR. Отсканируйте QR из окна PC Remote ещё раз");
+            throw e;
         }
     }
 

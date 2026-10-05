@@ -37,7 +37,11 @@ BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 sys.path[:0] = [str(BASE / "relay"), str(BASE / "agent")]
 import agent as agent_mod  # noqa: E402
 import relay as relay_mod  # noqa: E402
-from certs import ensure_certs  # noqa: E402
+from certs import ensure_certs, fingerprint as cert_fingerprint  # noqa: E402
+try:
+    import qrcode  # noqa: E402
+except ImportError:  # noqa: BLE001
+    qrcode = None
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deps
 import updater  # noqa: E402
@@ -547,6 +551,12 @@ class App(tk.Tk):
         self.code.grid(row=3, column=1, sticky="w", **pad)
         self.code_hint = ttk.Label(f, text="", style="Muted.TLabel")
         self.code_hint.grid(row=4, column=0, columnspan=2, sticky="w", **pad)
+        # QR with address + code + certificate fingerprint: the phone's camera app opens «Мой ПК» and it pairs itself
+        self.qr = tk.Canvas(f, width=156, height=156, bg="white", highlightthickness=0, cursor="hand2")
+        self.qr.grid(row=2, column=2, rowspan=4, sticky="ne", padx=(10, 0), pady=(2, 0))
+        self.qr.bind("<Button-1>", lambda e: self.code_hint.configure(text="Наведите камеру телефона на QR — приложение «Мой ПК» привяжется само."))
+        self.qr_shown = None
+        self._fp = ""
 
         self.ring_btn = ttk.Button(f, text="Найти телефон 🔔", command=self.ring, state="disabled")
         self.ring_btn.grid(row=5, column=0, sticky="w", **pad)
@@ -595,6 +605,7 @@ class App(tk.Tk):
 
         self.pair_until = 0
         self.code.configure(text=cfg["pair_code"])
+        self.draw_qr()
         self.code_hint.configure(text="Введите адрес и этот код в приложении «Мой ПК» на телефоне. Код постоянный.")
         self.cast_win: CastWindow | None = None
         self.update_info = None
@@ -667,6 +678,57 @@ class App(tk.Tk):
         self.beam_t += 1
         self.after(60, self.animate_beam)
 
+    def qr_content(self, code: str | None = None) -> str:
+        """pcremote://pair?host=…&code=…&fp=…&lan=… — what the phone app expects from a scanned QR."""
+        if not self._fp:
+            try:
+                if (DATA / "server.crt").exists():
+                    self._fp = cert_fingerprint(DATA / "server.crt")
+            except Exception:  # noqa: BLE001
+                self._fp = ""
+        code = (code or self.cfg.get("pair_code") or "").replace("-", "")
+        lan = getattr(relay_mod, "LAN_IP", {}).get("ip") or ""
+        host = self.cfg.get("public_ip") or lan
+        if not host or not code:
+            return ""
+        from urllib.parse import urlencode
+        q = {"host": f"{host}:{self.cfg['port']}", "code": code}
+        if self._fp:
+            q["fp"] = self._fp
+        if lan and lan != host:
+            q["lan"] = lan
+        return "pcremote://pair?" + urlencode(q)
+
+    def draw_qr(self, code: str | None = None):
+        """Redraw the QR only when its content changed (called from tick every second)."""
+        content = self.qr_content(code)
+        if content == self.qr_shown:
+            return
+        self.qr_shown = content
+        c = self.qr
+        c.delete("all")
+        if not content or qrcode is None:
+            c.create_text(78, 78, text="QR\nпоявится,\nкогда ПК\nузнает\nсвой адрес" if qrcode else "QR:\nнет пакета\nqrcode",
+                          fill=MUTED, font=("Segoe UI", 8), justify="center")
+            return
+        q = qrcode.QRCode(border=1, error_correction=qrcode.constants.ERROR_CORRECT_L)
+        q.add_data(content)
+        q.make(fit=True)
+        m = q.get_matrix()
+        n = len(m)
+        px = max(1, int(c.winfo_reqwidth()) // n)
+        off = (int(c.winfo_reqwidth()) - px * n) // 2
+        for y, row in enumerate(m):
+            x = 0
+            while x < n:   # draw runs of dark modules as one rectangle: fewer canvas items
+                if not row[x]:
+                    x += 1
+                    continue
+                x0 = x
+                while x < n and row[x]:
+                    x += 1
+                c.create_rectangle(off + x0 * px, off + y * px, off + x * px, off + (y + 1) * px, fill="black", outline="")
+
     def roll_code(self, code: str, step=0):
         """Slot-machine style reveal of the pairing code."""
         import random
@@ -717,6 +779,7 @@ class App(tk.Tk):
         self.addr.delete(0, "end")
         self.addr.insert(0, f"{ip}:{self.cfg['port']}")
         self.addr.configure(state="readonly")
+        self.draw_qr()
 
     def revoke_all(self):
         """Phone lost or given away: cut every phone off and require pairing again."""
@@ -798,7 +861,8 @@ class App(tk.Tk):
         self.pair_until = 0
         self.backend.paired_ip = ""
         self.roll_code(self.cfg["pair_code"])
-        self.code_hint.configure(text="Новый постоянный код. Введите адрес и код в приложении на телефоне.")
+        self.draw_qr()
+        self.code_hint.configure(text="Новый постоянный код. Введите адрес и код в приложении на телефоне или отсканируйте QR.")
 
     def show_pair(self, guest: bool = False):
         try:
@@ -808,6 +872,7 @@ class App(tk.Tk):
             return
         self.pair_until = time.time() + 300
         self.roll_code(code)
+        self.draw_qr(code)
         self.backend.paired_ip = ""
         self.pair_kind = "гость (только смотреть, включать и выключать)" if guest else "полный доступ"
         self.code_hint.configure(text=f"Временный код ({self.pair_kind}), действует 5 минут")
@@ -883,6 +948,8 @@ class App(tk.Tk):
             self.pair_until = 0   # temporary code expired: back to the permanent one
             self.code.configure(text=self.cfg["pair_code"], fg=ACCENT)
             self.code_hint.configure(text="Постоянный код подключения. Введите адрес и код в приложении на телефоне.")
+        if left <= 0:
+            self.draw_qr()   # picks up the LAN address / certificate once the relay is up
         self.after(1000, self.tick)
 
 

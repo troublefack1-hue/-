@@ -23,7 +23,7 @@ CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 # import name -> pip name, Windows-only ones flagged
 PACKAGES = [("aiohttp", "aiohttp", False), ("mss", "mss", False), ("PIL", "Pillow", False), ("cryptography", "cryptography", False),
-            ("psutil", "psutil", False), ("pystray", "pystray", False),
+            ("psutil", "psutil", False), ("pystray", "pystray", False), ("qrcode", "qrcode", False),
             ("pyaudiowpatch", "PyAudioWPatch", True), ("winpty", "pywinpty", True), ("pycaw", "pycaw", True)]
 
 
