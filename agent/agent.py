@@ -645,6 +645,15 @@ class Screen:
             elif self.quality < top_q:
                 self.quality = min(top_q, self.quality + 5)
 
+    def displays_changed(self) -> bool:
+        """Cheap poll: did the monitor layout or a resolution change since we started capturing?"""
+        try:
+            with mss.mss() as probe:
+                now = [dict(m) for m in probe.monitors]
+        except Exception:  # noqa: BLE001
+            return False
+        return now != [dict(m) for m in self.sct.monitors]
+
     def reinit(self):
         """Displays changed (monitor unplugged, resolution switch): start over."""
         try:
@@ -804,9 +813,20 @@ class Agent:
 
     async def stream(self, ws):
         last_sent = 0.0
+        last_probe = 0.0
         loop = asyncio.get_running_loop()
         while True:
             fps = self.screen.profile["fps"]
+            if self.viewers and time.monotonic() - last_probe > 5:
+                last_probe = time.monotonic()
+                try:
+                    if await loop.run_in_executor(None, self.screen.displays_changed):
+                        log.info("displays changed: reinit capture")
+                        self.video_close()
+                        self.screen.reinit()
+                        await ws.send_str(json.dumps(self.hello_msg()))   # new size for the phone
+                except Exception as e:  # noqa: BLE001
+                    log.info("display probe: %s", e)
             if self.viewers == 0 or fps == 0:
                 self.video_close()   # no viewers: don't keep ffmpeg running
                 await asyncio.sleep(0.5)
