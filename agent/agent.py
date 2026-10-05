@@ -926,6 +926,8 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
             return
+        if self.rtt and self.ack.is_set():
+            self.rtt *= 0.98   # no ack pending: let a stale "slow" verdict fade so we can try the full tier again
         if raw is None:
             # nothing changed: the decoder keeps the last picture; still restart on demand
             if self.enc and (self.enc.key[4] != self.video_gen or not self.enc.alive):
@@ -934,11 +936,15 @@ class Agent:
             await asyncio.sleep(interval)
             return
         data, pix_fmt, size = raw
-        key = (codec, size, fps, self.screen.profile_name, self.video_gen, pix_fmt)
+        # slow link (acks come back late): drop to the low tier and half the frame rate until it recovers
+        slow = self.rtt > 0.6
+        tier = "low" if slow else self.screen.profile_name
+        enc_fps = max(4, fps // 2) if slow else fps
+        key = (codec, size, enc_fps, tier, self.video_gen, pix_fmt)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
             try:
-                self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], fps, self.screen.profile_name, pix_fmt)
+                self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt)
                 self.enc.key = key
                 log.info("video: %s %dx%d @%d (%s)", codec, size[0], size[1], fps, self.screen.profile_name)
             except Exception as e:  # noqa: BLE001
@@ -954,6 +960,7 @@ class Agent:
             if item is None:
                 break
             is_key, pts, payload = item
+            self.sent_at = time.monotonic()   # the phone acks decoded frames: that gives us the RTT
             await ws.send_bytes(video.FRAME_VIDEO_CODEC + bytes([1 if is_key else 0, cid]) + pts.to_bytes(8, "little") + payload)
             if not self.enc.out.qsize():
                 break

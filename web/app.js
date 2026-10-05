@@ -331,7 +331,7 @@
         output: (f) => {
           if (f.displayWidth !== frameW || f.displayHeight !== frameH) { frameW = f.displayWidth; frameH = f.displayHeight; canvas.width = frameW; canvas.height = frameH; layout(); }
           ctx.drawImage(f, 0, 0, frameW, frameH); paintZone(); f.close();
-          canvas.classList.add("live"); frames++; lastFrameAt = Date.now();
+          canvas.classList.add("live"); frames++; lastFrameAt = Date.now(); send({ t: "ack" });
           if ($("bVideo").hidden) $("bVideo").hidden = false;
         },
         error: (e) => { console.warn("video decoder", e); try { vdec.close(); } catch {} vdec = null; send({ t: "video", off: true }); show("Видео недоступно, перехожу на JPEG"); },

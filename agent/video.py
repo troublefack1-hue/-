@@ -23,7 +23,7 @@ log = logging.getLogger("agent.video")
 FRAME_VIDEO_CODEC = b"\x09"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
-BITRATE = {"eco": "500k", "normal": "2500k", "hq": "6000k"}
+BITRATE = {"low": "250k", "eco": "500k", "normal": "2500k", "hq": "6000k"}   # "low" = slow link fallback
 
 
 def find_ffmpeg() -> str | None:
