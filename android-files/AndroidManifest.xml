@@ -37,6 +37,11 @@
                 <data android:mimeType="inode/directory" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".ViewerActivity"
+            android:exported="false"
+            android:theme="@style/ViewerTheme"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize" />
         <provider
             android:name=".FileProvider"
             android:authorities="ru.pcremote.files.provider"

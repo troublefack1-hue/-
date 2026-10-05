@@ -23,7 +23,17 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.GridView;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.view.animation.AlphaAnimation;
+import android.view.animation.AnimationSet;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.LayoutAnimationController;
+import android.view.animation.TranslateAnimation;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.PopupMenu;
@@ -45,7 +55,7 @@ import ru.pcremote.Updater;
  */
 public class MainActivity extends Activity {
     static final int BG = 0xFF0F1117, PANEL = 0xFF181B24, PANEL2 = 0xFF222633, TEXT = 0xFFEEF0F5, MUTED = 0xFF8E94A6, ACCENT = 0xFFE0A030, BAD = 0xFFEF5350, OK = 0xFF38D070;
-    private static final int REQ_PERM = 1;
+    private static final int REQ_PERM = 1, REQ_VIEW = 2;
 
     private SharedPreferences prefs;
     private Thumbs thumbs;
@@ -69,6 +79,9 @@ public class MainActivity extends Activity {
     private TextView title, subtitle, pasteText;
     private LinearLayout crumbs;
     private AbsListView listView;
+    private ImageButton viewBtn;
+    private View fab, empty;
+    private TextView emptyText;
     private final Adapter adapter = new Adapter();
 
     @Override protected void onCreate(Bundle b) {
@@ -117,6 +130,7 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int req, int code, Intent data) {
         super.onActivityResult(req, code, data);
         if (req == REQ_PERM) { if (hasStorage()) { setContentView(root); showRoots(); } else showPermission(); }
+        if (req == REQ_VIEW && code == RESULT_OK && dir != null) refresh();
     }
 
     @Override public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
@@ -129,37 +143,58 @@ public class MainActivity extends Activity {
         // top bar
         LinearLayout bar = new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setBackgroundColor(PANEL); bar.setPadding(dp(4), dp(6), dp(4), dp(6));
-        Button back = iconButton("‹"); back.setOnClickListener(v -> onBackPressed()); bar.addView(back);
+        bar.addView(icon(R.drawable.ic_back, v -> onBackPressed()));
         LinearLayout titles = column(); titles.setPadding(dp(6), 0, dp(6), 0);
         title = text("Проводник", 18, TEXT); title.setTypeface(null, Typeface.BOLD); title.setSingleLine(true);
         subtitle = text("", 12, MUTED); subtitle.setSingleLine(true); subtitle.setEllipsize(android.text.TextUtils.TruncateAt.START);
         titles.addView(title); titles.addView(subtitle);
         bar.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button search = iconButton("⌕"); search.setOnClickListener(v -> askSearch()); bar.addView(search);
-        Button view = iconButton("▦"); view.setOnClickListener(v -> { grid = !grid; prefs.edit().putBoolean("grid", grid).apply(); rebuildList(); }); bar.addView(view);
-        Button more = iconButton("⋮"); more.setOnClickListener(this::menu); bar.addView(more);
+        bar.addView(icon(R.drawable.ic_search, v -> askSearch()));
+        viewBtn = icon(grid ? R.drawable.ic_list : R.drawable.ic_grid, v -> { grid = !grid; prefs.edit().putBoolean("grid", grid).apply(); viewBtn.setImageResource(grid ? R.drawable.ic_list : R.drawable.ic_grid); rebuildList(); animateList(); });
+        bar.addView(viewBtn);
+        bar.addView(icon(R.drawable.ic_more, this::menu));
         root.addView(bar);
         // breadcrumbs
         HorizontalScrollView hs = new HorizontalScrollView(this); hs.setHorizontalScrollBarEnabled(false); hs.setBackgroundColor(PANEL);
         crumbs = new LinearLayout(this); crumbs.setOrientation(LinearLayout.HORIZONTAL); crumbs.setPadding(dp(8), 0, dp(8), dp(6));
         hs.addView(crumbs); root.addView(hs);
         // list container
-        LinearLayout body = column(); root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        FrameLayout stage = new FrameLayout(this); root.addView(stage, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        LinearLayout body = column(); stage.addView(body, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         rebuildList(body);
+        // empty state
+        LinearLayout em = column(); em.setGravity(Gravity.CENTER); em.setVisibility(View.GONE);
+        ImageView ei = new ImageView(this); ei.setImageResource(R.drawable.ic_empty); ei.setColorFilter(0x553A3F4D); em.addView(ei, new LinearLayout.LayoutParams(dp(96), dp(96)));
+        emptyText = text("Пусто", 15, MUTED); emptyText.setGravity(Gravity.CENTER); emptyText.setPadding(dp(32), dp(8), dp(32), 0); em.addView(emptyText);
+        empty = em; stage.addView(em, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // floating "+" : new folder / new text file
+        ImageButton plus = new ImageButton(this); plus.setImageResource(R.drawable.ic_add); plus.setColorFilter(Color.BLACK);
+        GradientDrawable circle = new GradientDrawable(); circle.setShape(GradientDrawable.OVAL); circle.setColor(ACCENT);
+        plus.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33000000), circle, null)); plus.setElevation(dp(6));
+        FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.BOTTOM | Gravity.END); fp.setMargins(0, 0, dp(18), dp(18));
+        plus.setOnClickListener(v -> {
+            PopupMenu m = new PopupMenu(this, v); m.getMenu().add("Новая папка"); m.getMenu().add("Новый текстовый файл");
+            m.setOnMenuItemClickListener(mi -> { if (String.valueOf(mi.getTitle()).startsWith("Новая папка")) ask("Имя папки", "Новая папка", n -> { try { Fs.mkdir(dir, n); refresh(); } catch (Exception e) { toast(e.getMessage()); } });
+                else ask("Имя файла", "Заметка.txt", n -> { try { File f = new File(dir, n); if (n.isEmpty() || n.contains("/") || f.exists()) throw new java.io.IOException("недопустимое имя или файл уже есть"); if (!f.createNewFile()) throw new java.io.IOException("не удалось создать"); refresh(); } catch (Exception e) { toast(e.getMessage()); } }); return true; });
+            m.show(); });
+        fab = plus; stage.addView(plus, fp); plus.setVisibility(View.GONE);
         // paste bar
         pasteBar = new LinearLayout(this); pasteBar.setOrientation(LinearLayout.HORIZONTAL); pasteBar.setGravity(Gravity.CENTER_VERTICAL);
         pasteBar.setBackgroundColor(PANEL2); pasteBar.setPadding(dp(14), dp(8), dp(8), dp(8)); pasteBar.setVisibility(View.GONE);
         pasteText = text("", 14, TEXT); pasteBar.addView(pasteText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         Button paste = button("Вставить сюда"); paste.setOnClickListener(v -> paste()); pasteBar.addView(paste);
-        Button cancel = iconButton("✕"); cancel.setOnClickListener(v -> { clip.clear(); updateBars(); }); pasteBar.addView(cancel);
+        pasteBar.addView(icon(R.drawable.ic_close, v -> { clip.clear(); updateBars(); }));
         root.addView(pasteBar);
         // selection action bar
         actionBar = new LinearLayout(this); actionBar.setOrientation(LinearLayout.HORIZONTAL); actionBar.setBackgroundColor(PANEL2); actionBar.setVisibility(View.GONE);
-        for (String[] a : new String[][]{{"⎘", "Копировать"}, {"✂", "Вырезать"}, {"🗑", "Удалить"}, {"⇪", "Поделиться"}, {"⋯", "Ещё"}}) {
+        int[] icons = {R.drawable.ic_copy, R.drawable.ic_cut, R.drawable.ic_delete, R.drawable.ic_share, R.drawable.ic_dots};
+        String[] labels = {"Копировать", "Вырезать", "Удалить", "Поделиться", "Ещё"};
+        for (int k = 0; k < icons.length; k++) {
             LinearLayout cell = column(); cell.setGravity(Gravity.CENTER); cell.setPadding(0, dp(8), 0, dp(8));
-            TextView ic = text(a[0], 20, TEXT); ic.setGravity(Gravity.CENTER); cell.addView(ic);
-            TextView lb = text(a[1], 11, MUTED); cell.addView(lb);
-            final String action = a[1];
+            cell.setBackground(ripple(Color.TRANSPARENT));
+            ImageView ic = new ImageView(this); ic.setImageResource(icons[k]); ic.setColorFilter(TEXT); cell.addView(ic, new LinearLayout.LayoutParams(dp(24), dp(24)));
+            TextView lb = text(labels[k], 11, MUTED); lb.setPadding(0, dp(2), 0, 0); cell.addView(lb);
+            final String action = labels[k];
             cell.setOnClickListener(v -> onAction(action, v));
             actionBar.addView(cell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         }
@@ -169,27 +204,43 @@ public class MainActivity extends Activity {
 
     private void rebuildList() { LinearLayout body = (LinearLayout) listView.getParent(); rebuildList(body); adapter.notifyDataSetChanged(); }
 
+    /** Rows glide in one after another when a folder opens: cheap, and it tells the eye "new place". */
+    private void animateList() {
+        AnimationSet set = new AnimationSet(true);
+        AlphaAnimation a = new AlphaAnimation(0f, 1f); a.setDuration(180);
+        TranslateAnimation t = new TranslateAnimation(0, 0, dp(18), 0); t.setDuration(220); t.setInterpolator(new DecelerateInterpolator());
+        set.addAnimation(a); set.addAnimation(t);
+        LayoutAnimationController c = new LayoutAnimationController(set, grid ? 0.03f : 0.05f);
+        listView.setLayoutAnimation(c); listView.startLayoutAnimation();
+    }
+
+    private RippleDrawable ripple(int base) {
+        GradientDrawable bg = new GradientDrawable(); bg.setColor(base); bg.setCornerRadius(dp(12));
+        return new RippleDrawable(ColorStateList.valueOf(0x33E0A030), bg, null);
+    }
+
     private void rebuildList(LinearLayout body) {
         body.removeAllViews();
         if (grid) { GridView g = new GridView(this); g.setNumColumns(GridView.AUTO_FIT); g.setColumnWidth(dp(110)); g.setStretchMode(GridView.STRETCH_COLUMN_WIDTH); g.setVerticalSpacing(dp(6)); listView = g; }
         else { ListView l = new ListView(this); l.setDivider(null); listView = l; }
-        listView.setBackgroundColor(BG); listView.setAdapter(adapter); listView.setPadding(dp(4), dp(4), dp(4), dp(4));
+        listView.setBackgroundColor(BG); listView.setAdapter(adapter); listView.setPadding(dp(6), dp(4), dp(6), dp(80)); listView.setClipToPadding(false);
+        listView.setSelector(android.R.color.transparent);
         listView.setOnItemClickListener((p, v, pos, id) -> onTap(items.get(pos)));
         listView.setOnItemLongClickListener((p, v, pos, id) -> { toggle(items.get(pos)); return true; });
         body.addView(listView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
     // -------------------------------------------------------------- roots ---
-    static final class Root { final String name, hint; final File file; final int icon; Root(String n, String h, File f, int i) { name = n; hint = h; file = f; icon = i; } }
+    static final class Root { final String name, hint; final File file; final int icon; float used = -1; Root(String n, String h, File f, int i) { name = n; hint = h; file = f; icon = i; } }
 
     private List<Root> roots() {
         List<Root> r = new ArrayList<>();
         File ext = Environment.getExternalStorageDirectory();
-        r.add(new Root("Внутренняя память", usage(ext), ext, R.drawable.ic_sd));
+        Root main = new Root("Внутренняя память", usage(ext), ext, R.drawable.ic_sd); main.used = usedFraction(ext); r.add(main);
         for (File f : getExternalFilesDirs(null)) {
             if (f == null) continue;
             String p = f.getAbsolutePath(); int i = p.indexOf("/Android/");
-            if (i > 0 && !p.startsWith(ext.getAbsolutePath())) { File card = new File(p.substring(0, i)); r.add(new Root("SD-карта", usage(card), card, R.drawable.ic_sd)); }
+            if (i > 0 && !p.startsWith(ext.getAbsolutePath())) { File card = new File(p.substring(0, i)); Root sd = new Root("SD-карта", usage(card), card, R.drawable.ic_sd); sd.used = usedFraction(card); r.add(sd); }
         }
         r.add(new Root("Загрузки", "", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), R.drawable.ic_folder));
         r.add(new Root("Камера", "", new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera"), R.drawable.ic_image));
@@ -197,6 +248,8 @@ public class MainActivity extends Activity {
         r.add(new Root("Корзина", "удалённое можно вернуть", Fs.trashDir(ext), R.drawable.ic_trash));
         return r;
     }
+
+    private float usedFraction(File f) { try { StatFs s = new StatFs(f.getAbsolutePath()); return 1f - (float) s.getAvailableBytes() / Math.max(1, s.getTotalBytes()); } catch (Exception e) { return -1; } }
 
     private String usage(File f) {
         try { StatFs s = new StatFs(f.getAbsolutePath()); long total = s.getTotalBytes(), free = s.getAvailableBytes(); return "свободно " + Fs.size(free) + " из " + Fs.size(total); }
@@ -209,7 +262,8 @@ public class MainActivity extends Activity {
         crumbs.removeAllViews();
         items = new ArrayList<>();
         for (Root r : roots()) items.add(new RootEntry(r));
-        adapter.notifyDataSetChanged(); updateBars();
+        adapter.notifyDataSetChanged(); updateBars(); animateList();
+        empty.setVisibility(View.GONE); fab.setVisibility(View.GONE);
     }
 
     /** A root shown in the same list, with its own icon and hint. */
@@ -231,8 +285,11 @@ public class MainActivity extends Activity {
         items = l;
         title.setText(trashMode ? "Корзина" : dir.getName().isEmpty() ? "/" : dir.getName());
         subtitle.setText(items.size() + " " + plural(items.size(), "объект", "объекта", "объектов") + " · " + dir.getAbsolutePath());
-        buildCrumbs(); adapter.notifyDataSetChanged(); updateBars();
+        buildCrumbs(); adapter.notifyDataSetChanged(); updateBars(); animateList();
         listView.setSelection(0);
+        empty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
+        emptyText.setText(trashMode ? "Корзина пуста" : hidden ? "Папка пуста" : "Папка пуста\n(скрытые файлы выключены в меню)");
+        fab.setVisibility(trashMode ? View.GONE : View.VISIBLE);
     }
 
     private void buildCrumbs() {
@@ -269,6 +326,15 @@ public class MainActivity extends Activity {
         if (!selected.isEmpty()) { toggle(e); return; }
         if (e instanceof RootEntry) { File f = e.file; if (!f.exists()) f.mkdirs(); open(f); return; }
         if (e.dir) { open(e.file); return; }
+        if (e.kind == Fs.Kind.IMAGE) {
+            List<File> imgs = new ArrayList<>(); int at = 0;
+            for (Fs.Entry x : items) { if (x.kind == Fs.Kind.IMAGE) { if (x.file.equals(e.file)) at = imgs.size(); imgs.add(x.file); } }
+            if (imgs.size() > 3000) { imgs = new ArrayList<>(); imgs.add(e.file); at = 0; }
+            String[] a = new String[imgs.size()]; for (int i = 0; i < a.length; i++) a[i] = imgs.get(i).getAbsolutePath();
+            startActivityForResult(new Intent(this, ViewerActivity.class).putExtra(ViewerActivity.EXTRA_FILES, a).putExtra(ViewerActivity.EXTRA_INDEX, at), REQ_VIEW);
+            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+            return;
+        }
         openFile(e.file);
     }
 
@@ -290,7 +356,10 @@ public class MainActivity extends Activity {
     }
 
     private void updateBars() {
-        actionBar.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE);
+        boolean showActions = !selected.isEmpty();
+        if (showActions && actionBar.getVisibility() != View.VISIBLE) { actionBar.setVisibility(View.VISIBLE); actionBar.setTranslationY(dp(60)); actionBar.setAlpha(0f); actionBar.animate().translationY(0).alpha(1f).setDuration(180).setInterpolator(new DecelerateInterpolator()).start(); }
+        else if (!showActions && actionBar.getVisibility() == View.VISIBLE) { actionBar.animate().translationY(dp(60)).alpha(0f).setDuration(150).withEndAction(() -> actionBar.setVisibility(View.GONE)).start(); }
+        if (fab != null) fab.animate().scaleX(showActions || dir == null || trashMode ? 0f : 1f).scaleY(showActions || dir == null || trashMode ? 0f : 1f).setDuration(150).start();
         boolean canPaste = !clip.isEmpty() && dir != null && !trashMode && selected.isEmpty();
         pasteBar.setVisibility(canPaste ? View.VISIBLE : View.GONE);
         if (canPaste) pasteText.setText((clipCut ? "Переместить " : "Скопировать ") + clip.size() + " " + plural(clip.size(), "объект", "объекта", "объектов") + " в «" + title.getText() + "»");
@@ -423,11 +492,11 @@ public class MainActivity extends Activity {
         ask("Искать в «" + (dir == null ? "Память" : from.getName()) + "»", "", q -> {
             if (q.trim().isEmpty()) return;
             searchMode = true; selected.clear(); items = new ArrayList<>(); adapter.notifyDataSetChanged();
-            title.setText("Поиск: " + q); subtitle.setText("ищу…"); crumbs.removeAllViews(); updateBars();
+            title.setText("Поиск: " + q); subtitle.setText("ищу…"); crumbs.removeAllViews(); updateBars(); empty.setVisibility(View.GONE); fab.setVisibility(View.GONE);
             final List<Fs.Entry> found = new ArrayList<>();
             new Thread(() -> {
                 Fs.search(from, q.trim(), hidden, e -> { synchronized (found) { found.add(e); } if (found.size() % 20 == 0) ui.post(() -> publish(found)); return searchMode && found.size() < 2000; });
-                ui.post(() -> { publish(found); subtitle.setText(found.size() + " найдено в " + from.getAbsolutePath()); });
+                ui.post(() -> { publish(found); subtitle.setText(found.size() + " найдено в " + from.getAbsolutePath()); empty.setVisibility(found.isEmpty() ? View.VISIBLE : View.GONE); emptyText.setText("Ничего не найдено"); });
             }).start();
         });
     }
@@ -470,11 +539,12 @@ public class MainActivity extends Activity {
     }
 
     private final class Row {
-        final LinearLayout view; final ImageView icon; final TextView name, meta, check;
+        final LinearLayout view; final ImageView icon; final TextView name, meta, check; ProgressBar usage;
         Row(boolean asGrid) {
             view = new LinearLayout(MainActivity.this); view.setTag(this);
             view.setOrientation(asGrid ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL); view.setGravity(asGrid ? Gravity.CENTER_HORIZONTAL : Gravity.CENTER_VERTICAL);
-            view.setPadding(dp(8), dp(asGrid ? 8 : 6), dp(8), dp(asGrid ? 8 : 6));
+            view.setPadding(dp(8), dp(asGrid ? 8 : 7), dp(8), dp(asGrid ? 8 : 7));
+            view.setBackground(ripple(Color.TRANSPARENT));
             icon = new ImageView(MainActivity.this); icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
             int s = dp(asGrid ? 84 : 44);
             view.addView(icon, new LinearLayout.LayoutParams(s, s));
@@ -482,17 +552,34 @@ public class MainActivity extends Activity {
             name = text("", asGrid ? 12 : 15, TEXT); name.setSingleLine(!asGrid); name.setMaxLines(asGrid ? 2 : 1); name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE); if (asGrid) name.setGravity(Gravity.CENTER);
             meta = text("", 12, MUTED); meta.setSingleLine(true);
             texts.addView(name); if (!asGrid) texts.addView(meta);
+            usage = new ProgressBar(MainActivity.this, null, android.R.attr.progressBarStyleHorizontal); usage.setMax(100); usage.setVisibility(View.GONE);
+            usage.setProgressTintList(ColorStateList.valueOf(ACCENT)); usage.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF2A2F3D));
+            LinearLayout.LayoutParams up = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)); up.setMargins(0, dp(8), 0, 0);
+            if (!asGrid) texts.addView(usage, up); else usage.setVisibility(View.GONE);
             view.addView(texts, asGrid ? new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-            check = text("✓", 18, ACCENT); check.setPadding(dp(8), 0, dp(4), 0);
-            if (!asGrid) view.addView(check);
+            check = text("✓", 13, Color.BLACK); check.setGravity(Gravity.CENTER); check.setTypeface(null, Typeface.BOLD);
+            GradientDrawable dot = new GradientDrawable(); dot.setShape(GradientDrawable.OVAL); dot.setColor(ACCENT); check.setBackground(dot);
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(dp(22), dp(22)); cp.setMargins(dp(8), 0, dp(4), 0);
+            if (!asGrid) view.addView(check, cp);
         }
 
         void bind(Fs.Entry e) {
             boolean sel = selected.contains(e.file.getAbsolutePath());
-            view.setBackgroundColor(sel ? PANEL2 : Color.TRANSPARENT);
+            boolean isRoot = e instanceof RootEntry;
+            view.setBackground(ripple(sel ? PANEL2 : isRoot ? PANEL : Color.TRANSPARENT));
+            if (isRoot) { LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); lp.setMargins(0, dp(3), 0, dp(3)); view.setLayoutParams(lp); view.setPadding(dp(12), dp(14), dp(12), dp(14)); }
+            else { view.setPadding(dp(8), dp(grid ? 8 : 7), dp(8), dp(grid ? 8 : 7)); if (view.getLayoutParams() instanceof LinearLayout.LayoutParams) ((LinearLayout.LayoutParams) view.getLayoutParams()).setMargins(0, 0, 0, 0); }
             check.setVisibility(sel ? View.VISIBLE : View.INVISIBLE);
+            if (sel) { check.setScaleX(0.6f); check.setScaleY(0.6f); check.animate().scaleX(1f).scaleY(1f).setDuration(140).start(); }
+            icon.setAlpha(sel ? 0.75f : 1f);
             name.setText(e.name);
-            if (e instanceof RootEntry) { Root r = ((RootEntry) e).r; name.setText(r.name); meta.setText(r.hint); icon.setTag(null); icon.setImageResource(r.icon); return; }
+            if (isRoot) {
+                Root r = ((RootEntry) e).r; name.setText(r.name); icon.setTag(null); icon.setImageResource(r.icon); icon.setColorFilter(r.icon == R.drawable.ic_sd ? ACCENT : 0);
+                if (r.used >= 0) { meta.setText(r.hint); usage.setVisibility(View.VISIBLE); usage.setProgress(Math.round(r.used * 100)); }
+                else { meta.setText(r.hint); usage.setVisibility(View.GONE); }
+                return;
+            }
+            icon.setColorFilter(0); usage.setVisibility(View.GONE);
             if (searchMode) meta.setText(e.file.getParent());
             else if (trashMode) { String o = Fs.trashOrigin(e.file); meta.setText(o == null ? "" : "из " + new File(o).getParent()); }
             else meta.setText(e.dir ? Fs.count(e.file) + " " + plural(Fs.count(e.file), "объект", "объекта", "объектов") : Fs.size(e.size) + " · " + Fs.date(e.mtime));
@@ -514,6 +601,10 @@ public class MainActivity extends Activity {
     private LinearLayout column() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); return l; }
     private TextView text(String s, int sp, int color) { TextView t = new TextView(this); t.setText(s); t.setTextSize(sp); t.setTextColor(color); return t; }
     private Button button(String s) { Button b = new Button(this); b.setText(s); b.setTextColor(Color.BLACK); b.setBackgroundColor(ACCENT); b.setAllCaps(false); b.setTypeface(null, Typeface.BOLD); return b; }
+    private ImageButton icon(int res, View.OnClickListener l) {
+        ImageButton b = new ImageButton(this); b.setImageResource(res); b.setColorFilter(TEXT); b.setBackground(ripple(Color.TRANSPARENT));
+        b.setPadding(dp(10), dp(10), dp(10), dp(10)); b.setOnClickListener(l); return b;
+    }
     private Button iconButton(String s) { Button b = new Button(this); b.setText(s); b.setTextSize(20); b.setTextColor(TEXT); b.setBackgroundColor(Color.TRANSPARENT); b.setMinWidth(dp(44)); b.setMinimumWidth(dp(44)); b.setPadding(dp(8), 0, dp(8), 0); return b; }
     private void confirm(String q, Runnable yes) { new AlertDialog.Builder(this).setMessage(q).setPositiveButton("Да", (d, w) -> yes.run()).setNegativeButton("Нет", null).show(); }
     interface Answer { void on(String s); }

@@ -7,4 +7,10 @@
         <item name="android:statusBarColor">#0F1117</item>
         <item name="android:navigationBarColor">#0F1117</item>
     </style>
+    <style name="ViewerTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">#66000000</item>
+        <item name="android:navigationBarColor">#66000000</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation.Activity</item>
+    </style>
 </resources>

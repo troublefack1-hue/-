@@ -44,10 +44,24 @@ public final class Thumbs {
             Bitmap bm = null;
             try { bm = decode(f, kind); } catch (Throwable ignored) {}
             if (bm == null) return;
+            bm = round(bm, px / 8f);
             cache.put(key, bm);
             final Bitmap done = bm;
             ui.post(() -> { if (key.equals(iv.getTag())) iv.setImageBitmap(done); });
         });
+    }
+
+    /** Rounded corners baked into the bitmap: cheaper than clipping every row on every frame. */
+    static Bitmap round(Bitmap src, float radius) {
+        Bitmap out = Bitmap.createBitmap(src.getWidth(), src.getHeight(), Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(out);
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        android.graphics.RectF r = new android.graphics.RectF(0, 0, src.getWidth(), src.getHeight());
+        c.drawRoundRect(r, radius, radius, p);
+        p.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN));
+        c.drawBitmap(src, 0, 0, p);
+        if (out != src) src.recycle();
+        return out;
     }
 
     private Bitmap decode(File f, Fs.Kind kind) {
