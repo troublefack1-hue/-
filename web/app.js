@@ -630,7 +630,7 @@
   function dockState(id) { for (const [bid, pid] of [["dockScreen", "screen"], ["filesBtn", "filesPage"], ["termBtn", "termPanel"]]) $(bid).classList.toggle("on", pid === id); }
   document.querySelectorAll("[data-close]").forEach((b) => (b.onclick = closePages));
   $("dockScreen").onclick = () => { closePages(); hideSheets(); };
-  $("menuBtn").onclick = () => { const was = menu.hidden; hideSheets(); menu.hidden = !was; };
+  $("menuBtn").onclick = () => { const was = menu.hidden; hideSheets(); menu.hidden = !was; if (!menu.hidden) tidySections(); };
   $("powerBtn").onclick = () => { menu.hidden = true; $("powerSheet").hidden = false; };
   $("settingsBtn").onclick = () => showPage("settingsPage");
   document.addEventListener("click", async (e) => {
@@ -1283,6 +1283,15 @@
     guest = on; document.body.classList.toggle("guest", on);
     if (on) for (const id of ["filesBtn", "termBtn", "kbBtn", "macrosBtn", "shotBtn", "pasteBtn", "linkBtn", "sayBtn", "castBtn", "termMenuBtn", "volRow", "pcClipBtn", "audioBtn", "winBtn", "zoneBtn"]) $(id).hidden = true;
     document.querySelectorAll("#sysTabs button").forEach((b) => (b.hidden = on && b.dataset.tab !== "state"));
+    tidySections();
     if (on) pill("Гостевой режим: только просмотр и питание", true, 4000);
+  }
+  // hide a group heading in "Ещё" when every tile under it is hidden (e.g. guest mode)
+  function tidySections() {
+    document.querySelectorAll(".tools-wrap .sec").forEach((sec) => {
+      const grid = sec.nextElementSibling;
+      const anyVisible = grid && [...grid.children].some((b) => !b.hidden);
+      sec.style.display = anyVisible ? "" : "none";
+    });
   }
 })();
