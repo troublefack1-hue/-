@@ -450,12 +450,14 @@ class Term:
         launcher = os.path.join(Term.BIN, "claude-phone.sh").replace("\\", "/") if Term.BIN else ""
         # invoke via `sh` so it runs even though copyfile did not set the execute bit
         claude = f"sh '{launcher}'" if launcher and os.path.isfile(launcher) else "claude"
+        # argv lists, not strings: pywinpty splits a string with shlex(posix=False), which keeps the quotes, so
+        # '"C:\Program Files\Git\bin\bash.exe" …' was "not found" and the Git Bash / Claude tabs never opened
         if bash:
-            d["bash"] = f'"{bash}" --login -i'
-            d["claude"] = f'"{bash}" --login -i -c "{claude}"'   # Claude Code inside Git Bash
-        d["shell"] = "powershell.exe -NoLogo"
-        d["cmd"] = "cmd.exe"
-        d.setdefault("claude", "cmd.exe /c claude")        # Claude Code CLI must be on PATH
+            d["bash"] = [bash, "--login", "-i"]
+            d["claude"] = [bash, "--login", "-i", "-c", claude]   # Claude Code inside Git Bash
+        d["shell"] = ["powershell.exe", "-NoLogo"]
+        d["cmd"] = ["cmd.exe"]
+        d.setdefault("claude", ["cmd.exe", "/c", "claude"])      # Claude Code CLI must be on PATH
         return d
 
     @staticmethod
