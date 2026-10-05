@@ -18,6 +18,7 @@ import hmac
 import json
 import logging
 import os
+import ssl
 import sys
 import time
 from pathlib import Path
@@ -40,6 +41,12 @@ def load_config() -> dict:
     cfg.setdefault("host", "127.0.0.1")
     cfg.setdefault("port", 8787)
     cfg.setdefault("ntfy_wake_url", "")
+    # optional second listener with our own certificate (direct mode)
+    cfg.setdefault("tls_host", "0.0.0.0")
+    cfg.setdefault("tls_port", 0)
+    cfg.setdefault("tls_cert", "")
+    cfg.setdefault("tls_key", "")
+    cfg.setdefault("ca_cert", "")
     return cfg
 
 
@@ -193,14 +200,38 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_post("/api/wake", hub.wake_handler)
     app.router.add_get("/api/status", hub.status_handler)
     app.router.add_static("/static", WEB_DIR)
+    if cfg["ca_cert"]:
+        # the phone downloads and installs this once, then trusts the relay
+        async def ca(_request):
+            return web.FileResponse(cfg["ca_cert"], headers={
+                "Content-Type": "application/x-x509-ca-cert",
+                "Content-Disposition": 'attachment; filename="pc-remote-ca.crt"'})
+        app.router.add_get("/ca.crt", ca)
     return app
+
+
+async def serve(cfg: dict):
+    runner = web.AppRunner(make_app(cfg), access_log=None)  # URLs carry the token: no access log
+    await runner.setup()
+    await web.TCPSite(runner, cfg["host"], cfg["port"]).start()
+    log.info("listening on http://%s:%s", cfg["host"], cfg["port"])
+    if cfg["tls_port"]:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(cfg["tls_cert"], cfg["tls_key"])
+        await web.TCPSite(runner, cfg["tls_host"], cfg["tls_port"], ssl_context=ctx).start()
+        log.info("listening on https://%s:%s", cfg["tls_host"], cfg["tls_port"])
+    while True:
+        await asyncio.sleep(3600)
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = load_config()
-    # access_log=None: request URLs carry the token, keep them out of the log
-    web.run_app(make_app(cfg), host=cfg["host"], port=cfg["port"], print=None, access_log=None)
+    try:
+        asyncio.run(serve(cfg))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

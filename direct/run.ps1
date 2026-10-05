@@ -1,8 +1,7 @@
-# pc-remote, direct mode (white IP, no intermediary).
-# Runs relay + agent on this PC and Caddy in front of them: Caddy listens on
-# 80/443, gets a Let's Encrypt certificate for the domain and proxies to the
-# relay. The router must forward TCP 80 and 443 to this PC.
-# If duckdns_token is set, the public IP is pushed to DuckDNS every 5 min.
+# pc-remote, direct mode: white static IP, no third-party services.
+# The relay itself serves HTTPS with a certificate from our own CA
+# (see make_cert.py); the agent talks to it over localhost.
+# The router must forward TCP <port> (default 8443) to this PC.
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -11,40 +10,24 @@ $py = "$root\agent\venv\Scripts\python.exe"
 $log = "$here\run.log"
 function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Tee-Object -FilePath $log -Append }
 
-# --- relay on 127.0.0.1:8787 ------------------------------------------------
+# --- relay: plain on 127.0.0.1:8787 for the agent, TLS on 0.0.0.0:<port> for the phone
 $env:PC_REMOTE_CONFIG = "$here\relay.json"
-@{ secret = $cfg.secret; host = "127.0.0.1"; port = 8787; ntfy_wake_url = $cfg.ntfy_wake_url } |
+@{ secret = $cfg.secret; host = "127.0.0.1"; port = 8787; ntfy_wake_url = $cfg.ntfy_wake_url
+   tls_host = "0.0.0.0"; tls_port = $cfg.port; tls_cert = "$here\server.crt"; tls_key = "$here\server.key"; ca_cert = "$here\ca.crt" } |
     ConvertTo-Json | Set-Content "$here\relay.json" -Encoding UTF8
-$relay = Start-Process $py -ArgumentList "`"$root\relay\relay.py`"" -WorkingDirectory "$root\relay" -PassThru -WindowStyle Hidden
-Log "relay started (pid $($relay.Id))"
+$relay = Start-Process $py -ArgumentList "`"$root\relay\relay.py`"" -WorkingDirectory "$root\relay" -PassThru -WindowStyle Hidden `
+    -RedirectStandardError "$here\relay.log"
+Log "relay started (pid $($relay.Id)), https://$($cfg.public_ip):$($cfg.port)"
 
-# --- agent ------------------------------------------------------------------
+# --- agent
 @{ relay_url = "http://127.0.0.1:8787"; secret = $cfg.secret; max_width = 1280; quality = 55; fps = 12; monitor = 1 } |
     ConvertTo-Json | Set-Content "$root\agent\config.json" -Encoding UTF8
 $agent = Start-Process $py -ArgumentList "`"$root\agent\agent.py`"" -WorkingDirectory "$root\agent" -PassThru -WindowStyle Hidden
 Log "agent started (pid $($agent.Id))"
 
-# --- caddy: HTTPS with automatic certificate --------------------------------
-@"
-$($cfg.domain) {
-    reverse_proxy 127.0.0.1:8787
-}
-"@ | Set-Content "$here\Caddyfile" -Encoding ASCII
-$caddy = Start-Process "$here\caddy.exe" -ArgumentList "run --config `"$here\Caddyfile`"" -WorkingDirectory $here `
-    -RedirectStandardError "$here\caddy.log" -PassThru -WindowStyle Hidden
-Log "caddy started (pid $($caddy.Id)) for https://$($cfg.domain)"
-
-# --- keep DuckDNS pointed at our current public IP --------------------------
 while ($true) {
-    if ($cfg.duckdns_token) {
-        $name = ($cfg.domain -split '\.')[0]
-        try {
-            $r = Invoke-RestMethod "https://www.duckdns.org/update?domains=$name&token=$($cfg.duckdns_token)&ip="
-            if ($r -ne "OK") { Log "duckdns update: $r" }
-        } catch { Log "duckdns update failed: $_" }
-    }
-    foreach ($p in @($relay, $agent, $caddy)) {
+    Start-Sleep 30
+    foreach ($p in @($relay, $agent)) {
         if ($p.HasExited) { Log "process $($p.Id) exited, restarting everything"; exit 1 }  # task scheduler restarts us
     }
-    Start-Sleep 300
 }
