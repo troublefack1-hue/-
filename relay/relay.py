@@ -808,14 +808,14 @@ class Hub:
         loop = asyncio.get_running_loop()
         try:
             if op == "mkdir":
-                name = "".join(c for c in str(body.get("name", "")) if c not in '<>:"/\\|?*').strip()
-                if not name:
+                name = "".join(c for c in str(body.get("name", "")) if c not in '<>:"/\\|?*').strip(". ")
+                if not name or name in (".", ".."):
                     raise ValueError("пустое имя")
                 (src / name).mkdir(exist_ok=False)
                 self.log_event(f"новая папка: {src / name}")
             elif op == "rename":
-                name = "".join(c for c in str(body.get("name", "")) if c not in '<>:"/\\|?*').strip()
-                if not name:
+                name = "".join(c for c in str(body.get("name", "")) if c not in '<>:"/\\|?*').strip(". ")
+                if not name or name in (".", ".."):
                     raise ValueError("пустое имя")
                 src.rename(src.parent / name)
                 self.log_event(f"переименовано: {src.name} → {name}")
