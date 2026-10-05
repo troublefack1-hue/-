@@ -45,7 +45,7 @@ public class MainActivity extends Activity {
     private static volatile MainActivity live;
     private SharedPreferences prefs;
     private TextView status, stats;
-    private LinearLayout modeRow;
+    private LinearLayout modeRow, updRow;
     private Button big;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -125,6 +125,9 @@ public class MainActivity extends Activity {
         root.addView(modeRow); renderMode();
         root.addView(row("Приложения напрямую", "эти приложения минуют ПК", v -> pickApps()));
         root.addView(row("Плитка в шторке", "«Через ПК» среди быстрых настроек: ✎ Изменить → перетащите", null));
+        String ver = "?"; try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) {}
+        updRow = row("Проверить обновления", "версия " + ver + " · обновления выходят вместе с PC Remote", v -> checkUpdate(true));
+        root.addView(updRow);
         root.addView(row("Отвязать от ПК", "", v -> { PcVpnService.stop(this); prefs.edit().clear().apply(); showSetup(null); }));
         ScrollView sv = new ScrollView(this); sv.setBackgroundColor(BG);
         sv.addView(root, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -193,22 +196,33 @@ public class MainActivity extends Activity {
     }
 
     // ----------------------------------------------------------- update ---
-    private void checkUpdate() {
+    private void checkUpdate() { checkUpdate(false); }
+
+    /** Automatic: once in 6 h, silently. Manual (the row): always, with a word back either way. */
+    private void checkUpdate(boolean manual) {
         long last = prefs.getLong("upd_check", 0);
-        if (System.currentTimeMillis() - last < 6 * 3600_000L) return;
+        if (!manual && System.currentTimeMillis() - last < 6 * 3600_000L) return;
         prefs.edit().putLong("upd_check", System.currentTimeMillis()).apply();
+        if (manual && updRow != null) ((TextView) updRow.getChildAt(1)).setText("проверяю…");
         new Thread(() -> {
             try {
                 String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
                 Updater.Info info = Updater.check(cur, "pcremote-net.apk");
-                if (info == null) return;
+                if (info == null) {
+                    if (manual) runOnUiThread(() -> { Toast.makeText(this, "Это последняя версия (" + cur + ")", Toast.LENGTH_SHORT).show(); if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("версия " + cur + " · это последняя"); });
+                    return;
+                }
+                if (manual) runOnUiThread(() -> { if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("скачиваю " + info.version + "…"); });
                 java.io.File apk = Updater.download(info.url, getCacheDir(), info.sha256);
                 runOnUiThread(() -> {
                     Toast.makeText(this, "Обновление " + info.version + " — установите", Toast.LENGTH_LONG).show();
+                    if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("версия " + cur + " → " + info.version + ": установите");
                     startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"),
                             "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK));
                 });
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                if (manual) runOnUiThread(() -> { Toast.makeText(this, "Не удалось проверить: " + e.getMessage(), Toast.LENGTH_LONG).show(); if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("не удалось проверить, попробуйте позже"); });
+            }
         }).start();
     }
 
