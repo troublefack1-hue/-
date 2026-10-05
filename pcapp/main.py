@@ -279,6 +279,15 @@ class Backend:
     def ring(self):
         asyncio.run_coroutine_threadsafe(self.hub.ring_phones(), self.loop).result(5)
 
+    def revoke(self):
+        """New owner and guest secrets; the agent follows (it authenticates with the same secret)."""
+        self.cfg["secret"] = secrets.token_urlsafe(30)
+        self.cfg["guest_secret"] = secrets.token_urlsafe(30)
+        save_config(self.cfg)
+        if self.agent is not None:
+            self.agent.cfg["secret"] = self.cfg["secret"]
+        asyncio.run_coroutine_threadsafe(self.hub.revoke(self.cfg["secret"], self.cfg["guest_secret"]), self.loop).result(5)
+
 
 # -------------------------------------------------------------------- GUI ---
 
@@ -522,6 +531,7 @@ class App(tk.Tk):
         ttk.Button(pf, text="Привязать телефон", style="Accent.TButton", command=self.show_pair).pack(side="left")
         ttk.Button(pf, text="Код для гостя", command=lambda: self.show_pair(True)).pack(side="left", padx=(6, 0))
         ttk.Button(pf, text="Папки проектов…", command=self.add_project).pack(side="left", padx=(6, 0))
+        ttk.Button(pf, text="Отвязать все", command=self.revoke_all).pack(side="left", padx=(6, 0))
         self.code = tk.Label(f, text="", font=("Consolas", 26, "bold"), fg=ACCENT, bg=BG)
         self.code.grid(row=3, column=1, sticky="w", **pad)
         self.code_hint = ttk.Label(f, text="", style="Muted.TLabel")
@@ -693,6 +703,19 @@ class App(tk.Tk):
         self.addr.delete(0, "end")
         self.addr.insert(0, f"{ip}:{self.cfg['port']}")
         self.addr.configure(state="readonly")
+
+    def revoke_all(self):
+        """Phone lost or given away: cut every phone off and require pairing again."""
+        from tkinter import messagebox
+        if not messagebox.askyesno(APP_NAME, "Отвязать все телефоны?\n\nСекреты будут заменены, доступ с текущих телефонов пропадёт. "
+                                   "Потом привяжите нужный телефон заново по коду.", icon="warning", default="no", parent=self):
+            return
+        try:
+            self.backend.revoke()
+            self.code_hint.configure(text="Все телефоны отвязаны. Нажмите «Привязать телефон», чтобы привязать заново.")
+            self.tray.notify("Доступ отозван: все телефоны отключены")
+        except Exception as e:  # noqa: BLE001
+            self.code_hint.configure(text=f"Не удалось отозвать: {e}")
 
     def add_project(self):
         """Pick a folder for the phone's terminal panel (Claude Code / Git Bash start there)."""

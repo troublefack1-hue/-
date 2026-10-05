@@ -158,6 +158,14 @@ async def main():
         report("ticket serves the file without a header", r.status == 200 and len(body) == 300_000 and "attachment" in r.headers.get("Content-Disposition", ""))
         r = await s.get(U + "/api/file", params={"ticket": tk}); report("ticket is single-use", r.status == 403)
         r = await s.post(U + "/api/ticket", json={"path": "/etc/passwd"}, headers={"Authorization": "Bearer " + T}); report("ticket for a path outside share -> 403", r.status == 403)
+        # ---------- revoke: new secrets, everyone dropped ----------
+        victim = await ws_auth(s, "/ws/phone"); await victim.receive()
+        await hub.revoke("newsecret-0123456789abcdef", "newguest-0123456789abcdef")
+        m = await asyncio.wait_for(victim.receive(), 3)
+        report("revoke closes connected phones", m.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED) and not hub.phones)
+        r = await s.get(U + "/api/status", headers={"Authorization": "Bearer " + T}); report("old secret rejected after revoke", r.status == 403)
+        hub.lockout.failed.clear()
+        r = await s.get(U + "/api/status", headers={"Authorization": "Bearer newsecret-0123456789abcdef"}); report("new secret works", r.status == 200)
 
     await runner.cleanup()
     print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")

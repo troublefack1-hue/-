@@ -564,6 +564,22 @@ class Hub:
         except Exception as e:  # noqa: BLE001
             log.info("nudge failed: %s", e)
 
+    async def revoke(self, secret: str, guest_secret: str):
+        """Lost the phone? New secrets, every phone dropped; pairing again is the only way back."""
+        self.cfg["secret"] = secret
+        self.cfg["guest_secret"] = guest_secret
+        self.pair_code = None
+        self.tickets.clear()
+        self.log_event("доступ отозван: новые секреты, все телефоны отключены")
+        for ws in list(self.phones):
+            try:
+                await ws.close(code=4003, message=b"revoked")
+            except Exception:  # noqa: BLE001
+                pass
+        self.phones.clear(); self.guests.clear(); self.bg.clear(); self.phone_names.clear(); self.fs_phone = None
+        self.phones_changed()
+        await self.tell_pc_viewers()
+
     async def ring_phones(self):
         self.log_event("найти телефон")
         """PC app -> every connected phone: make noise (find my phone)."""
