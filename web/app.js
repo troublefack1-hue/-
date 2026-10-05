@@ -604,11 +604,22 @@
     if (!kbPanel.hidden) kbInput.focus(); else kbInput.blur();
     setTimeout(layout, 50);
   };
-  kbInput.addEventListener("input", () => {
-    const s = kbInput.value; kbInput.value = "";
-    if (!s) return;
-    if (mods.size) { for (const ch of s) tapKey(ch.toLowerCase()); }
-    else send({ t: "text", s });
+  // Android keyboards (Gboard) report Backspace on an empty field as nothing at all: keep an
+  // invisible sentinel in the field, and its disappearance means "Backspace".
+  const ZW = "\u200b";
+  const resetKb = () => { kbInput.value = ZW; try { kbInput.setSelectionRange(1, 1); } catch {} };
+  resetKb();
+  kbInput.addEventListener("focus", resetKb);
+  kbInput.addEventListener("input", (e) => {
+    const v = kbInput.value;
+    if (!v.includes(ZW)) tapKey("Backspace");
+    if (e.inputType === "deleteContentForward") tapKey("Delete");
+    const s = v.replace(/\u200b/g, "");
+    if (s) {
+      if (mods.size) { for (const ch of s) tapKey(ch.toLowerCase()); }
+      else send({ t: "text", s });
+    }
+    resetKb();
   });
   kbInput.addEventListener("keydown", (e) => {
     if (["Enter", "Backspace", "Tab", "Escape", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
