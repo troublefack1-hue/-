@@ -200,7 +200,7 @@
       }
       setState("Нет связи с сервером", "off", `повтор через ${Math.round(backoff / 1000)} с`);
       reconnectTimer = setTimeout(connect, backoff);
-      backoff = Math.min(backoff * 2, 15000);
+      backoff = Math.min(backoff * 2, 8000);
     };
     ws.onerror = () => {};
   }
@@ -208,11 +208,13 @@
     hideSplash(() => { login.hidden = false; app.hidden = true; connecting.hidden = true; });
     $("loginErr").textContent = secret ? "Не удалось подключиться. Проверьте секрет и адрес." : "";
   }
+  // 2 s pings while the app is on screen, 6 s of silence = reconnect (a VPN toggle on the PC costs seconds, not a minute)
   pingTimer = setInterval(() => {
     if (!ws || ws.readyState !== 1) return;
-    if (Date.now() - lastMsgAt > 15000) { show("Связь зависла, переподключаюсь…"); ws.close(); return; }
-    pingSentAt = Date.now(); send({ t: "ping" });
-  }, 5000);
+    const limit = document.hidden ? 20000 : 6000;
+    if (Date.now() - lastMsgAt > limit) { show("Связь прервалась, переподключаюсь…"); backoff = 500; ws.close(); return; }
+    if (!document.hidden || Date.now() - pingSentAt > 8000) { pingSentAt = Date.now(); send({ t: "ping" }); }
+  }, 2000);
   window.addEventListener("online", () => { backoff = 1000; if (!ws || ws.readyState !== 1) connect(); });
   document.addEventListener("visibilitychange", () => {
     // no video while the app is in the background: saves traffic and battery
@@ -429,6 +431,32 @@
   }, { passive: false });
   view.addEventListener("touchcancel", () => { clearTimeout(longTimer); longTimer = null; t0 = null; pinch = null; pts.clear(); });
   $("zoomReset").onclick = () => { zoom = 1; panX = panY = 0; applyTransform(); menu.hidden = true; };
+
+  // ---- Android-style nav: ◁ back, ○ start menu, □ task view, ▽ minimize window; edge swipes
+  const NAV = { back: () => tapKey("BrowserBack"), home: () => tapKey("Meta"), recent: () => send({ t: "combo", keys: ["Meta", "Tab"] }),
+                min: () => send({ t: "combo", keys: ["Meta", "ArrowDown"] }) };
+  $("navbar").addEventListener("click", (e) => { const b = e.target.closest("button[data-nav]"); if (!b || !pcOnline) return; NAV[b.dataset.nav](); buzz(10); });
+  $("navbar").addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
+  $("navbarOn").checked = prefs.navbar !== false; $("edgeOn").checked = prefs.edges !== false;
+  const applyNav = () => { $("navbar").hidden = !$("navbarOn").checked; };
+  $("navbarOn").onchange = () => { prefs.navbar = $("navbarOn").checked; savePrefs(); applyNav(); };
+  $("edgeOn").onchange = () => { prefs.edges = $("edgeOn").checked; savePrefs(); };
+  applyNav();
+  let edge = null;
+  view.addEventListener("touchstart", (e) => {
+    if (!$("edgeOn").checked || e.touches.length !== 1) { edge = null; return; }
+    const t = e.touches[0], r = view.getBoundingClientRect();
+    if (t.clientY > r.bottom - 22) edge = { kind: "bottom", y: t.clientY };
+    else if (t.clientX < r.left + 18) edge = { kind: "left", x: t.clientX };
+    else edge = null;
+  }, { passive: true, capture: true });
+  view.addEventListener("touchend", (e) => {
+    if (!edge) return;
+    const t = e.changedTouches[0];
+    if (edge.kind === "bottom" && edge.y - t.clientY > 60) { NAV.recent(); buzz(15); const h = document.createElement("div"); h.className = "edge-hint"; view.appendChild(h); setTimeout(() => h.remove(), 600); }
+    if (edge.kind === "left" && t.clientX - edge.x > 70) { NAV.back(); buzz(15); }
+    edge = null;
+  }, { passive: true, capture: true });
 
   // ----------------------------------------------------------- keyboard
   // Sticky modifiers: tap Ctrl, then "c" -> Ctrl+C. They release after use.

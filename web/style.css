@@ -331,3 +331,12 @@ label.btn { display: block; }
 .fb.danger { color: var(--bad); }
 .fbar.sel { background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
 .fprog { padding: 6px 12px; font-size: 12px; background: var(--panel); }
+
+/* ===================== Android-style nav bar over the PC screen ===================== */
+#navbar { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 5; display: flex; gap: 6px; padding: 4px;
+  border-radius: 999px; background: rgba(10,12,18,.55); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.08); opacity: .85; }
+#navbar button { width: 46px; height: 36px; padding: 0; border: 0; background: transparent; border-radius: 999px; color: #fff; display: grid; place-items: center; }
+#navbar button svg { width: 22px; height: 22px; }
+#navbar button:active { background: rgba(255,255,255,.18); transform: scale(.92); }
+#navbar[hidden] { display: none !important; }
+.edge-hint { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: color-mix(in srgb, var(--accent) 70%, transparent); z-index: 4; animation: fade .6s forwards; }

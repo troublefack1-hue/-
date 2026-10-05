@@ -124,6 +124,7 @@ VK = {
     "PrintScreen": 0x2C, "Insert": 0x2D,
     "VolumeMute": 0xAD, "VolumeDown": 0xAE, "VolumeUp": 0xAF,
     "MediaNext": 0xB0, "MediaPrev": 0xB1, "MediaStop": 0xB2, "MediaPlayPause": 0xB3,
+    "BrowserBack": 0xA6, "BrowserForward": 0xA7, "BrowserHome": 0xAC,
 }
 EXTENDED = {"Delete", "Home", "End", "PageUp", "PageDown", "ArrowLeft", "ArrowUp",
             "ArrowRight", "ArrowDown", "Insert", "Meta", "PrintScreen"}

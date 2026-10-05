@@ -70,7 +70,52 @@ def load_config() -> dict:
     # file transfer: phone uploads land in upload_dir; share_dirs can be browsed/downloaded
     cfg.setdefault("upload_dir", "")
     cfg.setdefault("share_dirs", [])
+    # Windows: send replies through the physical LAN adapter even when a VPN
+    # owns the default route, so the phone's connection survives VPN on/off.
+    cfg.setdefault("pin_interface", True)
     return cfg
+
+
+def lan_interface_index() -> int | None:
+    """Index of the adapter that carries the real 0.0.0.0/0 route (WireGuard-style
+    VPNs add 0.0.0.0/1 + 128.0.0.0/1 instead, so this stays the physical NIC)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import re
+        import subprocess
+        out = subprocess.run(["route", "print", "-4", "0.0.0.0"], capture_output=True, text=True,
+                             creationflags=0x08000000).stdout
+        best = None
+        for m in re.finditer(r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+)", out, re.M):
+            gw, _ifip, metric = m.group(1), m.group(2), int(m.group(3))
+            if best is None or metric < best[1]:
+                best = (gw, metric)
+        if not best:
+            return None
+        import socket
+        idx = ctypes.c_ulong()
+        gw_n = ctypes.c_ulong(int.from_bytes(socket.inet_aton(best[0]), "little"))
+        if ctypes.windll.iphlpapi.GetBestInterface(gw_n, ctypes.byref(idx)) == 0:
+            return int(idx.value)
+    except Exception as e:  # noqa: BLE001
+        log.info("lan interface detection failed: %s", e)
+    return None
+
+
+def pinned_socket(host: str, port: int, if_index: int):
+    """Listening socket whose accepted connections reply via the given interface."""
+    import socket
+    IP_UNICAST_IF = 31
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # the option takes the index in network byte order
+    s.setsockopt(socket.IPPROTO_IP, IP_UNICAST_IF, socket.htonl(if_index).to_bytes(4, "little"))
+    s.bind((host, port))
+    s.listen(100)
+    s.setblocking(False)
+    return s
 
 
 def client_ip(request: web.Request) -> str:
@@ -563,8 +608,18 @@ async def serve(cfg: dict, app: web.Application | None = None):
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(cfg["tls_cert"], cfg["tls_key"])
-        await web.TCPSite(runner, cfg["tls_host"], cfg["tls_port"], ssl_context=ctx).start()
-        log.info("listening on https://%s:%s", cfg["tls_host"], cfg["tls_port"])
+        if_index = lan_interface_index() if cfg.get("pin_interface") else None
+        if if_index:
+            try:
+                sock = pinned_socket(cfg["tls_host"], cfg["tls_port"], if_index)
+                await web.SockSite(runner, sock, ssl_context=ctx).start()
+                log.info("listening on https://%s:%s (pinned to LAN adapter %d, VPN-proof)", cfg["tls_host"], cfg["tls_port"], if_index)
+            except Exception as e:  # noqa: BLE001
+                log.warning("interface pinning failed (%s), listening normally", e)
+                if_index = None
+        if not if_index:
+            await web.TCPSite(runner, cfg["tls_host"], cfg["tls_port"], ssl_context=ctx).start()
+            log.info("listening on https://%s:%s", cfg["tls_host"], cfg["tls_port"])
     while True:
         await asyncio.sleep(3600)
 

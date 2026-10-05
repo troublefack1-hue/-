@@ -73,6 +73,12 @@
     <div id="cursor" hidden></div>
     <div id="zoomBadge" hidden></div>
     <div id="ecoBadge" hidden>эконом</div>
+    <nav id="navbar">
+      <button data-nav="back" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 4 7 12l8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></svg></button>
+      <button data-nav="home" title="Главное меню"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
+      <button data-nav="recent" title="Выбор окна"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
+      <button data-nav="min" title="Свернуть окно"><svg viewBox="0 0 24 24"><path d="M6 15h12M12 4v9m-4-4 4 4 4-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </nav>
 
     <div id="offline" class="center" hidden>
       <div class="bg"><i></i><i></i><i></i></div>
@@ -168,6 +174,8 @@
       <label class="row switch"><span>По сети: Wi-Fi — обычное, мобильная — эконом</span><input type="checkbox" id="autoProfile"><i></i></label>
       <div class="seg" id="monitors" hidden><span class="lbl">Монитор</span></div>
       <h3>Управление</h3>
+      <label class="row switch"><span>Кнопки ◁ ○ □ как на Android поверх экрана</span><input type="checkbox" id="navbarOn"><i></i></label>
+      <label class="row switch"><span>Жесты от краёв: снизу — окна, слева — назад</span><input type="checkbox" id="edgeOn"><i></i></label>
       <label class="row switch"><span>Режим тачпада</span><input type="checkbox" id="trackpad"><i></i></label>
       <label class="row switch"><span>Вибрация</span><input type="checkbox" id="haptic"><i></i></label>
       <label class="row switch"><span>Звуки</span><input type="checkbox" id="sfx"><i></i></label>

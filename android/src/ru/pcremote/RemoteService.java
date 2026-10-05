@@ -108,7 +108,7 @@ public class RemoteService extends Service {
                 update("Связь с ПК", "нет связи, повтор…");
             }
             ws = null;
-            sleep(delay); delay = Math.min(delay * 2, 60000);
+            sleep(delay); delay = Math.min(delay * 2, 15000);   // VPN flips on the PC: back within seconds
         }
     }
 
