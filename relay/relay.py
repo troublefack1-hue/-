@@ -333,12 +333,13 @@ class Hub:
         if self.on_paired:
             self.on_paired(ip)
         secret = self.cfg["guest_secret"] if (self.pair_guest and self.cfg.get("guest_secret")) else self.cfg["secret"]
-        return web.json_response({"secret": secret, "ntfy": self.cfg.get("ntfy_phone_url", ""), "wake": self.cfg.get("ntfy_wake_url", "")})
+        return web.json_response({"secret": secret, "ntfy": self.cfg.get("ntfy_phone_url", ""), "wake": self.cfg.get("ntfy_wake_url", ""),
+                                  "lan": LAN_IP.get("ip") or ""})
 
     # --- status broadcast ----------------------------------------------
     def status(self) -> dict:
         return {"t": "status", "pc_online": self.pc is not None,
-                "pc_since": self.pc_since, "phones": len(self.phones)}
+                "pc_since": self.pc_since, "phones": len(self.phones), "lan": LAN_IP.get("ip")}
 
     async def broadcast_phones(self, data, binary=False):
         dead = []

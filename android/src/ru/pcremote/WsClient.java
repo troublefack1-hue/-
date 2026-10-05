@@ -36,15 +36,19 @@ public final class WsClient implements Runnable {
     private volatile boolean open;
     private final SecureRandom rnd = new SecureRandom();
 
+    private String lan = ""; private boolean tryLan = false;
     public WsClient(String host, int port, String pin, String path, Listener l) {
         this.host = host; this.port = port; this.pin = pin; this.path = path; this.listener = l;
+    }
+    public WsClient(String host, int port, String pin, String path, Listener l, String lan, boolean tryLan) {
+        this(host, port, pin, path, l); this.lan = lan == null ? "" : lan; this.tryLan = tryLan;
     }
 
     public boolean isOpen() { return open; }
 
     /** Connects and performs the handshake; then call start() to read. */
     public void connect() throws IOException {
-        sock = Pinned.connect(host, port, pin, null, 8000);
+        sock = Pinned.connectPreferLan(lan, host, port, pin, null, 8000, tryLan);
         sock.setTcpNoDelay(true);
         out = sock.getOutputStream();
         byte[] key = new byte[16]; rnd.nextBytes(key);

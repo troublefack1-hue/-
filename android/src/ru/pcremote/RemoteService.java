@@ -151,7 +151,7 @@ public class RemoteService extends Service {
                             update("Доступ отозван", "привяжите телефон заново в приложении");
                         }
                     }
-                });
+                }, prefs.getString("lan", ""), onWifi(this));
                 c.connect();
                 c.sendText("{\"t\":\"auth\",\"token\":\"" + prefs.getString("secret", "") + "\"}");
                 c.sendText("{\"t\":\"profile\",\"name\":\"idle\"}");   // no video for the background link
@@ -174,7 +174,22 @@ public class RemoteService extends Service {
         }
     }
 
+    /** Wi-Fi right now? Only then is the PC's LAN address worth a try. */
+    public static boolean onWifi(Context ctx) {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.Network n = cm.getActiveNetwork();
+            android.net.NetworkCapabilities c = n == null ? null : cm.getNetworkCapabilities(n);
+            return c != null && (c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) || c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET));
+        } catch (Exception e) { return false; }
+    }
+
     private void onMessage(String s) {
+        if (s.startsWith("{\"t\": \"status\"") || s.startsWith("{\"t\":\"status\"")) {   // the PC's LAN address may change (Wi-Fi <-> cable)
+            String lan = Pairing.jsonString(s, "lan");
+            if (lan != null && !lan.isEmpty() && !lan.equals(prefs.getString("lan", ""))) prefs.edit().putString("lan", lan).apply();
+            return;
+        }
         if (s.contains("\"t\":\"ring\"") || s.contains("\"t\": \"ring\"")) {
             Intent i = new Intent(this, RingActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);

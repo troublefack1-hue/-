@@ -42,6 +42,16 @@ public final class Pinned {
      * @param pin  expected fingerprint, or null = trust on first use (pairing);
      *             the fingerprint actually seen is returned via {@code seen[0]}.
      */
+    /** At home on Wi-Fi the PC is one hop away: try its LAN address first (short timeout),
+     *  then the public one. Same certificate, same pin either way. */
+    public static SSLSocket connectPreferLan(String lan, String host, int port, String pin, String[] seen, int timeoutMs, boolean tryLan)
+            throws IOException {
+        if (tryLan && lan != null && !lan.isEmpty() && !lan.equals(host)) {
+            try { return connect(lan, port, pin, seen, 1500); } catch (IOException viaLan) { /* not at home, or the PC is elsewhere */ }
+        }
+        return connect(host, port, pin, seen, timeoutMs);
+    }
+
     public static SSLSocket connect(String host, int port, final String pin, final String[] seen, int timeoutMs)
             throws IOException {
         TrustManager tm = new X509TrustManager() {

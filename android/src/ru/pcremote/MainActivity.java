@@ -178,7 +178,7 @@ public class MainActivity extends Activity {
                 try {
                     Pairing.Result r = Pairing.pair(h, port, c);
                     prefs.edit().putString("hostport", hostport).putString("host", h).putInt("port", port)
-                            .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).putString("wake", r.wake).apply();
+                            .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).putString("wake", r.wake).putString("lan", r.lan).apply();
                     runOnUiThread(this::startRemote);
                 } catch (Exception e) {
                     runOnUiThread(() -> { btn.setEnabled(true); err.setTextColor(0xFFEF5350);
@@ -200,7 +200,8 @@ public class MainActivity extends Activity {
     // ----------------------------------------------------------- remote ---
     private void startRemote() {
         try {
-            tunnel = new Tunnel(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""));
+            tunnel = new Tunnel(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""),
+                    prefs.getString("lan", ""), RemoteService.onWifi(this));
             tunnel.start();
         } catch (Exception e) { showSetup("Не удалось запустить туннель: " + e); return; }
 

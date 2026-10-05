@@ -27,6 +27,11 @@ public final class Tunnel implements Runnable {
      *  launches, or the WebView's localStorage (theme, macros, settings) resets every time. */
     private static final int[] PORTS = {17877, 17878, 17879, 17880};
 
+    private String lan = ""; private boolean tryLan = false;
+    public Tunnel(String host, int port, String pin, String lan, boolean tryLan) throws IOException {
+        this(host, port, pin); this.lan = lan == null ? "" : lan; this.tryLan = tryLan;
+    }
+
     public Tunnel(String host, int port, String pin) throws IOException {
         this.host = host; this.port = port; this.pin = pin;
         ServerSocket s = null;
@@ -59,7 +64,7 @@ public final class Tunnel implements Runnable {
     private void handle(Socket client) {
         SSLSocket up = null;
         try {
-            up = Pinned.connect(host, port, pin, null, 8000);
+            up = Pinned.connectPreferLan(lan, host, port, pin, null, 8000, tryLan);
             up.setTcpNoDelay(true);
             final SSLSocket upstream = up;
             Thread t = new Thread(() -> pipe(client, upstream), "tunnel-up");
