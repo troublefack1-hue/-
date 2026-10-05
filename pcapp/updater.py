@@ -82,7 +82,7 @@ def download(url: str, dest: Path, sha256: str | None = None) -> Path:
     return dest
 
 
-def apply(new_exe: Path) -> bool:
+def apply(new_exe: Path, version: str = "") -> bool:
     """Replace the running exe with new_exe and restart. Only when frozen."""
     if not getattr(sys, "frozen", False):
         log.info("not frozen: update downloaded to %s but not applied", new_exe)
@@ -92,9 +92,8 @@ def apply(new_exe: Path) -> bool:
     script.write_text(
         "@echo off\r\n"
         f":wait\r\ntasklist /FI \"PID eq {os.getpid()}\" | find \"{os.getpid()}\" >nul && (timeout /t 1 >nul & goto wait)\r\n"
-        f"copy /y \"{new_exe}\" \"{me}\" >nul\r\n"
-        f"start \"\" \"{me}\" --minimized --updated\r\n"
-        f"del \"{new_exe}\"\r\n"
+        f"copy /y \"{new_exe}\" \"{me}\" >nul && del \"{new_exe}\"\r\n"
+        f"start \"\" \"{me}\" --minimized --updated={version}\r\n"
         "del \"%~f0\"\r\n", encoding="cp866")
     subprocess.Popen(["cmd", "/c", str(script)], creationflags=0x00000008 | 0x00000200)  # DETACHED, NEW_PROCESS_GROUP
     return True

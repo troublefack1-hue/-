@@ -551,8 +551,17 @@ class App(tk.Tk):
             except Exception:  # noqa: BLE001
                 pass
         threading.Thread(target=deps_worker, daemon=True).start()
-        if "--updated" in sys.argv:
-            self.after(1500, lambda: self.tray.notify(f"Обновлено до версии {updater.current_version()}"))
+        upd = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--updated=")), None)
+        if upd is not None:
+            if upd == updater.current_version():
+                self.after(1500, lambda: self.tray.notify(f"Обновлено до версии {upd}"))
+            else:
+                # the batch could not overwrite the exe (read-only folder, antivirus): say so, don't loop
+                self.cfg["skip_update"] = upd
+                save_config(self.cfg)
+                self.after(1500, lambda: self.tray.notify(f"Не удалось заменить файл программы для версии {upd}. "
+                                                            f"Скопируйте PC-Remote.exe из {DATA / 'update'} вручную."))
+                self.after(1600, lambda: self.code_hint.configure(text=f"Обновление {upd} не применилось: нет прав на запись в папку программы"))
 
         self.pair_until = 0
         self.cast_win: CastWindow | None = None
@@ -579,6 +588,9 @@ class App(tk.Tk):
         self.update_info = info
         if not info:
             return
+        if info["version"] == self.cfg.get("skip_update"):
+            self.upd_btn.configure(text=f"Версия {info['version']}: не применилась")
+            return   # already tried and failed to overwrite the exe; wait for the user
         self.upd_btn.configure(text=f"Обновить до {info['version']}", style="Accent.TButton")
         if self.cfg.get("auto_update", True):
             self.update_now()
@@ -597,7 +609,7 @@ class App(tk.Tk):
             try:
                 exe = updater.download(info["url"], DATA / "update" / "PC-Remote.exe",
                                        updater.expected_sha256(info.get("sums"), updater.ASSET))
-                if updater.apply(exe):
+                if updater.apply(exe, info["version"]):
                     self.after(0, self.destroy)   # the script restarts us with the new exe
                 else:
                     self.after(0, lambda: self.upd_btn.configure(text="скачано (не exe)", state="normal"))

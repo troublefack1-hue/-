@@ -438,6 +438,10 @@ class Hub:
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.BINARY:
+                    if len(msg.data) > MAX_FRAME:      # a phone must not push giant frames into the PC
+                        break
+                    if ws in self.guests:              # a guest only watches: no casting, no files
+                        continue
                     if msg.data and msg.data[0] in (FRAME_CAST, FRAME_CAST_AUDIO) and self.on_cast:
                         casting = True
                         self.on_cast(msg.data[0], msg.data[1:])

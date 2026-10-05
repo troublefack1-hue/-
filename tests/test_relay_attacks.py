@@ -113,7 +113,17 @@ async def main():
         report("ATTACK 8: guest gets no terminal/clipboard", not any("term_out" in m or "pc_clip" in m for m in g_msgs), str(g_msgs)[:80])
         report("owner still receives everything", any("term_out" in m for m in o_msgs) and any("pc_clip" in m for m in o_msgs))
         report("guest still gets public status", any('"t": "status"' in m or '"t":"status"' in m for m in g_msgs))
-        await guest.close(); await owner.close(); await pc2.close()
+        # ATTACK 9: a guest tries to cast its screen onto the PC / push a giant frame
+        seen = []
+        hub.on_cast = lambda kind, data: seen.append(kind)
+        await guest.send_bytes(b"\x03JPEG-from-guest"); await asyncio.sleep(0.2)
+        report("ATTACK 9: guest cannot cast to the PC", not seen)
+        await owner.send_bytes(b"\x03JPEG-from-owner"); await asyncio.sleep(0.2)
+        report("owner can cast", seen == [3])
+        await owner.send_bytes(b"\x03" + b"\x00" * (relay.MAX_FRAME + 1)); m = await owner.receive()
+        report("ATTACK 9b: oversized phone frame closes that phone", m.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED))
+        hub.on_cast = None
+        await guest.close(); await pc2.close()
 
     await runner.cleanup()
     print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")
