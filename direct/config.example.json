@@ -1,0 +1,6 @@
+{
+  "domain": "myhome.duckdns.org",
+  "duckdns_token": "",
+  "secret": "CHANGE-ME-to-a-long-random-string-32-chars",
+  "ntfy_wake_url": "https://ntfy.sh/YOUR-WAKE-CHANNEL"
+}

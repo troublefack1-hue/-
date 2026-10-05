@@ -3,4 +3,5 @@ relay.json
 venv/
 *.log
 *.exe
+Caddyfile
 __pycache__/
