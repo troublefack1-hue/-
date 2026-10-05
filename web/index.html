@@ -59,6 +59,7 @@
       <div id="state">подключение…</div>
       <div id="sub" class="sub"></div>
     </div>
+    <div id="badges" class="badges"><span id="bVideo" class="badge" hidden>HD</span><span id="bZone" class="badge" hidden>🎬</span></div>
     <div id="speed" class="speed"><span id="spdDown">↓ 0 Б/с</span><span id="spdUp">↑ 0 Б/с</span></div>
     <button id="audioBtn" class="icon" title="Звук с ПК" hidden>
       <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
@@ -73,7 +74,7 @@
     <div id="cursor" hidden></div>
     <div id="zoomBadge" hidden></div>
     <div id="ecoBadge" hidden>эконом</div>
-    <div id="noScreen" class="center" hidden><p>🖥 Экран ПК сейчас недоступен</p><p class="muted">монитор отключён или перестраивается; управление, файлы и терминал работают</p></div>
+    <div id="noScreen" class="center" hidden><p>🖥 Экран ПК сейчас недоступен</p><p class="muted">монитор отключён или перестраивается; управление, файлы и терминал работают</p><button id="wakeScreenBtn" class="btn">Разбудить экран</button></div>
     <nav id="navbar">
       <button data-nav="back" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 4 7 12l8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></svg></button>
       <button data-nav="home" title="Главное меню"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>

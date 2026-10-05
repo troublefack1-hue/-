@@ -194,8 +194,8 @@
       } else if (m.t === "role") { setGuest(!!m.guest);
       } else if (m.t === "windows") { renderWindows(m.items || []);
       } else if (m.t === "zone") {
-        if (!m.rect) { zoneRect = zoneImg = null; $("zoneBtn").classList.remove("active"); show(m.error ? "HD-зона: " + m.error : (zoneWanted ? "Движение не найдено — выделите область вручную" : "HD-зона выключена")); }
-        else { $("zoneBtn").classList.add("active"); show("HD-зона включена"); sfx("ok"); }
+        if (!m.rect) { zoneRect = zoneImg = null; $("zoneBtn").classList.remove("active"); $("bZone").hidden = true; show(m.error ? "HD-зона: " + m.error : (zoneWanted ? "Движение не найдено — выделите область вручную" : "HD-зона выключена")); }
+        else { $("zoneBtn").classList.add("active"); $("bZone").hidden = false; show("HD-зона включена"); sfx("ok"); }
         zoneWanted = false;
       } else if (m.t === "sys") { renderSys(m);
       } else if (m.t === "procs") { renderProcs(m.items || []);
@@ -290,6 +290,7 @@
         canvas.width = frameW; canvas.height = frameH; layout();
       }
       ctx.drawImage(img, 0, 0); paintZone();
+      if (!$("bVideo").hidden) $("bVideo").hidden = true;
       canvas.classList.add("live");
       frames++; lastFrameAt = Date.now();
       send({ t: "ack" });
@@ -320,6 +321,7 @@
           if (f.displayWidth !== frameW || f.displayHeight !== frameH) { frameW = f.displayWidth; frameH = f.displayHeight; canvas.width = frameW; canvas.height = frameH; layout(); }
           ctx.drawImage(f, 0, 0, frameW, frameH); paintZone(); f.close();
           canvas.classList.add("live"); frames++; lastFrameAt = Date.now();
+          if ($("bVideo").hidden) $("bVideo").hidden = false;
         },
         error: (e) => { console.warn("video decoder", e); try { vdec.close(); } catch {} vdec = null; send({ t: "video", off: true }); show("Видео недоступно, перехожу на JPEG"); },
       });
@@ -659,6 +661,11 @@
   conn && conn.addEventListener && conn.addEventListener("change", autoProfile);
   setTimeout(autoProfile, 1500);
   $("fsBtn").onclick = () => { document.documentElement.requestFullscreen?.(); menu.hidden = true; };
+  $("wakeScreenBtn").onclick = () => {
+    const b = $("wakeScreenBtn"); b.classList.add("busy"); b.textContent = "Бужу экран…"; buzz(15);
+    send({ t: "device", op: "monitor_on" });
+    setTimeout(() => { b.classList.remove("busy"); b.textContent = "Разбудить экран"; }, 3000);
+  };
 
   // ---- perks: accent, sounds, haptics, screenshot, paste, link, hints, clock
   $("theme").addEventListener("click", (e) => {
