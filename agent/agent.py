@@ -1061,6 +1061,7 @@ class Agent:
 
     def hello_msg(self) -> dict:
         return {"t": "hello", "w": self.screen.size[0], "h": self.screen.size[1], "video": bool(self.ffmpeg),
+                "mw": self.screen.mon["width"], "mh": self.screen.mon["height"],   # the monitor itself: trackpad speed
                 "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available(),
                 "monitors": len(self.screen.sct.monitors) - 1, "monitor": self.screen.mon_index,
                 "term": Term.available(), "shells": list(Term.shells().keys()),

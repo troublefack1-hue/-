@@ -39,6 +39,7 @@ python pcapp/main.py          # окно PC Remote; данные в %LOCALAPPDAT
 python tests/test_relay_attacks.py      # 38 проверок relay, включая атаки
 python tests/test_phone_cli.py          # файлы телефона: relay + fake_phone + tools/phone.py
 python tests/test_web_smoke.py          # веб-клиент в настоящем браузере (нужен playwright + chromium)
+python tests/test_web_trackpad.py       # тачпад: медленно/быстро, перетаскивание, правый клик двумя пальцами (касания через CDP)
 python tests/test_netproxy.py           # «Интернет через ПК», серверная часть: 17 проверок
 python tests/test_files_jvm.py          # «Проводник»: ядро Fs.java на JVM (20 проверок)
 python tests/test_files_locs_jvm.py     # «Проводник»: zip как папка, фильтры поиска, переименование по шаблону (JVM)

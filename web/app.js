@@ -186,7 +186,7 @@
           clearCanvas();
         }
       } else if (m.t === "hello") {
-        pcHost = `${m.host || "ПК"} · ${m.w}×${m.h}`; pcAudio = !!m.audio;
+        pcHost = `${m.host || "ПК"} · ${m.w}×${m.h}`; pcAudio = !!m.audio; pcW = m.mw || m.w || pcW; pcH = m.mh || m.h || pcH;
         pill(`${m.host || "ПК"} · ${m.w}×${m.h}`);
         pcInfo = { term: !!m.term, shells: m.shells || ["shell"], projects: m.projects || [], monitors: m.monitors || 1, monitor: m.monitor || 1 };
         if (m.volume) applyVolume(m.volume);
@@ -545,6 +545,8 @@
 
   let pts = new Map(), t0 = null, longTimer = null, dragging = false, moved = false;
   let cur = { x: 0.5, y: 0.5 }, lastTap = 0, scrollAcc = 0, pinch = null;
+  // trackpad: tap-then-touch-and-move drags (button held), two-finger tap = right click, speed-dependent gain
+  let dragArm = false, tapEndAt = 0, twoAt = 0, twoMoved = false, lastMoveAt = 0, pcW = 1920, pcH = 1080;
 
   view.addEventListener("touchstart", (e) => {
     if (!pcOnline) return;
@@ -552,12 +554,14 @@
     for (const t of e.changedTouches) pts.set(t.identifier, { x: t.clientX, y: t.clientY });
     if (e.touches.length === 1) {
       const t = e.touches[0];
-      t0 = { x: t.clientX, y: t.clientY, time: Date.now() }; moved = false; dragging = false;
+      t0 = { x: t.clientX, y: t.clientY, time: Date.now() }; moved = false; dragging = false; lastMoveAt = 0;
+      dragArm = trackpad.checked && Date.now() - tapEndAt < 300;   // a tap just before: this touch drags
       if (!trackpad.checked) { cur = toPC(t.clientX, t.clientY); send({ t: "move", ...cur }); }
-      longTimer = setTimeout(() => { longTimer = null; buzz(30); send({ t: "click", b: "right", n: 1, ...cur }); ripple(t.clientX, t.clientY, true); t0 = null; }, 550);
+      if (!dragArm) longTimer = setTimeout(() => { longTimer = null; buzz(30); send({ t: "click", b: "right", n: 1, ...cur }); ripple(t.clientX, t.clientY, true); t0 = null; }, 550);
     } else if (e.touches.length === 2) {
       clearTimeout(longTimer); longTimer = null; t0 = null;
       if (dragging) { send({ t: "btn", b: "left", down: false }); dragging = false; }
+      twoAt = Date.now(); twoMoved = false;
       const [a, b] = e.touches;
       pinch = { d0: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), zoom0: zoom,
                 cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2, panX0: panX, panY0: panY, mode: null };
@@ -575,6 +579,7 @@
       if (!pinch.mode) {
         if (Math.abs(d - pinch.d0) > 25) pinch.mode = "zoom";
         else if (Math.hypot(cx - pinch.cx, cy - pinch.cy) > 12) pinch.mode = zoom > 1 ? "pan" : "scroll";
+        if (pinch.mode) twoMoved = true;
       }
       if (pinch.mode === "zoom") {
         zoom = Math.min(5, Math.max(1, pinch.zoom0 * d / pinch.d0));
@@ -600,10 +605,14 @@
     if (!moved && Math.hypot(dx, dy) > 8) { moved = true; clearTimeout(longTimer); longTimer = null; }
     if (!moved) return;
     if (trackpad.checked) {
-      const prev = pts.get(t.identifier);
-      const m = new DOMMatrix(getComputedStyle(canvas).transform);
-      cur.x = Math.min(1, Math.max(0, cur.x + (t.clientX - prev.x) * 1.4 / (frameW * m.a)));
-      cur.y = Math.min(1, Math.max(0, cur.y + (t.clientY - prev.y) * 1.4 / (frameH * m.d)));
+      // in PC pixels, like a laptop pad: slow finger = 1 PC px per screen point (precise), fast = up to 6
+      const prev = pts.get(t.identifier), now = performance.now();
+      const dt = lastMoveAt ? Math.max(1, now - lastMoveAt) : 16; lastMoveAt = now;
+      const ddx = t.clientX - prev.x, ddy = t.clientY - prev.y, v = Math.hypot(ddx, ddy) / dt;   // points per ms
+      const gain = 1 + Math.min(5, Math.max(0, (v - 0.15) * 4));
+      cur.x = Math.min(1, Math.max(0, cur.x + ddx * gain / pcW));
+      cur.y = Math.min(1, Math.max(0, cur.y + ddy * gain / pcH));
+      if (dragArm && !dragging) { dragging = true; send({ t: "btn", b: "left", down: true }); buzz(15); }
       placeCursor();
     } else {
       if (!dragging) { dragging = true; send({ t: "btn", b: "left", down: true }); }
@@ -621,16 +630,24 @@
     for (const t of e.changedTouches) pts.delete(t.identifier);
     if (e.touches.length > 0) return;
     pinch = null;
+    if (twoAt) {   // two fingers down and up without scrolling or zooming: right click
+      const quick = !twoMoved && Date.now() - twoAt < 350; twoAt = 0;
+      if (quick) { send({ t: "click", b: "right", n: 1, ...cur }); buzz(20); const t = e.changedTouches[0]; if (t) ripple(t.clientX, t.clientY, true); }
+      t0 = null; dragArm = false; return;
+    }
     if (dragging) { send({ t: "btn", b: "left", down: false }); dragging = false; }
-    else if (t0 && !moved && longTimer) {
-      clearTimeout(longTimer); longTimer = null;
+    else if (t0 && !moved && (longTimer || dragArm)) {
+      clearTimeout(longTimer); longTimer = null; tapEndAt = Date.now();
       const now = Date.now(), dbl = now - lastTap < 350; lastTap = dbl ? 0 : now;
       send({ t: "click", b: "left", n: dbl ? 2 : 1, ...cur }); buzz(8); sfx("click");
       const t = e.changedTouches[0]; if (t) ripple(t.clientX, t.clientY, false);
     }
-    t0 = null;
+    t0 = null; dragArm = false;
   }, { passive: false });
-  view.addEventListener("touchcancel", () => { clearTimeout(longTimer); longTimer = null; t0 = null; pinch = null; pts.clear(); });
+  view.addEventListener("touchcancel", () => {
+    clearTimeout(longTimer); longTimer = null; t0 = null; pinch = null; pts.clear(); twoAt = 0; dragArm = false;
+    if (dragging) { send({ t: "btn", b: "left", down: false }); dragging = false; }   // never leave the button held
+  });
   $("zoomReset").onclick = () => { zoom = 1; panX = panY = 0; applyTransform(); menu.hidden = true; };
 
   // ---- volume slider (PC master volume via the agent)
