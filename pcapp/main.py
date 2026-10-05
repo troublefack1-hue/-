@@ -220,7 +220,11 @@ class Backend:
         try:
             self.loop.run_until_complete(self._main())
         except Exception as e:  # noqa: BLE001
-            self.error = str(e)
+            msg = str(e)
+            if isinstance(e, OSError) and (getattr(e, "errno", None) in (98, 10048, 10013) or "10048" in msg or "10013" in msg):
+                msg = (f"порт {self.cfg['port']} (или 8787) занят — вероятно, PC Remote уже запущен "
+                       f"(значок в трее) или порт держит другая программа; иначе измените port в config.json")
+            self.error = msg
             log.exception("backend failed")
 
     async def _main(self):
@@ -813,6 +817,12 @@ def main():
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:  # noqa: BLE001
         pass
+    # one copy at a time: a second start just raises the first one's window via the tray
+    if os.name == "nt":
+        ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\PCRemoteSingleton")
+        if ctypes.windll.kernel32.GetLastError() == 183:   # ERROR_ALREADY_EXISTS
+            ctypes.windll.user32.MessageBoxW(None, "PC Remote уже запущен — откройте его через значок в трее.", APP_NAME, 0x40)
+            return
     cfg = load_config()
     try:
         install_phone_cli()
