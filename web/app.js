@@ -1049,6 +1049,9 @@
       const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
       if (!r.ok) return; const b = await r.blob(); bytesIn += b.size;
       const u = URL.createObjectURL(b); thumbCache.set(path, u); img.src = u;
+      if (thumbCache.size > 400) {   // a long scroll through the camera roll must not eat the phone's memory
+        const oldest = thumbCache.keys().next().value; URL.revokeObjectURL(thumbCache.get(oldest)); thumbCache.delete(oldest);
+      }
     } catch {}
   }
   async function downloadFile(it) {
