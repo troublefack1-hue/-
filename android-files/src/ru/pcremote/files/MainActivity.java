@@ -266,7 +266,16 @@ public class MainActivity extends Activity {
             listView.setSelector(android.R.color.transparent);
             listView.setOnItemClickListener((p, v, pos, id) -> { setActive(this); onTap(items.get(pos)); });
             listView.setOnItemLongClickListener((p, v, pos, id) -> { setActive(this); Fs.Entry e = items.get(pos); if (selected.contains(e.file.getAbsolutePath()) && !(e instanceof RootEntry)) startDrag(v); else toggle(e); return true; });
-            listView.setOnTouchListener((v, ev) -> { if (ev.getAction() == android.view.MotionEvent.ACTION_DOWN && active != this) setActive(this); return false; });
+            final android.view.GestureDetector swipe = new android.view.GestureDetector(MainActivity.this, new android.view.GestureDetector.SimpleOnGestureListener() {
+                @Override public boolean onFling(android.view.MotionEvent e1, android.view.MotionEvent e2, float vx, float vy) {
+                    if (e1 == null || e2 == null) return false;
+                    float dx = e2.getX() - e1.getX(), dy = e2.getY() - e1.getY();
+                    // a quick swipe to the left: back to the previous place (the same as the Back key)
+                    if (dx < -dp(90) && Math.abs(dy) < Math.abs(dx) * 0.6f && Math.abs(vx) > 600) { setActive(Pane.this); if (back()) { listView.animate().translationX(-dp(24)).alpha(0.6f).setDuration(80).withEndAction(() -> { listView.setTranslationX(dp(24)); listView.animate().translationX(0).alpha(1f).setDuration(160).start(); }).start(); } return true; }
+                    return false;
+                }
+            });
+            listView.setOnTouchListener((v, ev) -> { if (ev.getAction() == android.view.MotionEvent.ACTION_DOWN && active != this) setActive(this); swipe.onTouchEvent(ev); return false; });
             listView.setOnDragListener(this::onDrag);
             fl.addView(listView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             if (empty != null) { if (empty.getParent() != null) ((ViewGroup) empty.getParent()).removeView(empty); fl.addView(empty, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)); }
@@ -798,11 +807,12 @@ public class MainActivity extends Activity {
             if (sel) { check.setScaleX(0.6f); check.setScaleY(0.6f); check.animate().scaleX(1f).scaleY(1f).setDuration(140).start(); }
             icon.setAlpha(sel ? 0.75f : 1f); name.setText(e.name);
             if (isRoot) {
-                Root r = ((RootEntry) e).r; name.setText(r.name); icon.setTag(null); icon.setImageResource(r.icon); icon.setColorFilter(r.icon == R.drawable.ic_sd ? ACCENT : 0);
+                Root r = ((RootEntry) e).r; name.setText(r.name); icon.setTag(null); icon.setImageResource(r.icon); icon.setColorFilter(r.icon == R.drawable.ic_sd ? ACCENT : 0); icon.setClickable(false); icon.setOnClickListener(null);
                 meta.setText(r.hint); usage.setVisibility(r.used >= 0 ? View.VISIBLE : View.GONE); if (r.used >= 0) usage.setProgress(Math.round(r.used * 100));
                 return;
             }
             icon.setColorFilter(0); usage.setVisibility(View.GONE);
+            if (!grid) { icon.setClickable(true); icon.setBackground(ripple(Color.TRANSPARENT)); icon.setOnClickListener(v -> { setActive(pane); pane.toggle(e); }); } else { icon.setClickable(false); icon.setOnClickListener(null); }
             if (pane.searchMode) meta.setText(e.file.getParent());
             else if (pane.trashMode()) { String o = Fs.trashOrigin(e.file); meta.setText(o == null ? "" : "из " + new File(o).getParent()); }
             else if (e.dir) meta.setText(e.local() ? folderMeta(pane, e) : "папка");
