@@ -17,6 +17,20 @@ final class AutoUpdate {
 
     private AutoUpdate() {}
 
+    /** The same version already handed to the installer less than 6 h ago and not installed (Android wants a tap):
+     *  downloading it again every 15 minutes cost ~0.8 MB each time, ~77 MB a day on mobile data. On "open" the
+     *  owner is looking at the phone: try at once. */
+    private static boolean recentlyTried(SharedPreferences p, String asset, String version, String why) {
+        if ("open".equals(why)) return false;
+        String key = "upd_try_" + asset, was = p.getString(key, "");
+        int bar = was.indexOf('|');
+        if (bar > 0 && was.substring(0, bar).equals(version)) {
+            try { if (System.currentTimeMillis() - Long.parseLong(was.substring(bar + 1)) < 6 * 3600_000L) return true; } catch (NumberFormatException ignored) {}
+        }
+        p.edit().putString(key, version + "|" + System.currentTimeMillis()).apply();
+        return false;
+    }
+
     /** Blocking; call off the main thread. Returns true when something was handed to the installer. */
     static synchronized boolean fromPc(Context ctx, String why) {
         if (System.currentTimeMillis() < busyUntil) { PhoneLog.add("update(" + why + "): previous install still running, skip"); return false; }
@@ -31,6 +45,7 @@ final class AutoUpdate {
             try {
                 Updater.Info i = Updater.checkPc(v, app[1]);
                 if (i == null) { PhoneLog.add("update(" + why + "): " + app[2] + " " + v + " is current"); continue; }
+                if (recentlyTried(p, app[1], i.version, why)) { PhoneLog.add("update(" + why + "): " + app[2] + " " + i.version + " waits for a tap, not again yet"); continue; }
                 PhoneLog.add("update(" + why + "): " + app[2] + " " + v + " -> " + i.version + ", downloading");
                 SilentInstaller.install(ctx, Updater.downloadPc(app[1], ctx.getCacheDir(), i.sha256), app[2] + " " + i.version);
                 any = true;
@@ -43,6 +58,7 @@ final class AutoUpdate {
             cur = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
             Updater.Info me = Updater.checkPc(cur, Updater.ASSET);
             if (me == null) PhoneLog.add("update(" + why + "): Мой ПК " + cur + " is current");
+            else if (recentlyTried(p, Updater.ASSET, me.version, why)) PhoneLog.add("update(" + why + "): Мой ПК " + me.version + " waits for a tap, not again yet");
             else {
                 PhoneLog.add("update(" + why + "): Мой ПК " + cur + " -> " + me.version + ", downloading");
                 SilentInstaller.install(ctx, Updater.downloadPc(Updater.ASSET, ctx.getCacheDir(), me.sha256), "Мой ПК " + me.version);
