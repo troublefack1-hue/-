@@ -36,7 +36,8 @@ import android.widget.TextView;
  */
 public class MainActivity extends Activity {
     private static final int BG = 0xFF0F1117, PANEL = 0xFF181B24, TEXT = 0xFFEEF0F5, MUTED = 0xFF8E94A6, ACCENT = 0xFF4F8CFF;
-    private static final int REQ_CAST = 7;
+    private static final int REQ_CAST = 7, REQ_FILE = 9;
+    private android.webkit.ValueCallback<android.net.Uri[]> fileCallback;
     public static volatile boolean visible = false;
     private SharedPreferences prefs;
     private WebView web;
@@ -101,6 +102,17 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int req, int code, Intent data) {
         super.onActivityResult(req, code, data);
+        if (req == REQ_FILE) {
+            android.net.Uri[] uris = null;
+            if (code == RESULT_OK && data != null) {
+                if (data.getClipData() != null) {
+                    uris = new android.net.Uri[data.getClipData().getItemCount()];
+                    for (int k = 0; k < uris.length; k++) uris[k] = data.getClipData().getItemAt(k).getUri();
+                } else if (data.getData() != null) uris = new android.net.Uri[]{data.getData()};
+            }
+            if (fileCallback != null) { fileCallback.onReceiveValue(uris); fileCallback = null; }
+            return;
+        }
         if (req == REQ_CAST && code == RESULT_OK && data != null) {
             Intent i = new Intent(this, RemoteService.class).setAction(RemoteService.ACTION_CAST)
                     .putExtra("code", code).putExtra("data", data);
@@ -196,7 +208,19 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
         web.setBackgroundColor(BG);
         web.addJavascriptInterface(new Bridge(), "PcRemoteApp");
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new WebChromeClient() {
+            // <input type="file"> does nothing in a WebView unless the app opens the picker itself
+            @Override public boolean onShowFileChooser(WebView v, android.webkit.ValueCallback<android.net.Uri[]> cb, FileChooserParams params) {
+                if (fileCallback != null) fileCallback.onReceiveValue(null);
+                fileCallback = cb;
+                try {
+                    Intent i = params.createIntent();
+                    i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    startActivityForResult(i, REQ_FILE);
+                } catch (Exception e) { fileCallback = null; return false; }
+                return true;
+            }
+        });
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) { return false; }
             @Override public void onReceivedError(WebView v, WebResourceRequest r, android.webkit.WebResourceError e) {
