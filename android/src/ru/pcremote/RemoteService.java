@@ -192,6 +192,8 @@ public class RemoteService extends Service {
 
     /** Every 5 s: is there a better road to the PC than the one in use (cable plugged in, back on
      *  home Wi-Fi)? If so, drop the link; the reconnect takes the better one, and the page follows. */
+    private String triedBetter = ""; private long triedBetterUntil;
+
     private void watchPaths() {
         Paths.pcAddrs = prefs.getString("addrs", "");
         while (running) {
@@ -205,7 +207,11 @@ public class RemoteService extends Service {
                 int curRank = Paths.PUBLIC;
                 for (Paths.Candidate cd : cands) if (cd.host.equals(peer)) curRank = cd.rank;
                 Paths.Candidate best = cands.get(0);
+                // a "shorter" path that did not work last time (guest Wi-Fi sees the home LAN address but cannot reach
+                // it): dropping the link for it every 5 s kept the connection flapping — leave it alone for 10 minutes
+                if (best.host.equals(triedBetter) && System.currentTimeMillis() < triedBetterUntil) continue;
                 if (best.rank < curRank && !best.host.equals(peer)) {
+                    triedBetter = best.host; triedBetterUntil = System.currentTimeMillis() + 10 * 60_000;
                     update("Связь с ПК", "найден путь короче: " + best.host);
                     c.close();                              // keepConnected() reconnects at once, best path first
                     MainActivity.reconnectWeb();
