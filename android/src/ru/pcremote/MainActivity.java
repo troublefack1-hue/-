@@ -97,8 +97,15 @@ public class MainActivity extends Activity {
         startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAST);
     }
 
-    @Override protected void onResume() { super.onResume(); visible = true; }
-    @Override protected void onPause() { super.onPause(); visible = false; }
+    @Override protected void onResume() {
+        super.onResume(); visible = true;
+        if (web != null) web.evaluateJavascript("window.pcrVisible && window.pcrVisible(true)", null);
+    }
+    @Override protected void onPause() {
+        super.onPause(); visible = false;
+        // the page cannot see this on its own: it drops to the idle profile (no video) while we are in the background
+        if (web != null) web.evaluateJavascript("window.pcrVisible && window.pcrVisible(false)", null);
+    }
 
     @Override protected void onActivityResult(int req, int code, Intent data) {
         super.onActivityResult(req, code, data);

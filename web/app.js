@@ -137,6 +137,14 @@
   // with backoff, without reloading the page.
   let lastMsgAt = 0, backoff = 1000, reconnectTimer = null, pingTimer = null, pingSentAt = 0, authed = false;
 
+  // the Android activity tells us when it goes to the background (the WebView itself keeps running)
+  let appHidden = false;
+  const isHidden = () => isHidden() || appHidden;
+  window.pcrVisible = (v) => {
+    appHidden = !v;
+    send({ t: "profile", name: isHidden() ? "idle" : profile });
+    if (!isHidden() && ws && ws.readyState !== 1) { backoff = 1000; connect(); }
+  };
   function connect() {
     clearTimeout(reconnectTimer);
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
@@ -156,7 +164,7 @@
         localStorage.setItem("pcr_secret", secret);
         login.hidden = true; app.hidden = false; connecting.hidden = true;
         hideSplash();
-        send({ t: "profile", name: document.hidden ? "idle" : profile });
+        send({ t: "profile", name: isHidden() ? "idle" : profile });
         if (audioOn) send({ t: "audio", on: true });
       }
       if (m.t === "status" || m.t === "pong") {
@@ -215,9 +223,9 @@
         setTimeout(() => { if (Date.now() - lastMsgAt > 1400 && ws && ws.readyState === 1) { backoff = 300; ws.close(); } }, 1500);
       } else if (m.t === "term_out") { termOut(m.id, m.data);
       } else if (m.t === "pc_notify") {
-        if (!document.hidden) { pill(`${m.app}: ${m.title || m.text}`.slice(0, 80), false, 4000); buzz(15); }
+        if (!isHidden()) { pill(`${m.app}: ${m.title || m.text}`.slice(0, 80), false, 4000); buzz(15); }
       } else if (m.t === "attention") {
-        if ($("termPanel").hidden || document.hidden) { pill("Claude ждёт ответа — откройте терминал", true, 5000); buzz([30, 60, 30]); sfx("ok"); }
+        if ($("termPanel").hidden || isHidden()) { pill("Claude ждёт ответа — откройте терминал", true, 5000); buzz([30, 60, 30]); sfx("ok"); }
       } else if (m.t === "term_exit") { termExit(m.id);
       } else if (m.t === "pc_clip") {
         pcClip = m.s; $("pcClipBtn").hidden = false; $("pcClipText").textContent = m.s.slice(0, 40).replace(/\s+/g, " ");
@@ -243,15 +251,15 @@
   // 2 s pings while the app is on screen, 6 s of silence = reconnect (a VPN toggle on the PC costs seconds, not a minute)
   pingTimer = setInterval(() => {
     if (!ws || ws.readyState !== 1) return;
-    const limit = document.hidden ? 20000 : 6000;
+    const limit = isHidden() ? 20000 : 6000;
     if (Date.now() - lastMsgAt > limit) { show("Связь прервалась, переподключаюсь…"); backoff = 500; ws.close(); return; }
-    if (!document.hidden || Date.now() - pingSentAt > 8000) { pingSentAt = Date.now(); send({ t: "ping" }); }
+    if (!isHidden() || Date.now() - pingSentAt > 8000) { pingSentAt = Date.now(); send({ t: "ping" }); }
   }, 2000);
   window.addEventListener("online", () => { backoff = 1000; if (!ws || ws.readyState !== 1) connect(); });
   document.addEventListener("visibilitychange", () => {
     // no video while the app is in the background: saves traffic and battery
-    send({ t: "profile", name: document.hidden ? "idle" : profile });
-    if (!document.hidden && ws && ws.readyState !== 1) { backoff = 1000; connect(); }
+    send({ t: "profile", name: isHidden() ? "idle" : profile });
+    if (!isHidden() && ws && ws.readyState !== 1) { backoff = 1000; connect(); }
   });
 
   function ago(ts) {
@@ -445,7 +453,7 @@
   // gyroscope: tilt the phone to glide the cursor (relative, like an air mouse)
   let gyroOn = false, gyroLast = 0;
   function onMotion(e) {
-    const r = e.rotationRate; if (!r || !pcOnline || !frameW || document.hidden) return;
+    const r = e.rotationRate; if (!r || !pcOnline || !frameW || isHidden()) return;
     const now = performance.now(); if (now - gyroLast < 33) return; gyroLast = now;
     const dx = -(r.alpha || 0) * 0.0025, dy = -(r.beta || 0) * 0.0025;   // deg/s -> screen fraction per tick
     if (Math.abs(dx) < 0.0015 && Math.abs(dy) < 0.0015) return;
@@ -1245,7 +1253,7 @@
     sysTab = tab; for (const k in TABS) $(TABS[k]).hidden = k !== tab;
     document.querySelectorAll("#sysTabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
     clearInterval(sysTimer); sysRequest();
-    if (tab === "state" || tab === "procs") sysTimer = setInterval(() => { if (!$("sysPage").hidden && !document.hidden) sysRequest(); }, tab === "state" ? 3000 : 5000);
+    if (tab === "state" || tab === "procs") sysTimer = setInterval(() => { if (!$("sysPage").hidden && !isHidden()) sysRequest(); }, tab === "state" ? 3000 : 5000);
   }
   $("sysBtn").onclick = () => { showPage("sysPage"); if (!pcOnline) show("ПК не в сети"); sysShowTab(guest ? "state" : sysTab); };
   document.querySelectorAll("#sysTabs button").forEach((b) => (b.onclick = () => { sysShowTab(b.dataset.tab); buzz(6); }));
