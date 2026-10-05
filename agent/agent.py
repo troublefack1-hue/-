@@ -217,11 +217,42 @@ def set_clipboard(text: str) -> bool:
         user32.CloseClipboard()
 
 
+_CLIP_PRIVATE_FMTS: list = []
+
+
+def _clipboard_private() -> bool:
+    """Password managers mark secrets so clipboard tools leave them alone; honour that.
+    Must be called with the clipboard open."""
+    global _CLIP_PRIVATE_FMTS
+    if not _CLIP_PRIVATE_FMTS:
+        _CLIP_PRIVATE_FMTS = [user32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing"),
+                              user32.RegisterClipboardFormatW("CanIncludeInClipboardHistory"),
+                              user32.RegisterClipboardFormatW("CanUploadToCloudClipboard")]
+    try:
+        if user32.IsClipboardFormatAvailable(_CLIP_PRIVATE_FMTS[0]):
+            return True
+        for fmt in _CLIP_PRIVATE_FMTS[1:]:          # present with value 0 = "do not keep / do not sync"
+            if user32.IsClipboardFormatAvailable(fmt):
+                h = user32.GetClipboardData(fmt)
+                if h:
+                    p = kernel32.GlobalLock(h)
+                    try:
+                        if p and ctypes.cast(p, ctypes.POINTER(wintypes.DWORD)).contents.value == 0:
+                            return True
+                    finally:
+                        kernel32.GlobalUnlock(h)
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
 def get_clipboard() -> str | None:
-    """Current clipboard text (≤ 10 KB) or None."""
+    """Current clipboard text (≤ 10 KB) or None; None also for content marked private."""
     if not user32.OpenClipboard(None):
         return None
     try:
+        if _clipboard_private():
+            return None
         h = user32.GetClipboardData(CF_UNICODETEXT)
         if not h:
             return None
