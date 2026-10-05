@@ -23,9 +23,17 @@ public final class Tunnel implements Runnable {
     private volatile boolean running = true;
     public volatile String lastError = "";
 
+    /** Fixed local ports first: the page's origin (127.0.0.1:port) must stay the same between
+     *  launches, or the WebView's localStorage (theme, macros, settings) resets every time. */
+    private static final int[] PORTS = {17877, 17878, 17879, 17880};
+
     public Tunnel(String host, int port, String pin) throws IOException {
         this.host = host; this.port = port; this.pin = pin;
-        server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        ServerSocket s = null;
+        for (int p : PORTS) {
+            try { s = new ServerSocket(p, 50, InetAddress.getLoopbackAddress()); break; } catch (IOException busy) { /* next */ }
+        }
+        server = s != null ? s : new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
     }
 
     public int localPort() { return server.getLocalPort(); }

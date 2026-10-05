@@ -106,7 +106,7 @@ public class RemoteService extends Service {
             while (running && ws == null) {
                 try {
                     java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url + "/json?since=10s").openConnection();
-                    c.setConnectTimeout(8000); c.setReadTimeout(0);
+                    c.setConnectTimeout(8000); c.setReadTimeout(120000);   // ntfy keeps the stream alive every ~45 s; a dead TCP must not hang us forever
                     try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getInputStream()))) {
                         String line;
                         while (running && ws == null && (line = r.readLine()) != null) {
