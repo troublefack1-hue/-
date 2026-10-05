@@ -370,7 +370,7 @@ class Hub:
 
     # --- /ws/phone ------------------------------------------------------
     async def phone_handler(self, request: web.Request):
-        ws = web.WebSocketResponse(heartbeat=5, max_msg_size=MAX_CAST)  # dead phones noticed in ~10 s
+        ws = web.WebSocketResponse(heartbeat=8, max_msg_size=MAX_CAST)  # dead phones noticed in ~16 s
         await ws.prepare(request)
         ip = client_ip(request)
         if not await self.ws_auth(ws, ip):
