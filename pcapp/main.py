@@ -267,8 +267,17 @@ class Backend:
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
 
+    @staticmethod
+    def _loop_errors(loop, context):
+        # Windows' proactor logs a full traceback whenever a peer drops a socket (WinError 10054 in
+        # _call_connection_lost): nothing is broken, but the noise hid real errors in pcapp.log
+        if isinstance(context.get("exception"), (ConnectionResetError, ConnectionAbortedError)):
+            return
+        loop.default_exception_handler(context)
+
     def _run(self):
         asyncio.set_event_loop(self.loop)
+        self.loop.set_exception_handler(self._loop_errors)
         try:
             self.loop.run_until_complete(self._main())
         except Exception as e:  # noqa: BLE001
