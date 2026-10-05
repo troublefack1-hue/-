@@ -39,6 +39,8 @@ jobs:
         run: python tests/test_netmux_jvm.py
       - name: «Проводник» core on the JVM
         run: python tests/test_files_jvm.py
+      - name: «Проводник» ↔ PC, zip, search filters, batch rename (JVM against the relay)
+        run: python tests/test_pcclient_jvm.py
       - name: Web client smoke test (real browser)
         run: python tests/test_web_smoke.py
       - name: Web client syntax

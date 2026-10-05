@@ -42,6 +42,11 @@
             android:exported="false"
             android:theme="@style/ViewerTheme"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize" />
+        <activity
+            android:name=".EditorActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize" />
         <provider
             android:name=".FileProvider"
             android:authorities="ru.pcremote.files.provider"

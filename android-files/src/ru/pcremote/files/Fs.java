@@ -29,10 +29,17 @@ public final class Fs {
 
     public static class Entry {
         public final File file; public final String name; public final boolean dir; public final long size, mtime; public final Kind kind;
+        /** For zip / PC entries: an id the location understands (entry name, remote path); null for local files. */
+        public final String ref;
         public Entry(File f) {
             file = f; name = f.getName(); dir = f.isDirectory(); size = dir ? 0 : f.length(); mtime = f.lastModified();
-            kind = dir ? Kind.FOLDER : kindOf(name);
+            kind = dir ? Kind.FOLDER : kindOf(name); ref = null;
         }
+        public Entry(String name, boolean dir, long size, long mtime, String ref) {
+            this.file = new File(ref == null ? name : ref); this.name = name; this.dir = dir; this.size = size; this.mtime = mtime;
+            this.kind = dir ? Kind.FOLDER : kindOf(name); this.ref = ref;
+        }
+        public boolean local() { return ref == null; }
     }
 
     public enum Sort { NAME, DATE, SIZE, TYPE }
@@ -281,20 +288,118 @@ public final class Fs {
     // ---- search -----------------------------------------------------------
     public interface Found { /** @return false to stop */ boolean onFound(Entry e); }
 
-    public static void search(File root, String query, boolean hidden, Found cb) {
-        String q = query.toLowerCase(Locale.ROOT);
+    /** What to look for: a name (plain text or a mask with * and ?), kinds, size/date limits, text inside files. */
+    public static final class Query {
+        public String text = "";                 // "" = any name
+        public java.util.Set<Kind> kinds = null; // null = any
+        public long minSize = -1, maxSize = -1;  // bytes, -1 = any
+        public long since = -1;                  // mtime >= since (ms), -1 = any
+        public String content = "";              // "" = don't look inside; else case-insensitive substring in text-like files
+        public boolean folders = true;
+
+        boolean nameOk(String name) {
+            if (text.isEmpty()) return true;
+            String n = name.toLowerCase(Locale.ROOT), t = text.toLowerCase(Locale.ROOT);
+            if (t.indexOf('*') >= 0 || t.indexOf('?') >= 0) return glob(t, n);
+            return n.contains(t);
+        }
+    }
+
+    /** Simple glob: * = anything, ? = one char; the whole name must match. */
+    public static boolean glob(String pat, String s) {
+        int p = 0, i = 0, star = -1, mark = 0;
+        while (i < s.length()) {
+            if (p < pat.length() && (pat.charAt(p) == '?' || pat.charAt(p) == s.charAt(i))) { p++; i++; }
+            else if (p < pat.length() && pat.charAt(p) == '*') { star = p++; mark = i; }
+            else if (star >= 0) { p = star + 1; i = ++mark; }
+            else return false;
+        }
+        while (p < pat.length() && pat.charAt(p) == '*') p++;
+        return p == pat.length();
+    }
+
+    public static void search(File root, String query, boolean hidden, Found cb) { Query q = new Query(); q.text = query; search(root, q, hidden, cb); }
+
+    public static void search(File root, Query q, boolean hidden, Found cb) {
         ArrayList<File> stack = new ArrayList<>(); stack.add(root);
         int scanned = 0;
+        byte[] buf = q.content.isEmpty() ? null : new byte[256 * 1024];
+        String needle = q.content.toLowerCase(Locale.ROOT);
         while (!stack.isEmpty()) {
             File d = stack.remove(stack.size() - 1);
             File[] fs = d.listFiles();
             if (fs == null) continue;
             for (File f : fs) {
                 if (!hidden && f.getName().startsWith(".")) continue;
-                if (f.getName().toLowerCase(Locale.ROOT).contains(q) && !cb.onFound(new Entry(f))) return;
-                if (f.isDirectory() && !isSymlink(f)) stack.add(f);
+                boolean dir = f.isDirectory();
+                if (dir && !isSymlink(f)) stack.add(f);
                 if (++scanned > 400000) return;
+                if (dir && (!q.folders || !q.content.isEmpty())) continue;
+                if (!q.nameOk(f.getName())) continue;
+                Entry e = new Entry(f);
+                if (q.kinds != null && !q.kinds.contains(e.kind)) continue;
+                if (!dir && q.minSize >= 0 && e.size < q.minSize) continue;
+                if (!dir && q.maxSize >= 0 && e.size > q.maxSize) continue;
+                if (q.since >= 0 && e.mtime < q.since) continue;
+                if (buf != null) { if (dir || e.size > 20L * 1024 * 1024 || !(e.kind == Kind.TEXT || e.kind == Kind.OTHER || e.kind == Kind.DOC) || !contains(f, needle, buf)) continue; }
+                if (!cb.onFound(e)) return;
             }
         }
+    }
+
+    /** Case-insensitive substring search in a file read as UTF-8/Latin-1 (binary files just never match). */
+    static boolean contains(File f, String needle, byte[] buf) {
+        try (InputStream in = new FileInputStream(f)) {
+            String carry = "";
+            int r;
+            while ((r = in.read(buf)) > 0) {
+                String chunk = carry + new String(buf, 0, r, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+                if (chunk.contains(needle)) return true;
+                carry = chunk.length() > needle.length() ? chunk.substring(chunk.length() - needle.length()) : chunk;
+            }
+        } catch (IOException ignored) {}
+        return false;
+    }
+
+    // ---- batch rename ---------------------------------------------------------
+    /** New names for files: pattern with {name} {ext} {n} {n3} {date}; then find→replace; "" pattern = keep name. */
+    public static List<String[]> renamePlan(List<File> files, String pattern, String find, String replace, int start) {
+        List<String[]> out = new ArrayList<>();
+        int n = start;
+        for (File f : files) {
+            String name = f.getName(), ext = ext(name), base = ext.isEmpty() ? name : name.substring(0, name.length() - ext.length() - 1);
+            if (!ext.isEmpty()) ext = name.substring(name.length() - ext.length());   // keep the original case (.JPG stays .JPG)
+            String nn = pattern == null || pattern.isEmpty() ? name
+                    : pattern.replace("{name}", base).replace("{ext}", ext).replace("{n3}", String.format(Locale.ROOT, "%03d", n)).replace("{n}", String.valueOf(n))
+                      .replace("{date}", new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(new Date(f.lastModified())));
+            if (!pattern.isEmpty() && !pattern.contains("{ext}") && !ext.isEmpty() && !nn.endsWith("." + ext)) nn += "." + ext;
+            if (find != null && !find.isEmpty()) nn = nn.replace(find, replace == null ? "" : replace);
+            out.add(new String[]{f.getAbsolutePath(), nn});
+            n++;
+        }
+        return out;
+    }
+
+    /** Applies a plan; refuses collisions up front so nothing is half-renamed. Returns how many changed. */
+    public static int renameApply(List<String[]> plan) throws IOException {
+        java.util.Set<String> targets = new java.util.HashSet<>();
+        for (String[] p : plan) {
+            File f = new File(p[0]); String nn = p[1];
+            if (nn.isEmpty() || nn.contains("/") || nn.equals(".") || nn.equals("..")) throw new IOException("недопустимое имя: " + nn);
+            File t = new File(f.getParentFile(), nn);
+            if (!targets.add(t.getAbsolutePath())) throw new IOException("два файла получают имя " + nn);
+            if (!t.equals(f) && t.exists()) { boolean inPlan = false; for (String[] q : plan) if (q[0].equals(t.getAbsolutePath())) inPlan = true; if (!inPlan) throw new IOException("уже есть: " + nn); }
+        }
+        // two passes through temporary names so that swaps (a->b, b->a) work
+        List<File[]> tmp = new ArrayList<>();
+        int changed = 0;
+        for (String[] p : plan) {
+            File f = new File(p[0]); if (f.getName().equals(p[1])) continue;
+            File t = new File(f.getParentFile(), ".rename-" + System.nanoTime() + "-" + tmp.size());
+            if (!f.renameTo(t)) throw new IOException("не удалось переименовать " + f.getName());
+            tmp.add(new File[]{t, new File(f.getParentFile(), p[1])}); changed++;
+        }
+        for (File[] m : tmp) if (!m[0].renameTo(m[1])) throw new IOException("не удалось переименовать в " + m[1].getName());
+        return changed;
     }
 }
