@@ -56,6 +56,7 @@ public class RemoteService extends Service {
     private int savedVolume = -1;
     private long lastFrameAt = 0;
     private PhoneFs fs;
+    private volatile boolean lockedOut = false;
     private final java.util.concurrent.ExecutorService fsPool = java.util.concurrent.Executors.newSingleThreadExecutor();
     public static final String ACTION_TERM = "term", ACTION_WAKE = "wake", ACTION_CMD = "cmd";
 
@@ -144,6 +145,7 @@ public class RemoteService extends Service {
                     public void onText(String s) { onMessage(s); }
                     public void onBinary(byte[] b) { if (b.length > 0 && b[0] == 0x07 && fs != null) fs.writeChunk(b); }
                     public void onClose(String reason) {
+                        lockedOut = reason != null && reason.contains("4029");
                         if (reason != null && reason.contains("4003")) {   // secret revoked on the PC: stop hammering, ask to pair again
                             prefs.edit().remove("secret").apply();
                             update("Доступ отозван", "привяжите телефон заново в приложении");
@@ -167,6 +169,7 @@ public class RemoteService extends Service {
             }
             ws = null;
             startNudgeListener();                               // the PC can wake us up early
+            if (lockedOut) delay = 60000;   // address locked out on the PC: retrying faster only prolongs it
             waitOrNudge(delay); delay = Math.min(delay * 2, 15000);
         }
     }
