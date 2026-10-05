@@ -25,10 +25,17 @@ public final class Socks5Server implements Runnable {
     private final ServerSocket server;
     private final NetMux mux;
     private volatile boolean running = true;
+    private static final InetAddress LOOPBACK4 = loopback4();
+
+    private static InetAddress loopback4() {
+        try { return InetAddress.getByAddress(new byte[]{127, 0, 0, 1}); }
+        catch (java.net.UnknownHostException e) { throw new AssertionError(e); }
+    }
 
     public Socks5Server(NetMux mux) throws IOException {
         this.mux = mux;
-        server = new ServerSocket(0, 128, InetAddress.getLoopbackAddress());
+        // IPv4 explicitly: hev-socks5-tunnel is configured with 127.0.0.1, getLoopbackAddress() is ::1 on Android.
+        server = new ServerSocket(0, 128, LOOPBACK4);
     }
 
     public int port() { return server.getLocalPort(); }
@@ -114,7 +121,7 @@ public final class Socks5Server implements Runnable {
     // ---- UDP ASSOCIATE ----
     private void udpAssociate(Socket control, InputStream in, OutputStream out) throws IOException {
         if (!mux.isUp()) { reply(out, 1); return; }
-        final DatagramSocket ds = new DatagramSocket(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+        final DatagramSocket ds = new DatagramSocket(new InetSocketAddress(LOOPBACK4, 0));
         final SocketAddress[] peer = {null};
         final int fid = mux.udpFlow((host, port, data, off, len) -> {
             if (peer[0] == null) return;

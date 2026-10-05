@@ -34,11 +34,13 @@ public final class Tunnel implements Runnable {
 
     public Tunnel(String host, int port, String pin) throws IOException {
         this.host = host; this.port = port; this.pin = pin;
+        // IPv4 explicitly: getLoopbackAddress() is ::1 on Android, and the WebView goes to 127.0.0.1.
+        InetAddress lo = InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
         ServerSocket s = null;
         for (int p : PORTS) {
-            try { s = new ServerSocket(p, 50, InetAddress.getLoopbackAddress()); break; } catch (IOException busy) { /* next */ }
+            try { s = new ServerSocket(p, 50, lo); break; } catch (IOException busy) { /* next */ }
         }
-        server = s != null ? s : new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        server = s != null ? s : new ServerSocket(0, 50, lo);
     }
 
     public int localPort() { return server.getLocalPort(); }
