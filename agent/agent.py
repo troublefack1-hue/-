@@ -68,6 +68,10 @@ def load_config() -> dict:
 # ---------------------------------------------------------- win32 input ---
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+try:  # physical pixels everywhere: mss captures them, so mouse coordinates must use them too
+    ctypes.WinDLL("shcore").SetProcessDpiAwareness(2)
+except Exception:  # noqa: BLE001
+    pass
 
 INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
 MOUSEEVENTF_MOVE = 0x0001
@@ -144,7 +148,14 @@ class Input:
         self.vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
         self.vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
 
+    def _refresh_metrics(self):
+        self.vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+        self.vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        self.vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+        self.vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+
     def move(self, fx: float, fy: float):
+        self._refresh_metrics()
         fx, fy = min(1.0, max(0.0, fx)), min(1.0, max(0.0, fy))
         px = self.mon["left"] + fx * self.mon["width"]
         py = self.mon["top"] + fy * self.mon["height"]

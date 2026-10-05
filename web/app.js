@@ -879,8 +879,9 @@
     if (/\n$/.test(data) || t.buf.length > 4000) go(); else t.flush = setTimeout(go, 30);
   }
   function termExit(id) { const t = terms.get(id); if (!t) return; t.exited = true; t.term.write("\r\n\x1b[90m[сессия завершена]\x1b[0m\r\n"); renderTabs(); }
-  function closeTerm(id) {
+  async function closeTerm(id) {
     const t = terms.get(id); if (!t) return;
+    if (!t.exited && !(await ask("Закрыть эту сессию? Процесс на ПК (Claude, оболочка) будет остановлен."))) return;
     send({ t: "term_close", id }); t.term.dispose(); terms.delete(id);
     if (activeTerm === id) activeTerm = terms.keys().next().value || null;
     terms.size ? showTerm(activeTerm) : renderTermEmpty();
