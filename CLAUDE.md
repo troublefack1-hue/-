@@ -14,6 +14,7 @@
 | `pcapp/` | окно PC Remote (tkinter), трей, плавающий значок, обновления (`updater.py`), докачка компонентов (`deps.py`), команда `phone` (`phone_cli/`) |
 | `android/` | исходники APK без Gradle (`build.py`: aapt2/javac/d8/apksigner); фоновый сервис с WebSocket, звонок, трансляция, виджет, файлы телефона (`PhoneFs.java`), загрузчик |
 | `android-net/` | второе приложение «Интернет через ПК» (`pcremote-net.apk`): VpnService + hev-socks5-tunnel (JNI `hev.htproxy.TProxyService`, .so собирает CI через ndk-build) → `Socks5Server` → `NetMux` → `/ws/net`; плитка `NetTile`; общие `Pinned/Pairing/WsClient/Updater` из `android/` через `--extra-src` |
+| `android-files/` | третье приложение «Проводник» (`pcremote-files.apk`): файловый менеджер без рекламы; ядро `Fs.java` чистое Java (тест `tests/test_files_jvm.py`), UI `MainActivity`, миниатюры `Thumbs`, `FileProvider` для «поделиться/открыть» |
 | `relay/netproxy.py` | серверная часть «Интернет через ПК»: мультиплекс TCP/UDP, DNS с блок-листами, `/ws/net` |
 | `tests/` | атаки на relay, сквозной тест файлов телефона, smoke-тест веб-клиента в браузере |
 | `tools/phone.py` | та же команда `phone` на Python (для тестов и не-Windows) |
@@ -39,6 +40,7 @@ python tests/test_relay_attacks.py      # 38 проверок relay, включ�
 python tests/test_phone_cli.py          # файлы телефона: relay + fake_phone + tools/phone.py
 python tests/test_web_smoke.py          # веб-клиент в настоящем браузере (нужен playwright + chromium)
 python tests/test_netproxy.py           # «Интернет через ПК», серверная часть: 17 проверок
+python tests/test_files_jvm.py          # «Проводник»: ядро Fs.java на JVM (20 проверок)
 python tests/test_netmux_jvm.py         # телефонная часть (NetMux + SOCKS5) на обычной JVM против relay по TLS; нужны javac/java и curl
 node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 ```
@@ -57,6 +59,7 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 - Переключение устройства вывода на время прослушивания (`agent/audio_out.py`, IPolicyConfig через comtypes): что на реальном ПК список устройств приходит в настройки, переключение и возврат срабатывают, loopback берётся с нового устройства.
 - Профиль «10 КБ/с» (`tiny`): автопереход по `self.bw` в `video_step`, один кадр в полёте; проверить на ограниченном канале (например, `tc`/NetLimiter).
 - «Интернет через ПК» на живом телефоне: сборка .so в CI (ndk-build, ANDROID_NDK_LATEST_HOME), запрос разрешения VPN, что трафик реально идёт через ПК (проверить внешний IP телефона = IP VPN ПК), QUIC/UDP, плитка в шторке, возврат на прямой интернет при выключенном ПК, батарея. Исключение самого приложения из туннеля (`addDisallowedApplication`) обязательно, иначе петля.
+- «Проводник» на живом телефоне: разрешение «Доступ ко всем файлам», SD-карта в корнях, миниатюры, открыть/поделиться через FileProvider, корзина, zip; на MIUI — что менеджер не убивает диалог прогресса.
 - QR-привязка: QR в окне ПК (`draw_qr`, пакет `qrcode`) → ссылка `pcremote://pair?host=…&code=…&fp=…&lan=…` → `MainActivity.handlePairLink`; телефон сверяет отпечаток сертификата с `fp` до отправки кода. Проверить со стандартной камерой и с MIUI-сканером.
 - Обновление exe (`updater.apply` через batch-скрипт) и APK (подпись: нужны секреты `ANDROID_KEYSTORE_B64`/`ANDROID_KEYSTORE_PASS` в репозитории, иначе временный ключ).
 
@@ -90,6 +93,7 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
 - ПК: https://github.com/troublefack1-hue/-/releases/latest/download/PC-Remote.exe
 - «Мой ПК»: https://github.com/troublefack1-hue/-/releases/latest/download/pcremote.apk
 - «Интернет через ПК»: https://github.com/troublefack1-hue/-/releases/latest/download/pcremote-net.apk
+- «Проводник»: https://github.com/troublefack1-hue/-/releases/latest/download/pcremote-files.apk
 - Суммы: https://github.com/troublefack1-hue/-/releases/latest/download/SHA256SUMS
 - Репозиторий: https://github.com/troublefack1-hue/- (`git clone https://github.com/troublefack1-hue/-.git pc-remote`)
 - Claude Code: https://code.claude.com/docs/en/quickstart

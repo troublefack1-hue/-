@@ -37,6 +37,8 @@ jobs:
           java-version: "17"
       - name: Phone side of «Интернет через ПК» on the JVM (NetMux + SOCKS5 against the relay)
         run: python tests/test_netmux_jvm.py
+      - name: «Проводник» core on the JVM
+        run: python tests/test_files_jvm.py
       - name: Web client smoke test (real browser)
         run: python tests/test_web_smoke.py
       - name: Web client syntax
@@ -135,8 +137,35 @@ jobs:
           name: apk-net
           path: android/out/pcremote-net.apk
 
+  apk-files:
+    # «Проводник»: the file manager. Pure Java, no native code.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Signing key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.keystore; echo "release key"; else echo "::warning::ANDROID_KEYSTORE_B64 secret not set, using a temporary key"; fi
+      - name: Build
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          if [ -f /tmp/release.keystore ]; then KS="--keystore /tmp/release.keystore --ks-pass $KS_PASS"; else KS=""; fi
+          python3 android/build.py --sdk "$ANDROID_HOME" --project android-files --out-name pcremote-files.apk \
+            --extra-src android/src/ru/pcremote/Pairing.java --extra-src android/src/ru/pcremote/Updater.java --extra-src android/src/ru/pcremote/Pinned.java --extra-src android/src/ru/pcremote/Paths.java \
+            --version-code ${{ github.run_number }} --version-name "${{ env.VERSION }}" $KS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-files
+          path: android/out/pcremote-files.apk
+
   release:
-    needs: [test, exe, apk, apk-net]
+    needs: [test, exe, apk, apk-net, apk-files]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -147,6 +176,7 @@ jobs:
           (cd out/exe && sha256sum PC-Remote.exe) > out/SHA256SUMS
           (cd out/apk && sha256sum pcremote.apk) >> out/SHA256SUMS
           (cd out/apk-net && sha256sum pcremote-net.apk) >> out/SHA256SUMS
+          (cd out/apk-files && sha256sum pcremote-files.apk) >> out/SHA256SUMS
           cat out/SHA256SUMS
       - name: Release notes
         run: |
@@ -162,4 +192,5 @@ jobs:
             out/exe/PC-Remote.exe
             out/apk/pcremote.apk
             out/apk-net/pcremote-net.apk
+            out/apk-files/pcremote-files.apk
             out/SHA256SUMS
