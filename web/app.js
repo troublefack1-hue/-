@@ -688,6 +688,7 @@
   $("theme").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-theme]"); if (!b) return;
     prefs.theme = b.dataset.theme; savePrefs(); applyTheme(); buzz(8);
+    if (typeof terms !== "undefined") for (const t of terms.values()) { try { t.term.options.theme = termTheme(); } catch {} }
   });
   $("accent").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-accent]"); if (!b) return;
