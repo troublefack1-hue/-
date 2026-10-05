@@ -154,6 +154,12 @@ def refresh_apks(data: Path, status=None, pairing: dict | None = None) -> dict |
     version = str(rel.get("tag_name", "")).lstrip("v")
     if not version:
         return index or None
+    # apps newer than the release (built and placed here by hand, e.g. while the CI is behind) stay: a restart
+    # used to "refresh" 1.131 back to the release 1.125 and the phones never got the fix (05.10.2026 night)
+    def _num(v):
+        return tuple(int("".join(ch for ch in part if ch.isdigit()) or 0) for part in str(v).split("."))
+    if index.get("version") and _num(index["version"]) > _num(version) and all((folder / n).exists() for n in index.get("files", {})):
+        return index
     assets = {a.get("name"): a.get("browser_download_url") for a in rel.get("assets", [])}
     sums_url = assets.get("SHA256SUMS")
     key, cert = apksign.ensure_key(data)
