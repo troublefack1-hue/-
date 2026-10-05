@@ -72,7 +72,8 @@ public class MainActivity extends Activity {
         }
         syncUpdaterPc();
         if (!handlePairLink(getIntent())) {
-            if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); } else showSetup(null);
+            if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); }
+            else { showSetup(null); autoPairFromApk(); }
         }
         checkUpdate();
     }
@@ -100,6 +101,24 @@ public class MainActivity extends Activity {
     }
 
     /** Pair in the background; on success the remote screen opens, on failure the setup card shows the error. */
+    /** The PC puts its address, certificate and permanent code into the apps it hands out (assets/pairing.json):
+     *  a fresh install — also after the app was removed — pairs by itself, nothing to type. */
+    static org.json.JSONObject apkPairing(android.content.Context ctx) {
+        try (java.io.InputStream in = ctx.getAssets().open("pairing.json")) {
+            java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream(); byte[] buf = new byte[4096]; int n;
+            while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+            org.json.JSONObject o = new org.json.JSONObject(b.toString("UTF-8"));
+            return o.optString("host").isEmpty() || o.optString("code").isEmpty() ? null : o;
+        } catch (Exception e) {   // an app from the release, not from a PC: no pairing inside
+            return null;
+        }
+    }
+
+    private void autoPairFromApk() {
+        org.json.JSONObject p = apkPairing(this);
+        if (p != null) pairWith(p.optString("host"), p.optInt("port", 8443), p.optString("code"), p.optString("fp"), p.optString("lan"), null, null);
+    }
+
     private void pairWith(final String h, final int port, final String c, final String fpExpected, final String lan, final Button btn, final TextView err) {
         final String hostport = h + ":" + port;
         if (btn != null) btn.setEnabled(false);
@@ -241,10 +260,13 @@ public class MainActivity extends Activity {
         card.addView(sub);
 
         card.addView(text("Адрес ПК", 13, MUTED));
-        final EditText host = input(prefs.getString("hostport", ""), "IP:порт, например 93.100.1.2:8443", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        final org.json.JSONObject inApk = apkPairing(this);   // filled in for the owner: nothing to type
+        String hostDefault = prefs.getString("hostport", "");
+        if (hostDefault.isEmpty() && inApk != null) hostDefault = inApk.optString("host") + ":" + inApk.optInt("port", 8443);
+        final EditText host = input(hostDefault, "IP:порт, например 93.100.1.2:8443", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         card.addView(host);
         card.addView(text("Код привязки", 13, MUTED));
-        final EditText code = input("", "код из окна PC Remote (или наведите камеру на QR)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        final EditText code = input(inApk != null ? inApk.optString("code") : "", "код из окна PC Remote (или наведите камеру на QR)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         card.addView(code);
 
         final TextView err = text(error == null ? "" : error, 14, 0xFFEF5350); err.setPadding(0, dp(6), 0, dp(6));

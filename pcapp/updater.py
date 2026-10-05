@@ -109,6 +109,13 @@ def apply(new_exe: Path, version: str = "") -> bool:
         "set /a N+=1\r\nif %N% lss 20 (\"%S%\\PING.EXE\" -n 2 127.0.0.1 >nul & goto copy)\r\n"
         f":copied\r\ndel \"{new}\" 2>nul\r\n"
         f"start \"\" \"{cur}\" --minimized --updated={version}\r\n"
+        # make sure it really came up (05.10.2026 the swap worked but the new copy was gone): up to 3 more starts
+        "set R=0\r\n"
+        f":check\r\n\"%S%\\PING.EXE\" -n 6 127.0.0.1 >nul\r\n"
+        f"\"%S%\\tasklist.exe\" /FI \"IMAGENAME eq {me.name}\" /NH | \"%S%\\find.exe\" /I \"{me.name}\" >nul && goto done\r\n"
+        "set /a R+=1\r\n"
+        f"if %R% lss 4 (start \"\" \"{cur}\" --minimized --updated={version} & goto check)\r\n"
+        ":done\r\n"
         "del \"%~f0\"\r\n").encode("ascii", "replace"))
     subprocess.Popen(["cmd", "/c", _short(script)], creationflags=0x08000000 | 0x00000200)  # NO_WINDOW, NEW_PROCESS_GROUP
     return True
@@ -125,7 +132,7 @@ def _short(path) -> str:
 APK_NAMES = ["pcremote.apk", "pcremote-net.apk", "pcremote-files.apk"]
 
 
-def refresh_apks(data: Path, status=None) -> dict | None:
+def refresh_apks(data: Path, status=None, pairing: dict | None = None) -> dict | None:
     """Fetch the release's phone apps, check their sums, re-sign them with this PC's key (apksign.py)
     and keep them in data/apk for the phones to update from. Returns the index, None if nothing to do."""
     import json
@@ -151,8 +158,13 @@ def refresh_apks(data: Path, status=None) -> dict | None:
     sums_url = assets.get("SHA256SUMS")
     key, cert = apksign.ensure_key(data)
     fp = apksign.cert_sha256(cert)
-    if index.get("version") == version and index.get("cert") == fp and all((folder / n).exists() for n in index.get("files", {})):
+    # the apps carry this PC's address, certificate and permanent code (assets/pairing.json): a fresh install,
+    # even after the app was removed, pairs by itself. The files are served only to paired phones (/api/apk).
+    pairing = {k: v for k, v in (pairing or {}).items() if v}
+    if (index.get("version") == version and index.get("cert") == fp and index.get("pairing", {}) == pairing
+            and all((folder / n).exists() for n in index.get("files", {}))):
         return index
+    extra = {"assets/pairing.json": json.dumps(pairing, ensure_ascii=False).encode("utf-8")} if pairing.get("code") else None
     files = {}
     for name in APK_NAMES:
         url = assets.get(name)
@@ -162,14 +174,14 @@ def refresh_apks(data: Path, status=None) -> dict | None:
             status(f"приложения для телефона: {name} {version}…")
         try:
             raw = download(url, folder / (name + ".download"), expected_sha256(sums_url, name), exe=False)
-            sha = apksign.sign(raw, folder / name, key, cert)
+            sha = apksign.sign(raw, folder / name, key, cert, extra if name != "pcremote-files.apk" else None)
             raw.unlink(missing_ok=True)
             files[name] = {"sha256": sha, "size": (folder / name).stat().st_size}
         except Exception as e:  # noqa: BLE001
             log.warning("apk %s: %s", name, e)
     if not files:
         return index or None
-    index = {"version": version, "cert": fp, "files": files, "at": time.time()}
+    index = {"version": version, "cert": fp, "files": files, "at": time.time(), "pairing": pairing}
     index_path.write_text(json.dumps(index, ensure_ascii=False, indent=1), "utf-8")
     if status:
         status(f"приложения для телефона готовы: {version}, подпись этого ПК")

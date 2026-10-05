@@ -627,7 +627,7 @@ class App(tk.Tk):
         def deps_worker():
             deps.ensure(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}), want_video=self.cfg.get("video", True))
             try:   # the phone apps, re-signed with this PC's key, so the phones update from here
-                updater.refresh_apks(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}))
+                updater.refresh_apks(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}), self.apk_pairing())
             except Exception:  # noqa: BLE001
                 log.exception("apk refresh")
             try:
@@ -725,6 +725,13 @@ class App(tk.Tk):
         self.beam_t += 1
         self.after(60, self.animate_beam)
 
+    def apk_pairing(self) -> dict:
+        """What the phone apps carry inside (assets/pairing.json) to pair by themselves after a fresh install."""
+        self.qr_content()   # fills self._fp
+        lan = getattr(relay_mod, "LAN_IP", {}).get("ip") or ""
+        return {"host": self.cfg.get("public_ip") or lan, "port": self.cfg["port"], "lan": lan if lan != self.cfg.get("public_ip") else "",
+                "fp": self._fp, "code": (self.cfg.get("pair_code") or "").replace("-", "")}
+
     def qr_content(self, code: str | None = None) -> str:
         """pcremote://pair?host=…&code=…&fp=…&lan=… — what the phone app expects from a scanned QR."""
         if not self._fp:
@@ -816,6 +823,8 @@ class App(tk.Tk):
                     if self.backend.hub is not None:
                         asyncio.run_coroutine_threadsafe(self.backend.hub.nudge_phones(f"ip={ip}"), self.backend.loop)
                     self.tray.notify(f"Внешний адрес ПК изменился: {ip}. Телефон получит его сам.")
+                    # the address inside the phone apps (assets/pairing.json) must follow: re-sign them
+                    threading.Thread(target=lambda: updater.refresh_apks(DATA, None, self.apk_pairing()), daemon=True).start()
             except Exception:  # noqa: BLE001
                 log.exception("public ip watch")
             # no address yet (first start without internet): try every minute until we have one
@@ -1017,8 +1026,17 @@ def main():
         pass
     # one copy at a time: a second start just raises the first one's window via the tray
     if os.name == "nt":
-        ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\PCRemoteSingleton")
-        if ctypes.windll.kernel32.GetLastError() == 183:   # ERROR_ALREADY_EXISTS
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        mutex = k32.CreateMutexW(None, False, "Local\\PCRemoteSingleton")
+        # right after an update the old copy may still be on its way out: wait for it (20 s) instead of giving up
+        if ctypes.get_last_error() == 183 and any(a.startswith("--updated=") for a in sys.argv):
+            for _ in range(40):
+                k32.CloseHandle(mutex)
+                time.sleep(0.5)
+                mutex = k32.CreateMutexW(None, False, "Local\\PCRemoteSingleton")
+                if ctypes.get_last_error() != 183:
+                    break
+        if ctypes.get_last_error() == 183:   # ERROR_ALREADY_EXISTS
             ctypes.windll.user32.MessageBoxW(None, "PC Remote уже запущен — откройте его через значок в трее.", APP_NAME, 0x40)
             return
     cfg = load_config()

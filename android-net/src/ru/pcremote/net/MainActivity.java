@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG); getWindow().setNavigationBarColor(BG);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
-        if (prefs.contains("secret")) showMain(); else showSetup(null);
+        if (prefs.contains("secret")) showMain(); else { showSetup(null); autoPairFromApk(); }
         if (ACTION_TOGGLE.equals(getIntent().getAction()) && prefs.contains("secret")) toggle();
         checkUpdate();
     }
@@ -68,6 +68,27 @@ public class MainActivity extends Activity {
     static void refresh() { MainActivity a = live; if (a != null) a.ui.post(a::render); }
 
     // ------------------------------------------------------------ setup ---
+    /** Neither paired here nor in «Мой ПК»: pair by ourselves from what the PC put inside this app. */
+    private void autoPairFromApk() {
+        final org.json.JSONObject p;
+        try (java.io.InputStream in = getAssets().open("pairing.json")) {
+            java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream(); byte[] buf = new byte[4096]; int n;
+            while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+            p = new org.json.JSONObject(b.toString("UTF-8"));
+        } catch (Exception e) { return; }   // an app from the release: nothing inside
+        final String h = p.optString("host"), c = p.optString("code"), fp = p.optString("fp"), lan = p.optString("lan");
+        final int port = p.optInt("port", 8443);
+        if (h.isEmpty() || c.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                Pairing.Result r = Pairing.pair(h, port, c, fp, lan, PcVpnService.onWifi(this));
+                prefs.edit().putString("hostport", h + ":" + port).putString("host", h).putInt("port", port)
+                        .putString("secret", r.secret).putString("pin", r.fingerprint).putString("lan", r.lan.isEmpty() ? lan : r.lan).apply();
+                runOnUiThread(this::showMain);
+            } catch (Exception ignored) {}   // the form stays; the owner can still pair by hand
+        }).start();
+    }
+
     private void showSetup(String error) {
         LinearLayout root = column(); root.setGravity(Gravity.CENTER); int p = dp(24); root.setPadding(p, p, p, p);
         LinearLayout card = column(); card.setBackgroundColor(PANEL); card.setPadding(dp(22), dp(28), dp(22), dp(22));

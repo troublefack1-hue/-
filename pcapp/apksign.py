@@ -92,10 +92,29 @@ def _lp(b: bytes) -> bytes:
     return struct.pack("<I", len(b)) + b
 
 
-def sign(src: Path, dst: Path, key, cert) -> str:
-    """Re-sign src into dst (v2 only). Returns the SHA-256 of the written file."""
+def add_stored(contents: bytes, cd: bytes, eocd: bytes, files: dict):
+    """Append uncompressed entries after the existing ones. Nothing already in the archive moves, so the
+    4-byte alignment of resources.arsc (required since targetSdk 30) survives; a zipfile rewrite would not."""
+    import zlib
+    contents, cd, eocd = bytearray(contents), bytearray(cd), bytearray(eocd)
+    for name, body in files.items():
+        n = name.encode("utf-8")
+        crc = zlib.crc32(body) & 0xFFFFFFFF
+        off = len(contents)
+        contents += struct.pack("<IHHHHHIIIHH", 0x04034B50, 20, 0x0800, 0, 0, 0x21, crc, len(body), len(body), len(n), 0) + n + body
+        cd += struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 20, 20, 0x0800, 0, 0, 0x21, crc, len(body), len(body),
+                          len(n), 0, 0, 0, 0, 0, off) + n
+    count = struct.unpack_from("<H", eocd, 10)[0] + len(files)
+    struct.pack_into("<HHI", eocd, 8, count, count, len(cd))
+    return bytes(contents), bytes(cd), bytes(eocd)
+
+
+def sign(src: Path, dst: Path, key, cert, extra: dict | None = None) -> str:
+    """Re-sign src into dst (v2 only), optionally adding files (name -> bytes). Returns the SHA-256 of dst."""
     data = src.read_bytes()
     contents, cd, eocd = split_apk(data)
+    if extra:
+        contents, cd, eocd = add_stored(contents, cd, eocd, extra)
     # the signing block will start where the contents end; the digested EOCD points the CD there
     sig_block_offset = len(contents)
     eocd_digest = bytearray(eocd)
