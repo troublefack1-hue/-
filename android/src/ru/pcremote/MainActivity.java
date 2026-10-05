@@ -72,7 +72,7 @@ public class MainActivity extends Activity {
         }
         syncUpdaterPc();
         if (!handlePairLink(getIntent())) {
-            if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); }
+            if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); askBackgroundRights(); }
             else { showSetup(null); autoPairFromApk(); }
         }
         checkUpdate();
@@ -131,7 +131,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putString("hostport", hostport).putString("host", h).putInt("port", port)
                         .putString("secret", r.secret).putString("pin", r.fingerprint).putString("ntfy", r.ntfy).putString("wake", r.wake)
                         .putString("lan", r.lan.isEmpty() ? lan : r.lan).apply();
-                runOnUiThread(() -> { RemoteService.ensureRunning(this); startRemote(); });
+                runOnUiThread(() -> { RemoteService.ensureRunning(this); startRemote(); askBackgroundRights(); });
             } catch (Exception e) {
                 final String msg = e.getMessage() == null ? e.toString() : e.getMessage();
                 runOnUiThread(() -> {
@@ -184,6 +184,26 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
         }).start();
+    }
+
+    /** The link must live day and night: no battery limits, and on MIUI/HyperOS the autostart switch.
+     *  Android shows its own one-tap question for the battery; MIUI's autostart has no API, so we open
+     *  its screen once and the owner flips the switch for «Мой ПК». */
+    private void askBackgroundRights() {
+        try {
+            android.os.PowerManager pm = getSystemService(android.os.PowerManager.class);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName())));
+                return;   // one question at a time; autostart comes on the next launch
+            }
+        } catch (Exception ignored) {}
+        if (prefs.getBoolean("autostart_asked", false)) return;
+        prefs.edit().putBoolean("autostart_asked", true).apply();
+        Intent miui = new Intent().setComponent(new android.content.ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"));
+        try {
+            startActivity(miui);
+            Toast.makeText(this, "Включите автозапуск для «Мой ПК» — связь с ПК будет всегда", Toast.LENGTH_LONG).show();
+        } catch (Exception notMiui) { /* other phones start us after boot without a switch */ }
     }
 
     /** What's new + consent; only then download and hand over to the installer. */
