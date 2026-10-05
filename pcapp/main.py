@@ -321,14 +321,55 @@ class CastWindow(tk.Toplevel):
         self.label.configure(image=self.photo)
 
 
+class Tray:
+    """System tray icon with a menu; notifications when a phone connects. Optional (pystray)."""
+
+    def __init__(self, app):
+        self.app = app
+        self.icon = None
+        try:
+            import pystray
+        except ImportError:
+            return
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        from PIL import ImageDraw
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle((0, 0, 63, 63), 14, fill="#3b6fd8")
+        d.rounded_rectangle((11, 15, 53, 42), 4, fill=BG)
+        d.rectangle((14, 18, 50, 39), fill="#1b2a4a")
+        d.rectangle((26, 43, 38, 46), fill=BG); d.rounded_rectangle((20, 46, 44, 49), 1, fill=BG)
+        d.arc((25, 23, 39, 37), 120, 420, fill=OK, width=3); d.line((32, 23, 32, 30), fill=OK, width=3)
+        menu = pystray.Menu(
+            pystray.MenuItem("Открыть", lambda: self.app.after(0, self.app.show_window), default=True),
+            pystray.MenuItem("Найти телефон", lambda: self.app.after(0, self.app.ring)),
+            pystray.MenuItem("Привязать телефон", lambda: self.app.after(0, lambda: (self.app.show_window(), self.app.show_pair()))),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Выход", lambda: self.app.after(0, self.app.destroy)))
+        self.icon = pystray.Icon(APP_NAME, img, APP_NAME, menu)
+        threading.Thread(target=self.icon.run, daemon=True).start()
+
+    def notify(self, text):
+        if self.icon:
+            try:
+                self.icon.notify(text, APP_NAME)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def stop(self):
+        if self.icon:
+            self.icon.stop()
+
+
 class App(tk.Tk):
     def __init__(self, cfg: dict, backend: Backend, minimized: bool):
         super().__init__()
         self.cfg, self.backend = cfg, backend
+        self.tray = Tray(self)
+        self.last_phones = 0
         self.title(APP_NAME)
         self.resizable(False, False)
         self.configure(bg=BG)
-        self.protocol("WM_DELETE_WINDOW", self.iconify)  # close = hide to taskbar, keep running
+        self.protocol("WM_DELETE_WINDOW", self.hide_window)  # close = hide to tray, keep running
         st = ttk.Style(self)
         try:
             st.theme_use("clam")
@@ -439,6 +480,19 @@ class App(tk.Tk):
                 self.after(0, lambda: self.code_hint.configure(text=f"Обновление: {e}"))
         threading.Thread(target=worker, daemon=True).start()
 
+    def show_window(self):
+        self.deiconify(); self.lift(); self.focus_force()
+
+    def hide_window(self):
+        if self.tray.icon:
+            self.withdraw()
+        else:
+            self.iconify()
+
+    def destroy(self):
+        self.tray.stop()
+        super().destroy()
+
     def show_pair(self):
         try:
             code = self.backend.pair_code()
@@ -497,6 +551,9 @@ class App(tk.Tk):
             if b.cast_active:
                 txt += " · идёт трансляция с телефона"
             self.status.configure(text=txt + "  ", fg=OK if phones else WARN)
+            if phones > self.last_phones:
+                self.tray.notify("Телефон подключился")
+            self.last_phones = phones
             self.ring_btn.configure(state="normal" if phones else "disabled")
             self.cast_btn.configure(state="normal" if b.cast_active else "disabled")
         left = int(self.pair_until - time.time())
@@ -532,14 +589,16 @@ def main():
     backend = Backend(cfg)
     backend.start()
     app = App(cfg, backend, minimized=True)
+    app.withdraw()
     splash = Splash(app)
 
     def finish(tries=0):
         if backend.hub is not None or backend.error or tries > 40:
             splash.destroy()
             if "--minimized" not in sys.argv:
-                app.deiconify()
-                app.lift()
+                app.show_window()
+            elif not app.tray.icon:
+                app.iconify()
         else:
             splash.set_msg("запуск…" if tries < 10 else "создаю сертификаты…")
             app.after(150, finish, tries + 1)

@@ -37,7 +37,31 @@
   }
   const send = (obj) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); };
   function setState(text, cls, sub = "") { stateEl.textContent = text; dot.className = "dot " + cls; subEl.textContent = sub; }
-  const buzz = (ms) => navigator.vibrate?.(ms);
+  // ---- preferences: accent colour, sounds, haptics
+  const prefs = JSON.parse(localStorage.getItem("pcr_prefs") || "{}");
+  const savePrefs = () => localStorage.setItem("pcr_prefs", JSON.stringify(prefs));
+  const applyAccent = () => {
+    const a = prefs.accent || "#4f8cff";
+    document.documentElement.style.setProperty("--accent", a);
+    document.documentElement.style.setProperty("--accent2", a + "cc");
+    document.querySelectorAll("#accent button").forEach((b) => b.classList.toggle("on", b.dataset.accent === a));
+  };
+  applyAccent();
+  const buzz = (ms) => { if (prefs.haptic !== false) navigator.vibrate?.(ms); };
+  // tiny synthesized UI sounds, no files needed
+  let sfxCtx = null;
+  function sfx(kind) {
+    if (prefs.sfx !== true) return;
+    try {
+      sfxCtx = sfxCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = sfxCtx.createOscillator(), g = sfxCtx.createGain(), t = sfxCtx.currentTime;
+      const f = { click: [900, 0.04], online: [520, 0.25], offline: [220, 0.3], ok: [700, 0.12] }[kind] || [600, 0.08];
+      o.type = "sine"; o.frequency.setValueAtTime(f[0], t);
+      if (kind === "online") o.frequency.exponentialRampToValueAtTime(f[0] * 1.5, t + f[1]);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.2, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + f[1]);
+      o.connect(g).connect(sfxCtx.destination); o.start(t); o.stop(t + f[1] + 0.02);
+    } catch {}
+  }
   const ask = (text) => new Promise((resolve) => {
     $("confirmText").textContent = text; $("confirm").hidden = false;
     const done = (v) => { $("confirm").hidden = true; resolve(v); };
@@ -78,9 +102,11 @@
         offline.hidden = pcOnline;
         if (pcOnline) {
           setState("ПК в сети", "on", pcHost);
+          if (!was) { sfx("online"); view.classList.remove("flash"); void view.offsetWidth; view.classList.add("flash"); }
           if (!was && pendingWake) { pendingWake = false; buzz([40, 60, 40]); show("ПК включился"); }
         } else if (m.t === "status") {
           setState("ПК не в сети", "off", m.pc_since ? "был в сети " + ago(m.pc_since) : "");
+          if (was) sfx("offline");
           $("wakeBtn").classList.remove("busy"); clearCanvas();
         }
       } else if (m.t === "hello") {
@@ -88,7 +114,8 @@
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
       } else if (m.t === "cmd_result") {
-        show(m.result === "ok" ? "Команда отправлена на ПК" : "Ошибка: " + m.result);
+        show(m.result === "ok" ? (m.cmd === "open_url" ? "Ссылка открыта на ПК" : "Команда отправлена на ПК") : "Ошибка: " + m.result);
+        sfx(m.result === "ok" ? "ok" : "offline");
       } else if (m.t === "audio" && m.on === false) {
         audioOn = false; $("audioBtn").classList.remove("active"); if (m.error) show("Звук недоступен: " + m.error, 4000);
       }
@@ -317,7 +344,7 @@
     else if (t0 && !moved && longTimer) {
       clearTimeout(longTimer); longTimer = null;
       const now = Date.now(), dbl = now - lastTap < 350; lastTap = dbl ? 0 : now;
-      send({ t: "click", b: "left", n: dbl ? 2 : 1, ...cur }); buzz(8);
+      send({ t: "click", b: "left", n: dbl ? 2 : 1, ...cur }); buzz(8); sfx("click");
       const t = e.changedTouches[0]; if (t) ripple(t.clientX, t.clientY, false);
     }
     t0 = null;
@@ -379,6 +406,43 @@
   }
   setProfile(profile);
   $("fsBtn").onclick = () => { document.documentElement.requestFullscreen?.(); menu.hidden = true; };
+
+  // ---- perks: accent, sounds, haptics, screenshot, paste, link, hints, clock
+  $("accent").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-accent]"); if (!b) return;
+    prefs.accent = b.dataset.accent; savePrefs(); applyAccent(); buzz(8);
+  });
+  $("sfx").checked = prefs.sfx === true; $("haptic").checked = prefs.haptic !== false;
+  $("sfx").onchange = () => { prefs.sfx = $("sfx").checked; savePrefs(); sfx("ok"); };
+  $("haptic").onchange = () => { prefs.haptic = $("haptic").checked; savePrefs(); buzz(20); };
+
+  $("shotBtn").onclick = () => {
+    menu.hidden = true;
+    if (!frameW) { show("Нет кадра"); return; }
+    const a = document.createElement("a");
+    a.download = `pc-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.png`;
+    a.href = canvas.toDataURL("image/png"); a.click(); show("Снимок сохранён"); sfx("ok");
+  };
+  function textDialog(title, placeholder, onOk) {
+    $("textDlgTitle").textContent = title; $("textDlgInput").placeholder = placeholder; $("textDlgInput").value = "";
+    $("textDlg").hidden = false; menu.hidden = true; setTimeout(() => $("textDlgInput").focus(), 50);
+    $("textDlgNo").onclick = () => ($("textDlg").hidden = true);
+    $("textDlgYes").onclick = () => { const v = $("textDlgInput").value; $("textDlg").hidden = true; if (v.trim()) onOk(v); };
+  }
+  $("pasteBtn").onclick = () => textDialog("Вставить текст на ПК", "Текст появится на ПК там, где курсор",
+    (v) => { if (!pcOnline) return show("ПК не в сети"); send({ t: "clip", s: v }); show("Отправлено на ПК"); });
+  $("linkBtn").onclick = () => textDialog("Открыть ссылку на ПК", "https://…",
+    (v) => { if (!pcOnline) return show("ПК не в сети"); send({ t: "open_url", url: v.trim() }); });
+  $("hintsBtn").onclick = () => { menu.hidden = true; $("hints").hidden = false; };
+  $("hintsOk").onclick = () => { $("hints").hidden = true; prefs.hintsSeen = true; savePrefs(); };
+  if (!prefs.hintsSeen) setTimeout(() => { if (!app.hidden) $("hints").hidden = false; }, 2600);
+
+  setInterval(() => {
+    if (offline.hidden) return;
+    const d = new Date();
+    $("clock").innerHTML = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) +
+      `<small>${d.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" })}</small>`;
+  }, 1000);
 
   // ---- phone screen -> PC (only inside the Android app, via the JS bridge)
   const bridge = window.PcRemoteApp;

@@ -6,11 +6,11 @@ $root = Split-Path -Parent $here
 Set-Location $here
 
 if (-not (Test-Path "$here\venv")) { python -m venv "$here\venv" }
-& "$here\venv\Scripts\pip.exe" install -q -r "$root\agent\requirements.txt" -r "$root\relay\requirements.txt" cryptography pyinstaller
+& "$here\venv\Scripts\pip.exe" install -q -r "$root\agent\requirements.txt" -r "$root\relay\requirements.txt" cryptography pystray pyinstaller
 
 & "$here\venv\Scripts\pyinstaller.exe" --noconfirm --clean --onefile --windowed --name "PC Remote" `
     --add-data "$root\relay;relay" --add-data "$root\agent;agent" --add-data "$root\web;web" `
-    --hidden-import mss.windows --hidden-import PIL._tkinter_finder `
+    --hidden-import mss.windows --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 `
     "$here\main.py"
 
 Write-Host "Done: $here\dist\PC Remote.exe" -ForegroundColor Green

@@ -186,6 +186,36 @@ class Input:
 
 # ------------------------------------------------------------- commands ---
 
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+CF_UNICODETEXT, GMEM_MOVEABLE = 13, 0x0002
+
+
+def set_clipboard(text: str) -> bool:
+    """Put text on the Windows clipboard (for 'paste from phone')."""
+    text = text[:100_000]
+    data = text.encode("utf-16-le") + b"\x00\x00"
+    if not user32.OpenClipboard(None):
+        return False
+    try:
+        user32.EmptyClipboard()
+        h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+        p = kernel32.GlobalLock(h)
+        ctypes.memmove(p, data, len(data))
+        kernel32.GlobalUnlock(h)
+        user32.SetClipboardData(CF_UNICODETEXT, h)
+        return True
+    finally:
+        user32.CloseClipboard()
+
+
+def open_url(url: str) -> str:
+    """Open a web link on the PC in the default browser. http(s) only."""
+    url = url.strip()[:2000]
+    if not (url.startswith("http://") or url.startswith("https://")) or any(c in url for c in " \r\n\"'"):
+        return "only http(s) links"
+    os.startfile(url)  # noqa: S606 - validated scheme
+    return "ok"
+
 def run_command(name: str) -> str:
     cmds = {
         "reboot": ["shutdown", "/r", "/t", "3", "/f"],
@@ -450,6 +480,12 @@ class Agent:
                     self.input.key(str(ev["k"]), bool(ev["down"]))
                 elif t == "text":
                     self.input.text(str(ev["s"]))
+                elif t == "clip":  # long text from the phone: clipboard + Ctrl+V
+                    if set_clipboard(str(ev["s"])):
+                        self.input.combo(["Control", "v"])
+                elif t == "open_url":
+                    res = open_url(str(ev.get("url", "")))
+                    await ws.send_str(json.dumps({"t": "cmd_result", "cmd": "open_url", "result": res}))
                 elif t == "combo":
                     self.input.combo([str(k) for k in ev["keys"]])
                 elif t == "cmd":

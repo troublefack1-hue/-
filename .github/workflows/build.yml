@@ -25,10 +25,10 @@ jobs:
         run: Set-Content -Path VERSION -Value "${{ env.VERSION }}" -NoNewline
       - name: Build
         run: |
-          pip install -r agent/requirements.txt -r relay/requirements.txt cryptography pyinstaller
+          pip install -r agent/requirements.txt -r relay/requirements.txt cryptography pystray pyinstaller
           pyinstaller --noconfirm --clean --onefile --windowed --name "PC Remote" `
             --add-data "relay;relay" --add-data "agent;agent" --add-data "web;web" --add-data "VERSION;." `
-            --hidden-import mss.windows --hidden-import PIL._tkinter_finder `
+            --hidden-import mss.windows --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 `
             pcapp/main.py
           Rename-Item "dist/PC Remote.exe" "PC-Remote.exe"
       - uses: actions/upload-artifact@v4

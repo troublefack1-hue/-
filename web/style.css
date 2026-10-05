@@ -199,3 +199,19 @@ button.icon:active { transform: scale(.9); }
 @keyframes toastIn { from { transform: translate(-50%, 16px); opacity: 0; } }
 #kbPanel { animation: up .18s ease-out; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* ===================== perks ===================== */
+.grid.tools button i { font-size: 22px; }
+#accent button { width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--sw); border: 3px solid transparent; }
+#accent button.on { border-color: #fff; box-shadow: 0 0 0 2px var(--sw); }
+#clock { position: absolute; top: 18vh; left: 0; right: 0; text-align: center; font-size: 56px; font-weight: 700;
+  letter-spacing: .04em; color: var(--text); opacity: .9; z-index: 1; font-variant-numeric: tabular-nums; }
+#clock small { display: block; font-size: 15px; font-weight: 400; color: var(--muted); letter-spacing: 0; margin-top: 2px; }
+textarea { width: 100%; font: inherit; padding: 10px; border-radius: var(--r); border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); resize: vertical; margin-bottom: 12px; outline: none; }
+textarea:focus { border-color: var(--accent); }
+.box.hints ul { margin: 0 0 14px; padding-left: 18px; line-height: 1.7; font-size: 15px; }
+.box.hints p { font-weight: 700; }
+#view.flash::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle, rgba(56,208,112,.35), transparent 70%);
+  animation: flash .9s ease-out forwards; pointer-events: none; z-index: 4; }
+@keyframes flash { from { opacity: 1; } to { opacity: 0; } }

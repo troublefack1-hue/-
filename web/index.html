@@ -81,6 +81,7 @@
 
     <div id="offline" class="center" hidden>
       <div class="bg"><i></i><i></i><i></i></div>
+      <div id="clock"></div>
       <button id="wakeBtn" class="power" title="Включить ПК"><span class="ring"></span>
         <svg viewBox="0 0 24 24"><path d="M12 3v9m5.66-5.66a8 8 0 1 1-11.32 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
       </button>
@@ -155,6 +156,12 @@
       <button data-profile="normal" class="on">Обычное</button>
       <button data-profile="hq">Макс.</button>
     </div>
+    <div class="grid tools">
+      <button id="shotBtn"><i>📷</i>Снимок</button>
+      <button id="pasteBtn"><i>📋</i>Вставить текст</button>
+      <button id="linkBtn"><i>🔗</i>Открыть ссылку</button>
+      <button id="hintsBtn"><i>👆</i>Жесты</button>
+    </div>
     <div id="castBox" hidden>
       <button id="castBtn" class="row accent">📱 Транслировать экран телефона на ПК</button>
       <label class="row switch" id="muteRow" hidden><span>Заглушить телефон на время трансляции</span><input type="checkbox" id="phoneMute"><i></i></label>
@@ -162,8 +169,46 @@
     <label class="row switch"><span>Режим тачпада</span><input type="checkbox" id="trackpad"><i></i></label>
     <button id="zoomReset" class="row">Сбросить масштаб</button>
     <button id="fsBtn" class="row">На весь экран</button>
+    <div class="seg" id="accent">
+      <span class="lbl">Цвет</span>
+      <button data-accent="#4f8cff" style="--sw:#4f8cff"></button>
+      <button data-accent="#38d070" style="--sw:#38d070"></button>
+      <button data-accent="#a06bff" style="--sw:#a06bff"></button>
+      <button data-accent="#ff8a3d" style="--sw:#ff8a3d"></button>
+      <button data-accent="#ff4f8b" style="--sw:#ff4f8b"></button>
+    </div>
+    <label class="row switch"><span>Звуки</span><input type="checkbox" id="sfx"><i></i></label>
+    <label class="row switch"><span>Вибрация</span><input type="checkbox" id="haptic"><i></i></label>
     <button id="logoutBtn" class="row muted">Сменить секрет</button>
     <div id="stats" class="stats"></div>
+  </div>
+
+  <!-- paste / link dialog -->
+  <div id="textDlg" class="modal" hidden>
+    <div class="box">
+      <p id="textDlgTitle">Вставить текст на ПК</p>
+      <textarea id="textDlgInput" rows="5" placeholder="Текст появится на ПК там, где курсор"></textarea>
+      <div class="actions">
+        <button id="textDlgNo" class="btn">Отмена</button>
+        <button id="textDlgYes" class="btn primary">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- gesture hints (first run) -->
+  <div id="hints" class="modal" hidden>
+    <div class="box hints">
+      <p>Как управлять</p>
+      <ul>
+        <li><b>Касание</b> — клик, <b>двойное</b> — двойной клик</li>
+        <li><b>Долгое нажатие</b> — правая кнопка</li>
+        <li><b>Ведёте пальцем</b> — перетаскивание</li>
+        <li><b>Два пальца вверх/вниз</b> — прокрутка</li>
+        <li><b>Щипок</b> — масштаб, два пальца — сдвиг</li>
+        <li><b>⌨</b> — клавиатура и быстрые кнопки, <b>☰</b> — меню</li>
+      </ul>
+      <div class="actions"><button id="hintsOk" class="btn primary">Понятно</button></div>
+    </div>
   </div>
 
   <!-- confirm dialog -->
