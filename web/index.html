@@ -72,9 +72,11 @@
     </button>
   </header>
 
+  <div id="pill"><i></i><span id="pillText"></span></div>
   <main id="view">
     <canvas id="screen"></canvas>
     <div id="ripples"></div>
+    <canvas id="confetti"></canvas>
     <div id="cursor" hidden></div>
     <div id="zoomBadge" hidden></div>
     <div id="ecoBadge" hidden>эконом</div>
@@ -82,11 +84,21 @@
     <div id="offline" class="center" hidden>
       <div class="bg"><i></i><i></i><i></i></div>
       <div id="clock"></div>
+      <svg class="pc-art" id="pcArt" viewBox="0 0 220 150">
+        <defs><clipPath id="scrClip"><rect x="22" y="14" width="176" height="100" rx="4"/></clipPath></defs>
+        <rect x="14" y="6" width="192" height="116" rx="10" fill="#0a0d16" stroke="#2a2f3d" stroke-width="2"/>
+        <rect class="screen-fill" x="22" y="14" width="176" height="100" rx="4"/>
+        <g clip-path="url(#scrClip)"><rect class="scan" x="22" y="14" width="176" height="18" fill="url(#scanGrad)"/></g>
+        <defs><linearGradient id="scanGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#8ab4ff" stop-opacity=".45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
+        <rect x="96" y="122" width="28" height="10" fill="#0a0d16"/><rect x="70" y="132" width="80" height="8" rx="4" fill="#0a0d16" stroke="#2a2f3d" stroke-width="2"/>
+        <circle cx="110" cy="118" r="2" fill="#38d070" id="pcLed"/>
+      </svg>
       <button id="wakeBtn" class="power" title="Включить ПК"><span class="ring"></span>
         <svg viewBox="0 0 24 24"><path d="M12 3v9m5.66-5.66a8 8 0 1 1-11.32 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
       </button>
       <h2>ПК не в сети</h2>
       <p id="wakeMsg" class="muted">Нажмите, чтобы включить</p>
+      <p id="wakeTimer" hidden></p>
     </div>
 
     <div id="connecting" class="center" hidden>
@@ -169,6 +181,14 @@
     <label class="row switch"><span>Режим тачпада</span><input type="checkbox" id="trackpad"><i></i></label>
     <button id="zoomReset" class="row">Сбросить масштаб</button>
     <button id="fsBtn" class="row">На весь экран</button>
+    <div class="seg" id="theme">
+      <span class="lbl">Тема</span>
+      <button data-theme="midnight" class="on">Полночь</button>
+      <button data-theme="aurora">Аврора</button>
+      <button data-theme="sunset">Закат</button>
+      <button data-theme="oled">OLED</button>
+      <button data-theme="light">Светлая</button>
+    </div>
     <div class="seg" id="accent">
       <span class="lbl">Цвет</span>
       <button data-accent="#4f8cff" style="--sw:#4f8cff"></button>
@@ -180,7 +200,7 @@
     <label class="row switch"><span>Звуки</span><input type="checkbox" id="sfx"><i></i></label>
     <label class="row switch"><span>Вибрация</span><input type="checkbox" id="haptic"><i></i></label>
     <button id="logoutBtn" class="row muted">Сменить секрет</button>
-    <div id="stats" class="stats"></div>
+    <div class="stats"><span id="stats"></span><canvas id="spark" width="220" height="52"></canvas></div>
   </div>
 
   <!-- paste / link dialog -->

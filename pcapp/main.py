@@ -181,6 +181,7 @@ class Backend:
         self.error = ""
         self.paired_ip = ""
         self.phones = 0
+        self.phone_names: list = []
         self.cast_frames: queue.Queue = queue.Queue(maxsize=3)  # phone screen -> GUI
         self.cast_active = False
         self.audio_out = AudioOut()
@@ -208,7 +209,7 @@ class Backend:
         app = relay_mod.make_app(relay_cfg)
         self.hub = app["hub"]
         self.hub.on_paired = lambda ip: setattr(self, "paired_ip", ip)
-        self.hub.on_phones = lambda n: setattr(self, "phones", n)
+        self.hub.on_phones = lambda n, names: (setattr(self, "phones", n), setattr(self, "phone_names", names))
         self.hub.on_cast = self._on_cast
         agent_cfg = {"relay_url": "http://127.0.0.1:8787", "secret": self.cfg["secret"],
                      "max_width": self.cfg["max_width"], "quality": self.cfg["quality"],
@@ -248,6 +249,7 @@ class Backend:
 # -------------------------------------------------------------------- GUI ---
 
 BG, PANEL, TEXT, MUTED, ACCENT, OK, WARN, BAD = "#0f1117", "#181b24", "#eef0f5", "#8e94a6", "#4f8cff", "#38d070", "#f5b84a", "#ef5350"
+BORDER = "#2a2f3d"
 
 
 def draw_logo(c: tk.Canvas, x: int, y: int, size: int, tag="logo"):
@@ -390,9 +392,17 @@ class App(tk.Tk):
         pad = {"padx": 14, "pady": 4}
         hdr = tk.Canvas(self, width=440, height=64, bg=BG, highlightthickness=0)
         hdr.grid(row=0, column=0, sticky="we")
+        self.hdr = hdr
         draw_logo(hdr, 14, 10, 44)
         hdr.create_text(72, 24, text=APP_NAME, fill=TEXT, anchor="w", font=("Segoe UI", 16, "bold"))
         hdr.create_text(72, 46, text="домашний компьютер в кармане", fill=MUTED, anchor="w", font=("Segoe UI", 9))
+        # phone icon on the right; a beam of dots flows PC -> phone while a phone is connected
+        hdr.create_rectangle(398, 14, 422, 54, fill=PANEL, outline=BORDER, width=2)
+        hdr.create_rectangle(402, 20, 418, 46, fill="#1b2a4a", outline="", tags="phone_scr")
+        hdr.create_oval(408, 48, 412, 52, fill=BORDER, outline="")
+        self.beam = [hdr.create_oval(0, 0, 0, 0, fill=ACCENT, outline="", state="hidden") for _ in range(5)]
+        self.beam_t = 0
+        self.after(60, self.animate_beam)
         f = ttk.Frame(self, padding=(12, 0, 12, 12))
         f.grid(row=1, column=0, sticky="we")
 
@@ -480,6 +490,32 @@ class App(tk.Tk):
                 self.after(0, lambda: self.code_hint.configure(text=f"Обновление: {e}"))
         threading.Thread(target=worker, daemon=True).start()
 
+    def animate_beam(self):
+        """Dots travelling from the PC logo (x≈300) to the phone (x≈398) in the header."""
+        on = self.backend.phones > 0
+        self.hdr.itemconfigure("phone_scr", fill="#2b5fd0" if on else "#1b2a4a")
+        for i, d in enumerate(self.beam):
+            if not on:
+                self.hdr.itemconfigure(d, state="hidden")
+                continue
+            f = ((self.beam_t + i * 12) % 60) / 60
+            x = 300 + f * 92
+            r = 2 + 2 * (1 - abs(f - .5) * 2)
+            self.hdr.coords(d, x - r, 34 - r, x + r, 34 + r)
+            self.hdr.itemconfigure(d, state="normal")
+        self.beam_t += 1
+        self.after(60, self.animate_beam)
+
+    def roll_code(self, code: str, step=0):
+        """Slot-machine style reveal of the pairing code."""
+        import random
+        if step < 12:
+            shown = "".join(c if i < step // 2 else str(random.randrange(10)) for i, c in enumerate(code))
+            self.code.configure(text=f"{shown[:3]} {shown[3:]}", fg=MUTED)
+            self.after(50, self.roll_code, code, step + 1)
+        else:
+            self.code.configure(text=f"{code[:3]} {code[3:]}", fg=ACCENT)
+
     def show_window(self):
         self.deiconify(); self.lift(); self.focus_force()
 
@@ -500,7 +536,7 @@ class App(tk.Tk):
             self.code_hint.configure(text=f"Ошибка: {e}")
             return
         self.pair_until = time.time() + 300
-        self.code.configure(text=f"{code[:3]} {code[3:]}")
+        self.roll_code(code)
         self.backend.paired_ip = ""
 
     def ring(self):
@@ -547,7 +583,8 @@ class App(tk.Tk):
             self.status.configure(text="  запуск…  ", fg=MUTED)
         else:
             phones = b.phones
-            txt = f"  ● {'телефонов на связи: %d' % phones if phones else 'ожидает телефон'} · https://{self.cfg['public_ip']}:{self.cfg['port']}"
+            who = ", ".join(b.phone_names) if b.phone_names else ("телефонов на связи: %d" % phones if phones else "ожидает телефон")
+            txt = f"  ● {who} · https://{self.cfg['public_ip']}:{self.cfg['port']}"
             if b.cast_active:
                 txt += " · идёт трансляция с телефона"
             self.status.configure(text=txt + "  ", fg=OK if phones else WARN)

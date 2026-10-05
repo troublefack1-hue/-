@@ -127,7 +127,8 @@ class Hub:
         self.pair_until: float = 0
         self.on_paired = None  # callback(remote_ip) for the PC app's UI
         self.on_cast = None    # callback(kind, data): phone screen (0x03 jpeg) / sound (0x04 pcm) -> PC app; (0, None) = stopped
-        self.on_phones = None  # callback(count) for the PC app's UI
+        self.on_phones = None  # callback(count, names) for the PC app's UI
+        self.phone_names: dict = {}
 
     # --- auth -----------------------------------------------------------
     def token_ok(self, token: str) -> bool:
@@ -212,6 +213,11 @@ class Hub:
             except Exception:  # noqa: BLE001
                 pass
 
+    def phones_changed(self):
+        if self.on_phones:
+            names = [self.phone_names.get(w, "") for w in self.phones]
+            self.on_phones(len(self.phones), [n for n in names if n])
+
     async def tell_pc_viewers(self):
         await self.send_pc(json.dumps({"t": "viewers", "n": len(self.phones)}))
 
@@ -259,8 +265,7 @@ class Hub:
             return ws
         self.phones.add(ws)
         log.info("phone connected from %s (%d)", ip, len(self.phones))
-        if self.on_phones:
-            self.on_phones(len(self.phones))
+        self.phones_changed()
         await ws.send_str(json.dumps(self.status()))
         await self.tell_pc_viewers()
         if self.last_frame:
@@ -279,6 +284,13 @@ class Hub:
                     continue
                 if len(msg.data) > MAX_EVENT:
                     break
+                if msg.data.startswith('{"t":"hello_phone"'):
+                    try:
+                        self.phone_names[ws] = str(json.loads(msg.data).get("model", ""))[:40]
+                    except ValueError:
+                        pass
+                    self.phones_changed()
+                    continue
                 if msg.data.startswith('{"t":"cast_stop"'):
                     casting = False
                     if self.on_cast:
@@ -290,10 +302,10 @@ class Hub:
                 await self.send_pc(msg.data)  # everything else goes to the agent
         finally:
             self.phones.discard(ws)
+            self.phone_names.pop(ws, None)
             if casting and self.on_cast:
                 self.on_cast(0, None)
-            if self.on_phones:
-                self.on_phones(len(self.phones))
+            self.phones_changed()
             await self.tell_pc_viewers()
             log.info("phone disconnected (%d left)", len(self.phones))
         return ws

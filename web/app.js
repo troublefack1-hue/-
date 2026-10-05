@@ -47,6 +47,63 @@
     document.querySelectorAll("#accent button").forEach((b) => b.classList.toggle("on", b.dataset.accent === a));
   };
   applyAccent();
+  const applyTheme = () => {
+    const t = prefs.theme || "midnight";
+    document.documentElement.dataset.theme = t;
+    document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0f1117";
+    document.querySelectorAll("#theme button").forEach((b) => b.classList.toggle("on", b.dataset.theme === t));
+  };
+  applyTheme();
+  // background parallax from device tilt (or finger position as a fallback)
+  function tilt(x, y) {
+    document.querySelectorAll(".bg").forEach((bg) => { bg.style.setProperty("--tx", (x * 18) + "px"); bg.style.setProperty("--ty", (y * 18) + "px"); });
+  }
+  window.addEventListener("deviceorientation", (e) => {
+    if (e.gamma == null) return;
+    tilt(Math.max(-1, Math.min(1, e.gamma / 30)), Math.max(-1, Math.min(1, (e.beta - 45) / 30)));
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!e.target.closest(".screen, .center, #splash")) return;
+    const t = e.touches[0]; tilt((t.clientX / innerWidth - .5) * 2, (t.clientY / innerHeight - .5) * 2);
+  }, { passive: true });
+
+  // event pill under the top bar
+  let pillTimer = null;
+  function pill(text, warn = false, ms = 2600) {
+    $("pillText").textContent = text; $("pill").classList.toggle("warn", warn); $("pill").classList.add("show");
+    clearTimeout(pillTimer); pillTimer = setTimeout(() => $("pill").classList.remove("show"), ms);
+  }
+  // confetti burst (PC came online)
+  function confetti() {
+    const c = $("confetti"), cx = c.getContext("2d");
+    c.width = view.clientWidth; c.height = view.clientHeight;
+    const cols = [getComputedStyle(document.documentElement).getPropertyValue("--accent").trim(), "#38d070", "#f5b84a", "#ff4f8b", "#fff"];
+    const ps = Array.from({ length: 90 }, () => ({ x: c.width / 2, y: c.height * .45, vx: (Math.random() - .5) * 14, vy: -Math.random() * 12 - 4,
+      s: 4 + Math.random() * 5, r: Math.random() * 6.28, vr: (Math.random() - .5) * .3, col: cols[(Math.random() * cols.length) | 0] }));
+    let t0 = performance.now();
+    (function frame(now) {
+      const dt = Math.min(32, now - t0) / 16; t0 = now;
+      cx.clearRect(0, 0, c.width, c.height);
+      let alive = 0;
+      for (const p of ps) {
+        p.vy += .35 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.r += p.vr * dt; p.vx *= .99;
+        if (p.y < c.height + 20) alive++;
+        cx.save(); cx.translate(p.x, p.y); cx.rotate(p.r); cx.fillStyle = p.col; cx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); cx.restore();
+      }
+      if (alive) requestAnimationFrame(frame); else cx.clearRect(0, 0, c.width, c.height);
+    })(t0);
+  }
+  // latency sparkline in the menu
+  const latHist = [];
+  function drawSpark() {
+    const c = $("spark"), cx = c.getContext("2d"); cx.clearRect(0, 0, c.width, c.height);
+    if (latHist.length < 2) return;
+    const max = Math.max(100, ...latHist), w = c.width, h = c.height;
+    cx.beginPath();
+    latHist.forEach((v, i) => { const x = (i / (latHist.length - 1)) * w, y = h - 4 - (v / max) * (h - 8); i ? cx.lineTo(x, y) : cx.moveTo(x, y); });
+    cx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim(); cx.lineWidth = 2; cx.stroke();
+    cx.lineTo(w, h); cx.lineTo(0, h); cx.closePath(); cx.fillStyle = cx.strokeStyle; cx.globalAlpha = .15; cx.fill(); cx.globalAlpha = 1;
+  }
   const buzz = (ms) => { if (prefs.haptic !== false) navigator.vibrate?.(ms); };
   // tiny synthesized UI sounds, no files needed
   let sfxCtx = null;
@@ -97,20 +154,25 @@
         if (audioOn) send({ t: "audio", on: true });
       }
       if (m.t === "status" || m.t === "pong") {
-        if (m.t === "pong") latency = Date.now() - pingSentAt;
+        if (m.t === "pong") { latency = Date.now() - pingSentAt; latHist.push(latency); if (latHist.length > 40) latHist.shift(); drawSpark(); }
         const was = pcOnline; pcOnline = !!m.pc_online;
         offline.hidden = pcOnline;
         if (pcOnline) {
           setState("ПК в сети", "on", pcHost);
-          if (!was) { sfx("online"); view.classList.remove("flash"); void view.offsetWidth; view.classList.add("flash"); }
-          if (!was && pendingWake) { pendingWake = false; buzz([40, 60, 40]); show("ПК включился"); }
+          if (!was) {
+            sfx("online"); view.classList.remove("flash"); void view.offsetWidth; view.classList.add("flash");
+            $("pcArt").classList.remove("booting"); $("pcArt").classList.add("on"); pill("ПК в сети");
+            if (pendingWake) { pendingWake = false; buzz([40, 60, 40]); confetti(); stopWakeTimer(); }
+          }
         } else if (m.t === "status") {
           setState("ПК не в сети", "off", m.pc_since ? "был в сети " + ago(m.pc_since) : "");
-          if (was) sfx("offline");
-          $("wakeBtn").classList.remove("busy"); clearCanvas();
+          if (was) { sfx("offline"); pill("ПК отключился", true); }
+          if (!pendingWake) { $("wakeBtn").classList.remove("busy"); $("pcArt").classList.remove("on", "booting"); }
+          clearCanvas();
         }
       } else if (m.t === "hello") {
         pcHost = `${m.host || "ПК"} · ${m.w}×${m.h}`; pcAudio = !!m.audio;
+        pill(`${m.host || "ПК"} · ${m.w}×${m.h}`);
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
       } else if (m.t === "cmd_result") {
@@ -329,6 +391,8 @@
     } else {
       if (!dragging) { dragging = true; send({ t: "btn", b: "left", down: true }); }
       cur = toPC(t.clientX, t.clientY);
+      const d = document.createElement("div"); d.className = "trail"; const b = view.getBoundingClientRect();
+      d.style.left = (t.clientX - b.left) + "px"; d.style.top = (t.clientY - b.top) + "px"; ripples.appendChild(d); setTimeout(() => d.remove(), 500);
     }
     send({ t: "move", ...cur });
     pts.set(t.identifier, { x: t.clientX, y: t.clientY });
@@ -408,6 +472,10 @@
   $("fsBtn").onclick = () => { document.documentElement.requestFullscreen?.(); menu.hidden = true; };
 
   // ---- perks: accent, sounds, haptics, screenshot, paste, link, hints, clock
+  $("theme").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-theme]"); if (!b) return;
+    prefs.theme = b.dataset.theme; savePrefs(); applyTheme(); buzz(8);
+  });
   $("accent").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-accent]"); if (!b) return;
     prefs.accent = b.dataset.accent; savePrefs(); applyAccent(); buzz(8);
@@ -460,13 +528,28 @@
     refreshCast();
   }
 
+  let wakeT0 = 0, wakeTimer = null;
+  function startWakeTimer() {
+    wakeT0 = Date.now(); $("wakeTimer").hidden = false;
+    clearInterval(wakeTimer);
+    wakeTimer = setInterval(() => {
+      const s = ((Date.now() - wakeT0) / 1000) | 0;
+      $("wakeTimer").textContent = `ищу ПК… ${(s / 60) | 0}:${String(s % 60).padStart(2, "0")}`;
+      if (s > 180) { stopWakeTimer(); pendingWake = false; $("wakeBtn").classList.remove("busy"); $("pcArt").classList.remove("booting");
+        $("wakeMsg").textContent = "ПК не ответил за 3 минуты. Попробуйте ещё раз."; }
+    }, 1000);
+  }
+  function stopWakeTimer() { clearInterval(wakeTimer); $("wakeTimer").hidden = true; }
   $("wakeBtn").onclick = async () => {
     const btn = $("wakeBtn"); btn.classList.add("busy"); buzz(20);
     $("wakeMsg").textContent = "Отправляю команду…";
     try {
       const r = await fetch("/api/wake", { method: "POST", headers: authHeaders() });
       const j = await r.json();
-      if (j.ok) { pendingWake = true; $("wakeMsg").textContent = "Команда отправлена. ПК обычно появляется через 1–2 минуты."; }
+      if (j.ok) {
+        pendingWake = true; $("wakeMsg").textContent = "Команда отправлена, ПК загружается…";
+        $("pcArt").classList.add("booting"); startWakeTimer();
+      }
       else { btn.classList.remove("busy"); $("wakeMsg").textContent = "Ошибка: " + j.error; }
     } catch (e) { btn.classList.remove("busy"); $("wakeMsg").textContent = "Ошибка: " + e; }
   };
