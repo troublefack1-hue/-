@@ -81,6 +81,10 @@ def load_config() -> dict:
 
 
 GUEST_ALLOW = {"ping", "ack", "profile", "cmd", "hello_phone", "monitor", "sys_get"}
+# agent -> phone message types a guest must NOT receive (terminal, clipboard, notifications,
+# window list, downloads). A guest sees the screen and power results, nothing private.
+GUEST_RECV_BLOCK = {"term_out", "term_exit", "term_open", "pc_clip", "pc_notify", "attention",
+                    "sys", "procs", "timers", "downloads", "dl", "powerplans", "windows"}
 
 
 LAN_IP = {"ip": None}
@@ -339,6 +343,27 @@ class Hub:
         for ws in dead:
             self.phones.discard(ws)
 
+    async def broadcast_agent_text(self, data: str):
+        """Like broadcast_phones for text, but keeps private message types away from guests."""
+        if self.guests:
+            try:
+                t = json.loads(data).get("t")
+            except (ValueError, TypeError):
+                t = None
+            if t in GUEST_RECV_BLOCK:
+                dead = []
+                for ws in self.phones:
+                    if ws in self.guests:
+                        continue
+                    try:
+                        await ws.send_str(data)
+                    except Exception:  # noqa: BLE001
+                        dead.append(ws)
+                for ws in dead:
+                    self.phones.discard(ws)
+                return
+        await self.broadcast_phones(data)
+
     async def send_pc(self, text: str):
         if self.pc is not None:
             try:
@@ -376,7 +401,7 @@ class Hub:
                         self.last_frame = msg.data
                     await self.broadcast_phones(msg.data, binary=True)
                 elif msg.type == WSMsgType.TEXT:
-                    await self.broadcast_phones(msg.data)
+                    await self.broadcast_agent_text(msg.data)
                 elif msg.type == WSMsgType.ERROR:
                     break
         finally:

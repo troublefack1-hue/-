@@ -13,3 +13,7 @@ pcapp/build/
 pcapp/dist/
 *.spec
 *.keystore
+tls.json
+files.json
+phone/
+components/

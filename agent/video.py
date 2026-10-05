@@ -121,6 +121,7 @@ class Encoder:
             pass
         try:
             self.proc.kill()
+            self.proc.wait(timeout=2)   # reap so it does not linger as a zombie
         except Exception:  # noqa: BLE001
             pass
 

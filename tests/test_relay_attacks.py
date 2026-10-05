@@ -7,7 +7,8 @@ from aiohttp import web
 import relay
 
 T = "testsecret-0123456789abcdef"
-cfg = {"secret": T, "host": "127.0.0.1", "port": 8799, "ntfy_wake_url": "", "tls_host": "0.0.0.0", "tls_port": 0,
+GUEST = "guestsecret-0123456789abcdef"
+cfg = {"secret": T, "guest_secret": GUEST, "host": "127.0.0.1", "port": 8799, "ntfy_wake_url": "", "tls_host": "0.0.0.0", "tls_port": 0,
        "tls_cert": "", "tls_key": "", "ca_cert": ""}
 U = "http://127.0.0.1:8799"
 results = []
@@ -93,6 +94,27 @@ async def main():
             await big.send_bytes(b"\x01" + b"0" * (relay.MAX_FRAME + 1)); m = await big.receive(); rejected = m.type != aiohttp.WSMsgType.TEXT
         except (ConnectionError, aiohttp.ClientError): rejected = True
         report("oversized frame from a (hijacked) agent is rejected", rejected)
+        # ---------- ATTACK 8: a guest must not receive private agent messages ----------
+        hub.cfg["guest_secret"] = GUEST
+        pc2 = await ws_auth(s, "/ws/pc"); json.loads((await pc2.receive()).data)  # fresh agent link
+        guest = await ws_auth(s, "/ws/phone", token=GUEST); gm = await guest.receive()
+        owner = await ws_auth(s, "/ws/phone"); await owner.receive()
+        async def drain(w, timeout=0.4):
+            got = []
+            while True:
+                try: got.append(await asyncio.wait_for(w.receive(), timeout))
+                except asyncio.TimeoutError: break
+            return [g.data for g in got if g.type == aiohttp.WSMsgType.TEXT]
+        await drain(guest); await drain(owner)
+        await pc2.send_str(json.dumps({"t": "term_out", "id": "t1", "data": "секретный вывод"}))
+        await pc2.send_str(json.dumps({"t": "pc_clip", "s": "пароль из буфера"}))
+        await pc2.send_str(json.dumps({"t": "status", "pc_online": True}))
+        g_msgs = await drain(guest); o_msgs = await drain(owner)
+        report("ATTACK 8: guest gets no terminal/clipboard", not any("term_out" in m or "pc_clip" in m for m in g_msgs), str(g_msgs)[:80])
+        report("owner still receives everything", any("term_out" in m for m in o_msgs) and any("pc_clip" in m for m in o_msgs))
+        report("guest still gets public status", any('"t": "status"' in m or '"t":"status"' in m for m in g_msgs))
+        await guest.close(); await owner.close(); await pc2.close()
+
     await runner.cleanup()
     print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")
     sys.exit(0 if all(ok for _, ok in results) else 1)

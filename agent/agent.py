@@ -739,6 +739,11 @@ class Agent:
                         finally:
                             for t in tasks:
                                 t.cancel()
+                            self.video_close()
+                            try:
+                                self.audio.stop()
+                            except Exception:  # noqa: BLE001
+                                pass
                             for term in self.terms.values():
                                 term.close()
                             self.terms.clear()
@@ -755,6 +760,7 @@ class Agent:
         while True:
             fps = self.screen.profile["fps"]
             if self.viewers == 0 or fps == 0:
+                self.video_close()   # no viewers: don't keep ffmpeg running
                 await asyncio.sleep(0.5)
                 continue
             interval = 1 / fps
