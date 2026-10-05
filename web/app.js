@@ -1052,12 +1052,13 @@
     } catch {}
   }
   async function downloadFile(it) {
-    show(`Скачиваю ${it.name}…`, 6000);
-    const r = await fetch(`/api/file?path=${encodeURIComponent(it.path)}`, { headers: authHeaders() });
+    // a one-time link: the download manager streams it to disk, however big the file is
+    const r = await fetch("/api/ticket", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ path: it.path }) });
     if (!r.ok) return show("Не удалось скачать");
-    const blob = await r.blob(); bytesIn += blob.size; const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = it.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    show("Сохранено на телефон"); sfx("ok");
+    const j = await r.json(); const url = `${location.origin}/api/file?ticket=${encodeURIComponent(j.ticket)}`;
+    if (window.PcRemoteApp && window.PcRemoteApp.download) { window.PcRemoteApp.download(url, j.name, j.size || 0); show(`Скачиваю ${it.name} в Загрузки…`, 4000); return; }
+    const a = document.createElement("a"); a.href = url; a.download = j.name; document.body.appendChild(a); a.click(); a.remove();
+    show(`Скачиваю ${it.name}…`, 4000); sfx("ok");
   }
   $("fileInput").onchange = async () => {
     const files = [...$("fileInput").files]; $("fileInput").value = ""; const pr = $("fProgress"); pr.hidden = false;

@@ -255,6 +255,8 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public boolean isCasting() { return RemoteService.casting; }
         /** "Включить ПК" straight from the phone (the PC's relay is down while it sleeps). */
+        /** Stream a file from the PC into the phone's Downloads/PC Remote, with a progress notification. */
+        @JavascriptInterface public void download(String url, String name, long size) { Downloader.start(MainActivity.this, url, name, size); }
         @JavascriptInterface public boolean wakePc() { if (prefs.getString("wake", "").isEmpty()) return false; RemoteService.wake(MainActivity.this); return true; }
         /** Phone files for the PC (Claude): "All files access" on Android 11+, storage permission before. */
         @JavascriptInterface public boolean filesGranted() {

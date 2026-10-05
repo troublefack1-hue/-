@@ -252,6 +252,7 @@ class Hub:
         # `phone` CLI asks /api/phone, we forward to that phone and wait for its answer
         self.fs_phone = None
         self.bg: set = set()          # the phones' background services: no picture/sound, no viewer count
+        self.tickets: dict = {}       # one-time download tokens: token -> (path, expires); lets the phone stream big files
         self.pfs_pending: dict = {}   # id -> {"fut": Future, "chunks": asyncio.Queue | None}
         self.pfs_seq = 0
 
@@ -864,7 +865,36 @@ class Hub:
             raise web.HTTPNotFound(headers=CORS)
         return web.Response(body=data, content_type="image/jpeg", headers={**CORS, "Cache-Control": "private, max-age=3600"})
 
+    async def ticket_handler(self, request: web.Request):
+        """A short-lived, single-use token for one file, so a download can be a plain link that the
+        phone's download manager streams to disk instead of the page holding it in memory."""
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        try:
+            body = await request.json()
+        except ValueError:
+            raise web.HTTPBadRequest(headers=CORS)
+        p = self._safe_path(str(body.get("path", "")))
+        if p is None or not p.is_file():
+            raise web.HTTPForbidden(headers=CORS)
+        now = time.time()
+        self.tickets = {k: v for k, v in self.tickets.items() if v[1] > now}
+        if len(self.tickets) > 50:
+            raise web.HTTPTooManyRequests(headers=CORS)
+        tok = secrets.token_urlsafe(24)
+        self.tickets[tok] = (p, now + 120)
+        return web.json_response({"ticket": tok, "name": p.name, "size": p.stat().st_size}, headers=CORS)
+
     async def file_handler(self, request: web.Request):
+        tok = request.query.get("ticket")
+        if tok:
+            ent = self.tickets.pop(tok, None)
+            if not ent or ent[1] < time.time():
+                raise web.HTTPForbidden(headers=CORS)
+            p = ent[0]
+            self.log_event(f"файл на телефон: {p.name}")
+            return web.FileResponse(p, headers={**CORS, "Content-Disposition": f'attachment; filename="{p.name}"',
+                                                "X-Content-Type-Options": "nosniff"})
         if not self.check_header(request):
             raise web.HTTPForbidden(headers=CORS)
         p = self._safe_path(request.query.get("path", ""))
@@ -901,6 +931,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_post("/api/upload", hub.upload_handler)
     app.router.add_get("/api/files", hub.files_handler)
     app.router.add_get("/api/file", hub.file_handler)
+    app.router.add_post("/api/ticket", hub.ticket_handler)
     app.router.add_get("/api/thumb", hub.thumb_handler)
     app.router.add_post("/api/fs", hub.fs_handler)
     app.router.add_get("/api/phone", hub.phone_files_handler)

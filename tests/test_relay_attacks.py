@@ -148,6 +148,16 @@ async def main():
             pass
         report("background service receives no video frames", not got_bin)
         await bg.close(); await pc2.close()
+        # ---------- download tickets: single use, owner only ----------
+        import tempfile, pathlib
+        tdir = pathlib.Path(tempfile.mkdtemp()); (tdir / "big.bin").write_bytes(b"Z" * 300_000)
+        hub.cfg["share_dirs"] = [str(tdir)]
+        r = await s.post(U + "/api/ticket", json={"path": str(tdir / "big.bin")}); report("ticket without auth -> 403", r.status == 403)
+        r = await s.post(U + "/api/ticket", json={"path": str(tdir / "big.bin")}, headers={"Authorization": "Bearer " + T}); tk = (await r.json())["ticket"]
+        r = await s.get(U + "/api/file", params={"ticket": tk}); body = await r.read()
+        report("ticket serves the file without a header", r.status == 200 and len(body) == 300_000 and "attachment" in r.headers.get("Content-Disposition", ""))
+        r = await s.get(U + "/api/file", params={"ticket": tk}); report("ticket is single-use", r.status == 403)
+        r = await s.post(U + "/api/ticket", json={"path": "/etc/passwd"}, headers={"Authorization": "Bearer " + T}); report("ticket for a path outside share -> 403", r.status == 403)
 
     await runner.cleanup()
     print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")
