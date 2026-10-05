@@ -143,7 +143,12 @@ public class RemoteService extends Service {
                         "/ws/phone", new WsClient.Listener() {
                     public void onText(String s) { onMessage(s); }
                     public void onBinary(byte[] b) { if (b.length > 0 && b[0] == 0x07 && fs != null) fs.writeChunk(b); }
-                    public void onClose(String reason) {}
+                    public void onClose(String reason) {
+                        if (reason != null && reason.contains("4003")) {   // secret revoked on the PC: stop hammering, ask to pair again
+                            prefs.edit().remove("secret").apply();
+                            update("Доступ отозван", "привяжите телефон заново в приложении");
+                        }
+                    }
                 });
                 c.connect();
                 c.sendText("{\"t\":\"auth\",\"token\":\"" + prefs.getString("secret", "") + "\"}");
