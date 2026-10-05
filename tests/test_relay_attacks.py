@@ -175,6 +175,23 @@ async def main():
         r = await s.get(U + "/api/status", headers={"Authorization": "Bearer " + T}); report("old secret rejected after revoke", r.status == 403)
         hub.lockout.failed.clear()
         r = await s.get(U + "/api/status", headers={"Authorization": "Bearer newsecret-0123456789abcdef"}); report("new secret works", r.status == 200)
+        # ---------- a background link must not freeze the open screen ----------
+        NT = "newsecret-0123456789abcdef"
+        pc = await ws_auth(s, "/ws/pc", token=NT); viewer = await ws_auth(s, "/ws/phone", token=NT)
+        await viewer.send_str(json.dumps({"t": "profile", "name": "normal"}))
+        bg = await ws_auth(s, "/ws/phone", token=NT)   # older APKs: "idle" first, "this is the bg link" second
+        await bg.send_str('{"t":"profile","name":"idle"}')
+        await bg.send_str(json.dumps({"t": "hello_phone", "model": "X", "fs": False, "bg": True}))
+        profiles = []
+        while True:
+            try: m = await asyncio.wait_for(pc.receive(), 1)
+            except asyncio.TimeoutError: break
+            if m.type == aiohttp.WSMsgType.TEXT and '"profile"' in m.data: profiles.append(json.loads(m.data)["name"])
+        report("bg link's early idle is undone: the agent ends on the viewer's profile", profiles[-1:] == ["normal"], str(profiles))
+        await bg.send_str('{"t":"profile","name":"idle"}')
+        try: m = await asyncio.wait_for(pc.receive(), 1); late = m.data
+        except asyncio.TimeoutError: late = None
+        report("profile from a known bg link is dropped", late is None or '"profile"' not in late, str(late))
 
     await runner.cleanup()
     print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")

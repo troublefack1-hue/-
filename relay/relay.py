@@ -279,6 +279,7 @@ class Hub:
         # `phone` CLI asks /api/phone, we forward to that phone and wait for its answer
         self.fs_phone = None
         self.bg: set = set()          # the phones' background services: no picture/sound, no viewer count
+        self.profiles: dict = {}      # phone ws -> its last {"t":"profile"} text, newest last; re-sent when a bg link took over
         self.tickets: dict = {}       # one-time download tokens: token -> (path, expires); lets the phone stream big files
         self.pfs_pending: dict = {}   # id -> {"fut": Future, "chunks": asyncio.Queue | None}
         self.pfs_seq = 0
@@ -504,6 +505,10 @@ class Hub:
                         if hp.get("bg"):
                             self.bg.add(ws)
                             await self.tell_pc_viewers()   # it is not a viewer
+                            # a bg link may have sent "idle" before saying it is bg (older APKs did): that froze
+                            # the open screen, so hand the agent back the profile of the newest real viewer
+                            if self.profiles.pop(ws, None) is not None and self.profiles:
+                                await self.send_pc(next(reversed(self.profiles.values())))
                     except ValueError:
                         pass
                     self.phones_changed()
@@ -534,13 +539,16 @@ class Hub:
                             continue
                     except ValueError:
                         continue
-                if ws in self.bg and (msg.data.startswith('{"t":"profile"') or msg.data.startswith('{"t": "profile"')):
-                    continue
+                if msg.data.startswith('{"t":"profile"') or msg.data.startswith('{"t": "profile"'):
+                    if ws in self.bg:
+                        continue
+                    self.profiles.pop(ws, None); self.profiles[ws] = msg.data
                 await self.send_pc(msg.data)  # everything else goes to the agent
         finally:
             self.phones.discard(ws)
             self.guests.discard(ws)
             self.bg.discard(ws)
+            self.profiles.pop(ws, None)
             if ws is self.fs_phone:
                 self.fs_phone = None
                 for p in list(self.pfs_pending.values()):
@@ -612,7 +620,7 @@ class Hub:
                 await ws.close(code=4003, message=b"revoked")
             except Exception:  # noqa: BLE001
                 pass
-        self.phones.clear(); self.guests.clear(); self.bg.clear(); self.phone_names.clear(); self.fs_phone = None
+        self.phones.clear(); self.guests.clear(); self.bg.clear(); self.profiles.clear(); self.phone_names.clear(); self.fs_phone = None
         self.phones_changed()
         await self.tell_pc_viewers()
 
