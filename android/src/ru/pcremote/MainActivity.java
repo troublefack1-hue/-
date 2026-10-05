@@ -1,7 +1,11 @@
 package ru.pcremote;
 
 import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.media.projection.MediaProjectionManager;
+import android.os.Build;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -30,6 +34,7 @@ import android.widget.TextView;
  */
 public class MainActivity extends Activity {
     private static final int BG = 0xFF0F1117, PANEL = 0xFF181B24, TEXT = 0xFFEEF0F5, MUTED = 0xFF8E94A6, ACCENT = 0xFF4F8CFF;
+    private static final int REQ_CAST = 7;
     private SharedPreferences prefs;
     private WebView web;
     private Tunnel tunnel;
@@ -39,7 +44,26 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("pcremote", MODE_PRIVATE);
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
-        if (prefs.contains("secret")) startRemote(); else showSetup(null);
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
+        if (prefs.contains("secret")) { RemoteService.ensureRunning(this); startRemote(); } else showSetup(null);
+    }
+
+    // ------------------------------------------------------------- cast ---
+    /** Android asks the user once per session before the screen can be captured. */
+    private void requestCast() {
+        MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAST);
+    }
+
+    @Override protected void onActivityResult(int req, int code, Intent data) {
+        super.onActivityResult(req, code, data);
+        if (req == REQ_CAST && code == RESULT_OK && data != null) {
+            Intent i = new Intent(this, RemoteService.class).setAction(RemoteService.ACTION_CAST)
+                    .putExtra("code", code).putExtra("data", data);
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+            moveTaskToBack(true);  // the user goes on with the phone; the PC shows it
+        }
     }
 
     // ------------------------------------------------------------ setup ---
@@ -156,11 +180,20 @@ public class MainActivity extends Activity {
         if (web != null) { web.destroy(); web = null; }
     }
 
-    /** Called from the page: window.PcRemoteApp.repair() */
+    /** Called from the page: window.PcRemoteApp.* */
     private class Bridge {
         @JavascriptInterface public void repair() {
             prefs.edit().remove("secret").apply();
             runOnUiThread(() -> showSetup(null));
+        }
+        @JavascriptInterface public void startCast() { runOnUiThread(MainActivity.this::requestCast); }
+        @JavascriptInterface public void stopCast() {
+            startService(new Intent(MainActivity.this, RemoteService.class).setAction(RemoteService.ACTION_CAST_STOP));
+        }
+        @JavascriptInterface public boolean isCasting() { return RemoteService.casting; }
+        @JavascriptInterface public boolean isPhoneMuted() { return RemoteService.phoneMuted; }
+        @JavascriptInterface public void setPhoneMute(boolean on) {
+            startService(new Intent(MainActivity.this, RemoteService.class).setAction(RemoteService.ACTION_MUTE).putExtra("on", on));
         }
     }
 

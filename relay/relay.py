@@ -39,10 +39,11 @@ HERE = Path(__file__).resolve().parent
 WEB_DIR = HERE.parent / "web"
 CONFIG_PATH = Path(os.environ.get("PC_REMOTE_CONFIG", HERE / "config.json"))
 
-FRAME_VIDEO, FRAME_AUDIO = 0x01, 0x02
+FRAME_VIDEO, FRAME_AUDIO, FRAME_CAST, FRAME_CAST_AUDIO = 0x01, 0x02, 0x03, 0x04
 MAX_PHONES = 4                      # simultaneous viewers
 MAX_FRAME = 4 * 1024 * 1024         # bytes per binary frame from the agent
 MAX_EVENT = 64 * 1024               # bytes per text event from a phone
+MAX_CAST = 2 * 1024 * 1024          # bytes per screen-cast frame from a phone
 AUTH_TIMEOUT = 5                    # seconds to send the auth message
 LOCKOUT_ATTEMPTS, LOCKOUT_WINDOW = 10, 600
 CORS = {"Access-Control-Allow-Origin": "*",
@@ -125,6 +126,8 @@ class Hub:
         self.pair_code: str | None = None
         self.pair_until: float = 0
         self.on_paired = None  # callback(remote_ip) for the PC app's UI
+        self.on_cast = None    # callback(kind, data): phone screen (0x03 jpeg) / sound (0x04 pcm) -> PC app; (0, None) = stopped
+        self.on_phones = None  # callback(count) for the PC app's UI
 
     # --- auth -----------------------------------------------------------
     def token_ok(self, token: str) -> bool:
@@ -246,7 +249,7 @@ class Hub:
 
     # --- /ws/phone ------------------------------------------------------
     async def phone_handler(self, request: web.Request):
-        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_EVENT)
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_CAST)
         await ws.prepare(request)
         ip = client_ip(request)
         if not await self.ws_auth(ws, ip):
@@ -256,15 +259,30 @@ class Hub:
             return ws
         self.phones.add(ws)
         log.info("phone connected from %s (%d)", ip, len(self.phones))
+        if self.on_phones:
+            self.on_phones(len(self.phones))
         await ws.send_str(json.dumps(self.status()))
         await self.tell_pc_viewers()
         if self.last_frame:
             await ws.send_bytes(self.last_frame)
+        casting = False
         try:
             async for msg in ws:
+                if msg.type == WSMsgType.BINARY:
+                    if msg.data and msg.data[0] in (FRAME_CAST, FRAME_CAST_AUDIO) and self.on_cast:
+                        casting = True
+                        self.on_cast(msg.data[0], msg.data[1:])
+                    continue
                 if msg.type != WSMsgType.TEXT:
                     if msg.type == WSMsgType.ERROR:
                         break
+                    continue
+                if len(msg.data) > MAX_EVENT:
+                    break
+                if msg.data.startswith('{"t":"cast_stop"'):
+                    casting = False
+                    if self.on_cast:
+                        self.on_cast(0, None)
                     continue
                 if msg.data.startswith('{"t":"ping"') or msg.data.startswith('{"t": "ping"'):
                     await ws.send_str(json.dumps({"t": "pong", "ts": time.time(), "pc_online": self.pc is not None}))
@@ -272,9 +290,17 @@ class Hub:
                 await self.send_pc(msg.data)  # everything else goes to the agent
         finally:
             self.phones.discard(ws)
+            if casting and self.on_cast:
+                self.on_cast(0, None)
+            if self.on_phones:
+                self.on_phones(len(self.phones))
             await self.tell_pc_viewers()
             log.info("phone disconnected (%d left)", len(self.phones))
         return ws
+
+    async def ring_phones(self):
+        """PC app -> every connected phone: make noise (find my phone)."""
+        await self.broadcast_phones(json.dumps({"t": "ring"}))
 
     # --- HTTP API ----------------------------------------------------------
     async def wake_handler(self, request: web.Request):

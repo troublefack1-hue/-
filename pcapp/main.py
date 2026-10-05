@@ -5,15 +5,21 @@ PC Remote — the desktop app.
 One window, no setup: on first run it creates the secret and certificates,
 opens the firewall port, registers itself to start with Windows and runs the
 relay (HTTPS on the public port) and the screen agent in the background.
-"Привязать телефон" shows a 6-digit code the phone app uses once to pair.
+
+  "Привязать телефон"  shows a 6-digit code the phone app uses once to pair
+  "Найти телефон"      makes every connected phone ring (find my phone)
+  phone screen cast    opens a full-screen window with the phone's screen
+                       and plays its sound on the PC
 
 Build to a single exe with build_exe.ps1, or run: python main.py
 """
 import asyncio
 import ctypes
+import io
 import json
 import logging
 import os
+import queue
 import secrets
 import subprocess
 import sys
@@ -24,12 +30,14 @@ import urllib.request
 from pathlib import Path
 from tkinter import ttk
 
+from PIL import Image, ImageTk
+
 # relay/ and agent/ live next to this file in the repo, or are bundled by PyInstaller
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 sys.path[:0] = [str(BASE / "relay"), str(BASE / "agent")]
 import agent as agent_mod  # noqa: E402
 import relay as relay_mod  # noqa: E402
-from certs import ensure_certs, fingerprint  # noqa: E402
+from certs import ensure_certs  # noqa: E402
 
 APP_NAME = "PC Remote"
 DATA = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "pc-remote"
@@ -99,8 +107,7 @@ def firewall_open(port: int) -> bool:
     if is_admin():
         subprocess.run("netsh " + args, shell=True, creationflags=0x08000000)
         return True
-    # UAC prompt for just this one command
-    rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", "netsh", args, None, 0)
+    rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", "netsh", args, None, 0)  # one UAC prompt
     return rc > 32
 
 
@@ -130,6 +137,36 @@ def autostart_enabled() -> bool:
 
 # ---------------------------------------------------------------- backend ---
 
+class AudioOut:
+    """Plays PCM16 mono chunks from the phone through the default output device."""
+
+    def __init__(self):
+        self.pa = None
+        self.stream = None
+        self.rate = 0
+
+    def play(self, rate: int, pcm: bytes):
+        try:
+            import pyaudiowpatch as pyaudio
+        except ImportError:
+            return
+        if self.stream is None or rate != self.rate:
+            self.close()
+            self.pa = pyaudio.PyAudio()
+            self.stream = self.pa.open(format=pyaudio.paInt16, channels=1, rate=rate, output=True)
+            self.rate = rate
+        self.stream.write(pcm)
+
+    def close(self):
+        if self.stream:
+            self.stream.stop_stream()
+            self.stream.close()
+            self.stream = None
+        if self.pa:
+            self.pa.terminate()
+            self.pa = None
+
+
 class Backend:
     """Relay + agent in one asyncio loop on a background thread."""
 
@@ -140,6 +177,10 @@ class Backend:
         self.agent = None
         self.error = ""
         self.paired_ip = ""
+        self.phones = 0
+        self.cast_frames: queue.Queue = queue.Queue(maxsize=3)  # phone screen -> GUI
+        self.cast_active = False
+        self.audio_out = AudioOut()
 
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
@@ -164,21 +205,68 @@ class Backend:
         app = relay_mod.make_app(relay_cfg)
         self.hub = app["hub"]
         self.hub.on_paired = lambda ip: setattr(self, "paired_ip", ip)
+        self.hub.on_phones = lambda n: setattr(self, "phones", n)
+        self.hub.on_cast = self._on_cast
         agent_cfg = {"relay_url": "http://127.0.0.1:8787", "secret": self.cfg["secret"],
                      "max_width": self.cfg["max_width"], "quality": self.cfg["quality"],
                      "fps": self.cfg["fps"], "monitor": self.cfg["monitor"]}
         self.agent = agent_mod.Agent(agent_cfg)
         await asyncio.gather(relay_mod.serve(relay_cfg, app), self.agent.run())
 
+    def _on_cast(self, kind: int, data):
+        if data is None:                       # stopped
+            self.cast_active = False
+            self.audio_out.close()
+            return
+        self.cast_active = True
+        if kind == relay_mod.FRAME_CAST:
+            try:
+                self.cast_frames.put_nowait(data)
+            except queue.Full:                 # GUI is behind: drop the oldest
+                try:
+                    self.cast_frames.get_nowait()
+                    self.cast_frames.put_nowait(data)
+                except queue.Empty:
+                    pass
+        elif kind == relay_mod.FRAME_CAST_AUDIO and len(data) > 2:
+            rate = int.from_bytes(data[:2], "little")
+            threading.Thread(target=self.audio_out.play, args=(rate, data[2:]), daemon=True).start()
+
     def pair_code(self) -> str:
-        fut = asyncio.run_coroutine_threadsafe(self._pair(), self.loop)
-        return fut.result(5)
+        return asyncio.run_coroutine_threadsafe(self._pair(), self.loop).result(5)
 
     async def _pair(self):
         return self.hub.start_pairing()
 
+    def ring(self):
+        asyncio.run_coroutine_threadsafe(self.hub.ring_phones(), self.loop).result(5)
+
 
 # -------------------------------------------------------------------- GUI ---
+
+class CastWindow(tk.Toplevel):
+    """Full-screen window showing the phone's screen. Esc or close = hide."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Экран телефона")
+        self.configure(bg="black")
+        self.attributes("-fullscreen", True)
+        self.bind("<Escape>", lambda e: self.withdraw())
+        self.bind("<Double-Button-1>", lambda e: self.attributes("-fullscreen", not self.attributes("-fullscreen")))
+        self.protocol("WM_DELETE_WINDOW", self.withdraw)
+        self.label = tk.Label(self, bg="black")
+        self.label.pack(fill="both", expand=True)
+        self.photo = None
+
+    def show_frame(self, jpeg: bytes):
+        img = Image.open(io.BytesIO(jpeg))
+        w, h = self.winfo_width() or 800, self.winfo_height() or 600
+        k = min(w / img.width, h / img.height)
+        img = img.resize((max(1, int(img.width * k)), max(1, int(img.height * k))), Image.BILINEAR)
+        self.photo = ImageTk.PhotoImage(img)
+        self.label.configure(image=self.photo)
+
 
 class App(tk.Tk):
     def __init__(self, cfg: dict, backend: Backend, minimized: bool):
@@ -207,17 +295,24 @@ class App(tk.Tk):
         self.code_hint = ttk.Label(f, text="", foreground="#888")
         self.code_hint.grid(row=4, column=0, columnspan=2, sticky="w", **pad)
 
+        self.ring_btn = ttk.Button(f, text="Найти телефон 🔔", command=self.ring, state="disabled")
+        self.ring_btn.grid(row=5, column=0, sticky="w", **pad)
+        self.cast_btn = ttk.Button(f, text="Экран телефона", command=self.show_cast, state="disabled")
+        self.cast_btn.grid(row=5, column=1, sticky="w", **pad)
+
         self.auto = tk.BooleanVar(value=autostart_enabled())
         ttk.Checkbutton(f, text="Запускать вместе с Windows", variable=self.auto,
-                        command=lambda: autostart(self.auto.get())).grid(row=5, column=0, columnspan=2, sticky="w", **pad)
+                        command=lambda: autostart(self.auto.get())).grid(row=6, column=0, columnspan=2, sticky="w", **pad)
 
         hint = ("На роутере пробросьте TCP-порт %d на этот ПК.\n"
                 "Данные: %s" % (cfg["port"], DATA))
-        ttk.Label(f, text=hint, foreground="#888", justify="left").grid(row=6, column=0, columnspan=2, sticky="w", **pad)
-        ttk.Button(f, text="Выход", command=self.destroy).grid(row=7, column=1, sticky="e", **pad)
+        ttk.Label(f, text=hint, foreground="#888", justify="left").grid(row=7, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Button(f, text="Выход", command=self.destroy).grid(row=8, column=1, sticky="e", **pad)
 
         self.pair_until = 0
+        self.cast_win: CastWindow | None = None
         self.after(500, self.tick)
+        self.after(40, self.pump_cast)
         if minimized:
             self.iconify()
 
@@ -231,6 +326,42 @@ class App(tk.Tk):
         self.code.configure(text=f"{code[:3]} {code[3:]}")
         self.backend.paired_ip = ""
 
+    def ring(self):
+        try:
+            self.backend.ring()
+            self.code_hint.configure(text="Телефон звонит. Выключить можно на самом телефоне.")
+        except Exception as e:  # noqa: BLE001
+            self.code_hint.configure(text=f"Ошибка: {e}")
+
+    def show_cast(self):
+        if self.cast_win is None or not self.cast_win.winfo_exists():
+            self.cast_win = CastWindow(self)
+        self.cast_win.deiconify()
+        self.cast_win.lift()
+
+    def pump_cast(self):
+        """Move phone frames from the backend queue onto the cast window."""
+        b = self.backend
+        try:
+            frame = b.cast_frames.get_nowait()
+        except queue.Empty:
+            frame = None
+        if frame is not None:
+            if self.cast_win is None or not self.cast_win.winfo_exists() or self.cast_win.state() == "withdrawn":
+                if not getattr(self, "_cast_shown", False):
+                    self.show_cast()          # phone started casting: pop the window up
+                    self._cast_shown = True
+            if self.cast_win and self.cast_win.winfo_exists():
+                try:
+                    self.cast_win.show_frame(frame)
+                except Exception:  # noqa: BLE001
+                    log.exception("cast frame")
+        if not b.cast_active and getattr(self, "_cast_shown", False):
+            self._cast_shown = False
+            if self.cast_win and self.cast_win.winfo_exists():
+                self.cast_win.withdraw()
+        self.after(40, self.pump_cast)
+
     def tick(self):
         b = self.backend
         if b.error:
@@ -238,10 +369,14 @@ class App(tk.Tk):
         elif b.hub is None:
             self.status.configure(text="запуск…", foreground="#888")
         else:
-            phones = len(b.hub.phones)
+            phones = b.phones
             txt = f"Работает · https://{self.cfg['public_ip']}:{self.cfg['port']}"
-            txt += f" · телефонов подключено: {phones}" if phones else " · ждёт подключения"
-            self.status.configure(text=txt, foreground="#2a9d4a")
+            txt += f" · телефонов на связи: {phones}" if phones else " · ожидает телефон"
+            if b.cast_active:
+                txt += " · идёт трансляция с телефона"
+            self.status.configure(text=txt, foreground="#2a9d4a" if phones else "#b8860b")
+            self.ring_btn.configure(state="normal" if phones else "disabled")
+            self.cast_btn.configure(state="normal" if b.cast_active else "disabled")
         left = int(self.pair_until - time.time())
         if b.paired_ip:
             self.code.configure(text="✓")

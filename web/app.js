@@ -364,6 +364,22 @@
   setProfile(profile);
   $("fsBtn").onclick = () => { document.documentElement.requestFullscreen?.(); menu.hidden = true; };
 
+  // ---- phone screen -> PC (only inside the Android app, via the JS bridge)
+  const bridge = window.PcRemoteApp;
+  if (bridge && bridge.startCast) {
+    $("castBox").hidden = false;
+    const refreshCast = () => {
+      const on = bridge.isCasting();
+      $("castBtn").textContent = on ? "⏹ Остановить трансляцию" : "📱 Транслировать экран телефона на ПК";
+      $("muteRow").hidden = !on;
+      $("phoneMute").checked = bridge.isPhoneMuted();
+    };
+    $("castBtn").onclick = () => { bridge.isCasting() ? bridge.stopCast() : bridge.startCast(); menu.hidden = true; setTimeout(refreshCast, 800); };
+    $("phoneMute").onchange = () => bridge.setPhoneMute($("phoneMute").checked);
+    $("menuBtn").addEventListener("click", refreshCast);
+    refreshCast();
+  }
+
   $("wakeBtn").onclick = async () => {
     const btn = $("wakeBtn"); btn.classList.add("busy"); buzz(20);
     $("wakeMsg").textContent = "Отправляю команду…";

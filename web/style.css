@@ -94,6 +94,8 @@ button.icon.active { background: var(--accent); border-color: transparent; }
 .grid button[data-cmd=reboot] i { color: var(--accent); }
 .grid button[data-cmd=shutdown] i { color: var(--bad); }
 .row { text-align: left; padding: 12px 14px; width: 100%; }
+.row.accent { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+#castBox { display: flex; flex-direction: column; gap: 8px; }
 label.row { display: flex; align-items: center; background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r); }
 label.row span { flex: 1; }
 .switch input { display: none; }
