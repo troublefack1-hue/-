@@ -592,7 +592,7 @@ class App(tk.Tk):
             self.status.configure(text="  запуск…  ", fg=MUTED)
         else:
             phones = b.phones
-            who = ", ".join(b.phone_names) if b.phone_names else ("телефонов на связи: %d" % phones if phones else "ожидает телефон")
+            who = ", ".join(b.phone_names) if b.phone_names else ("телефонов на связи: %d" % phones if phones else ("ожидает телефон, зову каждую минуту" if b.hub.had_phone else "ожидает телефон"))
             txt = f"  ● {who} · https://{self.cfg['public_ip']}:{self.cfg['port']}"
             if b.cast_active:
                 txt += " · идёт трансляция с телефона"

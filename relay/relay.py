@@ -379,6 +379,7 @@ class Hub:
             await ws.close(code=4004, message=b"too many viewers")
             return ws
         self.phones.add(ws)
+        self.had_phone = True
         log.info("phone connected from %s (%d)", ip, len(self.phones))
         self.log_event(f"телефон подключился ({ip})")
         self.phones_changed()
@@ -445,6 +446,16 @@ class Hub:
         await self.nudge_phones("net")
 
     _last_nudge = 0.0
+    had_phone = False  # a phone has connected at least once -> worth calling it back
+
+    async def keep_calling(self):
+        """Long outage: while the PC is up and no phone is on the link, keep
+        nudging every 60 s, forever. The phone's background service listens
+        for exactly this while its own connection is down."""
+        while True:
+            await asyncio.sleep(60)
+            if self.pc is not None and not self.phones and self.had_phone:
+                await self.nudge_phones("still-waiting")
 
     async def nudge_phones(self, reason: str):
         """PC-initiated reconnect: a push the phone's background service listens
@@ -746,6 +757,7 @@ async def serve(cfg: dict, app: web.Application | None = None):
         hub.net.update(vpn=watcher.vpn, lan=watcher.lan)
         await bind_tls(watcher.lan)
         asyncio.create_task(watcher.run())
+    asyncio.create_task((app or runner.app)["hub"].keep_calling())
     while True:
         await asyncio.sleep(3600)
 
