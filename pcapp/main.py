@@ -252,6 +252,8 @@ class Backend:
             "ca_cert": str(DATA / "ca.crt"),
             "upload_dir": self.cfg["upload_dir"], "share_dirs": self.cfg["share_dirs"],
             "guest_secret": self.cfg["guest_secret"],
+            "net_proxy": self.cfg.get("net_proxy", True), "net_block_ads": self.cfg.get("net_block_ads", True),
+            "net_dir": str(DATA / "net"),
         }
         app = relay_mod.make_app(relay_cfg)
         self.hub = app["hub"]
@@ -573,9 +575,12 @@ class App(tk.Tk):
         self.bubble_on = tk.BooleanVar(value=cfg.get("bubble", True))
         ttk.Checkbutton(f, text="Значок на экране, когда окно свёрнуто", variable=self.bubble_on,
                         command=self.toggle_bubble).grid(row=8, column=0, columnspan=2, sticky="w", **pad)
+        self.net_on = tk.BooleanVar(value=cfg.get("net_proxy", True))
+        ttk.Checkbutton(f, text="Интернет для телефона через этот ПК (приложение «Интернет через ПК», с блокировкой рекламы)", variable=self.net_on,
+                        command=self.toggle_net).grid(row=10, column=0, columnspan=2, sticky="w", **pad)
         self.deps_msg = ttk.Label(f, text="", style="Muted.TLabel")
-        self.deps_msg.grid(row=9, column=0, sticky="w", **pad)
-        ttk.Button(f, text="Выход", command=self.quit_app).grid(row=9, column=1, sticky="e", **pad)
+        self.deps_msg.grid(row=11, column=0, sticky="w", **pad)
+        ttk.Button(f, text="Выход", command=self.quit_app).grid(row=11, column=1, sticky="e", **pad)
         self.bubble = Bubble(self)
         self.video_on = tk.BooleanVar(value=cfg.get("video", True))
         ttk.Checkbutton(f, text="Видео-поток H.264/VP8 (докачивает ffmpeg, ~100 МБ)", variable=self.video_on,
@@ -851,6 +856,13 @@ class App(tk.Tk):
     def destroy(self):
         self.tray.stop()
         super().destroy()
+
+    def toggle_net(self):
+        self.cfg["net_proxy"] = bool(self.net_on.get())
+        save_config(self.cfg)
+        if self.backend.hub is not None and getattr(self.backend.hub, "netproxy", None):
+            self.backend.hub.netproxy.enabled = self.cfg["net_proxy"]
+        self.code_hint.configure(text="Интернет через ПК " + ("включён: телефон может выходить в сеть через этот ПК." if self.cfg["net_proxy"] else "выключен."))
 
     def new_code(self):
         """A fresh permanent code (the old one stops working; already paired phones are unaffected)."""

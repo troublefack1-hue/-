@@ -36,6 +36,8 @@ from pathlib import Path
 
 from aiohttp import ClientSession, WSMsgType, web
 
+import netproxy  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 WEB_DIR = HERE.parent / "web"
 CONFIG_PATH = Path(os.environ.get("PC_REMOTE_CONFIG", HERE / "config.json"))
@@ -71,6 +73,9 @@ def load_config() -> dict:
     # file transfer: phone uploads land in upload_dir; share_dirs can be browsed/downloaded
     cfg.setdefault("upload_dir", "")
     cfg.setdefault("share_dirs", [])
+    # the phone's internet through this PC (second phone app): see netproxy.py
+    cfg.setdefault("net_proxy", True)
+    cfg.setdefault("net_block_ads", True)
     # Windows: send replies through the physical LAN adapter even when a VPN
     # owns the default route, so the phone's connection survives VPN on/off.
     cfg.setdefault("pin_interface", True)
@@ -339,7 +344,8 @@ class Hub:
     # --- status broadcast ----------------------------------------------
     def status(self) -> dict:
         return {"t": "status", "pc_online": self.pc is not None,
-                "pc_since": self.pc_since, "phones": len(self.phones), "lan": LAN_IP.get("ip")}
+                "pc_since": self.pc_since, "phones": len(self.phones), "lan": LAN_IP.get("ip"),
+                "net": self.netproxy.stats() if getattr(self, "netproxy", None) else None}
 
     async def broadcast_phones(self, data, binary=False):
         dead = []
@@ -978,6 +984,8 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_get("/", index)
     app.router.add_get("/ws/pc", hub.pc_handler)
     app.router.add_get("/ws/phone", hub.phone_handler)
+    hub.netproxy = netproxy.NetProxy(hub, cfg, client_ip)
+    app.router.add_get("/ws/net", hub.netproxy.handler)
     app.router.add_post("/api/wake", hub.wake_handler)
     app.router.add_get("/api/status", hub.status_handler)
     app.router.add_get("/api/pair", hub.pair_handler)
@@ -1017,6 +1025,7 @@ def make_app(cfg: dict) -> web.Application:
 async def serve(cfg: dict, app: web.Application | None = None):
     runner = web.AppRunner(app or make_app(cfg), access_log=None)
     await runner.setup()
+    asyncio.ensure_future(runner.app["hub"].netproxy.maintenance())
     await web.TCPSite(runner, cfg["host"], cfg["port"]).start()
     log.info("listening on http://%s:%s", cfg["host"], cfg["port"])
     if cfg["tls_port"]:

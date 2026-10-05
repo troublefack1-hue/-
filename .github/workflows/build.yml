@@ -29,6 +29,8 @@ jobs:
         run: python tests/test_relay_attacks.py
       - name: Phone files end to end
         run: python tests/test_phone_cli.py
+      - name: Internet through the PC (netproxy)
+        run: python tests/test_netproxy.py
       - name: Web client smoke test (real browser)
         run: python tests/test_web_smoke.py
       - name: Web client syntax
