@@ -157,11 +157,9 @@ public class MainActivity extends Activity {
                 Updater.Info info = Updater.checkPc("0", asset);
                 if (info == null) throw new java.io.IOException("на ПК ещё нет этого приложения: откройте окно PC Remote, оно скачает");
                 java.io.File apk = Updater.downloadPc(asset, getCacheDir(), info.sha256);
-                runOnUiThread(() -> {
-                    Toast.makeText(this, asset + " " + info.version + " с ПК — установите", Toast.LENGTH_LONG).show();
-                    startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"), "application/vnd.android.package-archive")
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK));
-                });
+                // a session, not the "Install?" screen: once this app installed it, later updates need no tap
+                SilentInstaller.install(this, apk, asset + " " + info.version);
+                runOnUiThread(() -> Toast.makeText(this, "Устанавливаю " + asset + " " + info.version + " с ПК…", Toast.LENGTH_SHORT).show());
             } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Не удалось: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
         }).start();
     }
@@ -177,12 +175,35 @@ public class MainActivity extends Activity {
                 if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
                 if (found == null) found = Updater.check(cur);
                 final Updater.Info info = found;
+                if (fromPc) { updateOthersFromPc(); updateSelfFromPc(info); return; }   // from our own PC: just do it
+                updateOthersFromPc();
                 if (info == null) return;
-                final boolean fp = fromPc;
-                runOnUiThread(() -> offerUpdate(info, cur, fp));
+                runOnUiThread(() -> offerUpdate(info, cur, false));
             } catch (Exception ignored) {
             }
         }).start();
+    }
+
+    /** «Интернет через ПК» and «Проводник», when installed and the PC has a newer build: silently (Android 12+). */
+    private void updateOthersFromPc() {
+        if (Updater.pc == null) return;
+        for (String[] app : new String[][]{{"ru.pcremote.net", "pcremote-net.apk", "Интернет через ПК"}, {"ru.pcremote.files", "pcremote-files.apk", "Проводник"}}) {
+            try {
+                String v = getPackageManager().getPackageInfo(app[0], 0).versionName;
+                Updater.Info i = Updater.checkPc(v, app[1]);
+                if (i == null) continue;
+                SilentInstaller.install(this, Updater.downloadPc(app[1], getCacheDir(), i.sha256), app[2] + " " + i.version);
+            } catch (Exception ignored) {}   // not installed, or the PC has nothing newer
+        }
+    }
+
+    /** Ourselves last: the update replaces this process. */
+    private void updateSelfFromPc(Updater.Info info) {
+        if (info == null) return;
+        try {
+            SilentInstaller.install(this, Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256), "Мой ПК " + info.version);
+            runOnUiThread(() -> Toast.makeText(this, "Обновляюсь с ПК до " + info.version + "…", Toast.LENGTH_SHORT).show());
+        } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Обновление с ПК не скачалось: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
     }
 
     /** What's new + consent; only then download and hand over to the installer. */
@@ -192,9 +213,8 @@ public class MainActivity extends Activity {
                 .setMessage("У вас " + cur + ".\n\nЧто нового:\n" + notes + "\n\nСкачать и установить? Android покажет свой запрос.")
                 .setPositiveButton("Обновить", (d, w) -> new Thread(() -> {
                     try {
-                        if (fromPc) Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256); else Updater.download(info.url, getCacheDir(), info.sha256);
-                        runOnUiThread(() -> startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + ApkProvider.AUTHORITY + "/update.apk"), "application/vnd.android.package-archive")
-                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)));
+                        java.io.File apk = fromPc ? Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
+                        SilentInstaller.install(this, apk, "Мой ПК " + info.version);
                     } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Не удалось скачать: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
                 }).start()).setNegativeButton("Позже", null).show();
     }

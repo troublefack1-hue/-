@@ -18,6 +18,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 12+: update ourselves and the apps we installed without the "Install?" question -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <!-- phone files for the PC (Claude): all-files access on 11+, legacy storage permission before -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -60,6 +62,7 @@
             android:name=".RemoteService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+        <receiver android:name=".InstallResult" android:exported="false" />
         <provider
             android:name=".PairingProvider"
             android:authorities="ru.pcremote.pairing"
