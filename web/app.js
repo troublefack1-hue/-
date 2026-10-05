@@ -135,7 +135,7 @@
   // Auth goes in the first message, never in the URL. A ping every 5 s
   // measures latency; 15 s of silence means the link is dead -> reconnect
   // with backoff, without reloading the page.
-  let lastMsgAt = 0, backoff = 1000, reconnectTimer = null, pingTimer = null, pingSentAt = 0, authed = false;
+  let lastMsgAt = 0, backoff = 1000, reconnectTimer = null, pingTimer = null, pingSentAt = 0, authed = false, phoneReconnects = 0, fpsShown = 0;
 
   // the Android activity tells us when it goes to the background (the WebView itself keeps running)
   let appHidden = false;
@@ -203,6 +203,7 @@
         sfx(m.result === "ok" ? "ok" : "offline");
       } else if (m.t === "volume") { applyVolume(m);
       } else if (m.t === "role") { setGuest(!!m.guest);
+      } else if (m.t === "diag") { renderDiag(m);
       } else if (m.t === "windows") { renderWindows(m.items || []);
       } else if (m.t === "zone") {
         if (!m.rect) { zoneRect = zoneImg = null; $("zoneBtn").classList.remove("active"); $("bZone").hidden = true; show(m.error ? "HD-зона: " + m.error : (zoneWanted ? "Движение не найдено — выделите область вручную" : "HD-зона выключена")); }
@@ -235,6 +236,7 @@
       }
     };
     ws.onclose = (e) => {
+      if (authed) { phoneReconnects++; window.pcrError && window.pcrError(`WS закрыт: код ${e.code}${e.reason ? " " + e.reason : ""}`); }
       if (!authed) {
         if (app.hidden || e.code === 4003) { failLogin(); return; }
       }
@@ -349,7 +351,7 @@
           canvas.classList.add("live"); frames++; lastFrameAt = Date.now(); send({ t: "ack" });
           if ($("bVideo").hidden) $("bVideo").hidden = false;
         },
-        error: (e) => { console.warn("video decoder", e); try { vdec.close(); } catch {} vdec = null; send({ t: "video", off: true }); show("Видео недоступно, перехожу на JPEG"); },
+        error: (e) => { console.warn("video decoder", e); window.pcrError && window.pcrError("Декодер: " + (e.message || e)); try { vdec.close(); } catch {} vdec = null; send({ t: "video", off: true }); show("Видео недоступно, перехожу на JPEG"); },
       });
       vdec.configure(codec === 1 ? { codec: "avc1.42E01E", optimizeForLatency: true } : { codec: "vp8", optimizeForLatency: true });
       vcodec = codec; waitKey = true; return true;
@@ -392,6 +394,7 @@
     bytesIn = 0; bytesOut = 0;
     if (pcOnline) {
       const parts = [pcHost];
+      fpsShown = frames;
       if (frames) parts.push(`${frames} к/с`);
       if (latency) parts.push(`${latency} мс`);
       subEl.textContent = parts.join(" · ");
@@ -1255,7 +1258,7 @@
   // System page: state / processes / timers / devices / downloads / log
   // ================================================================
   let sysTab = "state", sysTimer = null, guest = false;
-  const TABS = { state: "sysState", procs: "sysProcs", timers: "sysTimers", devices: "sysDevices", dl: "sysDl", log: "sysLog" };
+  const TABS = { state: "sysState", procs: "sysProcs", timers: "sysTimers", devices: "sysDevices", dl: "sysDl", log: "sysLog", diag: "sysDiag" };
   function sysRequest() {
     if (sysTab === "state") send({ t: "sys_get", temps: true });
     else if (sysTab === "procs") send({ t: "procs_get" });
@@ -1263,7 +1266,35 @@
     else if (sysTab === "devices") send({ t: "powerplans_get" });
     else if (sysTab === "dl") send({ t: "downloads_get" });
     else if (sysTab === "log") loadLog();
+    else if (sysTab === "diag") { send({ t: "diag_get" }); renderDiag(lastDiag); }
   }
+  // ---- diagnostics: what the link, the codec and the PC are doing right now; recent errors
+  let lastDiag = null; const diagErrors = [];
+  window.pcrError = (text) => { diagErrors.push({ ts: Date.now(), text: String(text).slice(0, 200) }); if (diagErrors.length > 20) diagErrors.shift(); };
+  window.addEventListener("error", (e) => window.pcrError("JS: " + (e.message || e.type)));
+  window.addEventListener("unhandledrejection", (e) => window.pcrError("Promise: " + (e.reason && e.reason.message || e.reason)));
+  function diagRows() {
+    const d = lastDiag || {};
+    const kind = lastDiag ? (d.codec ? `видео ${d.codec} (${d.encoder || "?"}) ${d.enc_fps || "?"} к/с` : "кадры JPEG") : "ПК не ответил";
+    return [["Связь", pcOnline ? "ПК в сети" : "ПК не в сети"], ["Задержка", latency ? latency + " мс" : "—"], ["Кадров/с (факт)", String(fpsShown)],
+      ["Картинка", kind], ["Размер кадра", d.size ? `${d.size[0]}×${d.size[1]}` : (frameW ? `${frameW}×${frameH}` : "—")],
+      ["Профиль", d.profile || profile], ["RTT по ack на ПК", d.rtt_ms != null ? d.rtt_ms + " мс" : "—"], ["HD-зона", d.zone ? "вкл" : "выкл"],
+      ["Зрителей", d.viewers ?? "—"], ["Терминалов", d.terms ?? "—"], ["Переподключений ПК↔relay", d.reconnects ?? "—"], ["Переподключений телефона", String(phoneReconnects)],
+      ["Кодеки телефона", (codecList || []).join(", ") || "нет WebCodecs"], ["Без касаний, с", d.idle_s ?? "—"], ["Сеть телефона", (navigator.connection && (navigator.connection.effectiveType || navigator.connection.type)) || "—"],
+      ["Приложение", window.PcRemoteApp ? "Android" : "браузер"], ["Экран телефона", `${innerWidth}×${innerHeight} @${devicePixelRatio}`]];
+  }
+  function renderDiag(m) {
+    if (m) lastDiag = m;
+    const L = $("diagList"); L.innerHTML = "";
+    for (const [k, v] of diagRows()) { const r = document.createElement("div"); r.className = "it"; r.innerHTML = `<span class="s">${esc(k)}</span><span class="n">${esc(v)}</span>`; L.appendChild(r); }
+    const E = $("diagErrors"); E.innerHTML = diagErrors.length ? "" : `<div class="empty">Ошибок не было</div>`;
+    for (const e of diagErrors.slice().reverse()) { const r = document.createElement("div"); r.className = "it"; r.innerHTML = `<span class="s">${new Date(e.ts).toLocaleTimeString("ru-RU")}</span><span class="n">${esc(e.text)}</span>`; E.appendChild(r); }
+  }
+  $("diagReport").onclick = async () => {
+    const body = { client: Object.fromEntries(diagRows()), errors: diagErrors, agent: lastDiag, ua: navigator.userAgent, prefs: { video: prefs.video, theme: prefs.theme } };
+    const r = await fetch("/api/report", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = r.ok ? await r.json() : null; show(j && j.ok ? `Отчёт сохранён: ${j.path}` : "Не удалось сохранить отчёт", 5000); if (j && j.ok) sfx("ok");
+  };
   function sysShowTab(tab) {
     sysTab = tab; for (const k in TABS) $(TABS[k]).hidden = k !== tab;
     document.querySelectorAll("#sysTabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));

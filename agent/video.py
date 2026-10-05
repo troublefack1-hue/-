@@ -41,12 +41,51 @@ def find_ffmpeg() -> str | None:
     return shutil.which("ffmpeg")
 
 
-def pick_codec(phone_codecs: list, ffmpeg: str) -> str | None:
-    """h264 if both sides can, else vp8, else None. Checks the ffmpeg build once."""
+# H.264 encoders in order of preference; each is tried for real once (a build may list
+# h264_nvenc without an NVIDIA card), the first that encodes a frame wins for the session.
+H264_CHAIN = [
+    ("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-rc", "cbr", "-bf", "0", "-profile:v", "baseline"]),
+    ("h264_qsv", ["-c:v", "h264_qsv", "-preset", "veryfast", "-bf", "0", "-profile:v", "baseline", "-look_ahead", "0"]),
+    ("h264_amf", ["-c:v", "h264_amf", "-usage", "ultralowlatency", "-quality", "speed", "-bf", "0", "-profile:v", "baseline"]),
+    ("libx264", ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline", "-bf", "0",
+                 "-x264-params", "repeat-headers=1:aud=1:sliced-threads=1"]),
+]
+_h264_pick: dict = {}
+
+
+def h264_encoder(ffmpeg: str):
+    """(name, args) of the first H.264 encoder that really works on this machine, or None."""
+    if ffmpeg in _h264_pick:
+        return _h264_pick[ffmpeg]
     have = _encoders(ffmpeg)
-    if "avc1" in phone_codecs and ("libx264" in have or "h264_nvenc" in have):
+    chosen = None
+    for name, args in H264_CHAIN:
+        if name not in have:
+            continue
+        if name == "libx264" or _probe(ffmpeg, args):
+            chosen = (name, args)
+            break
+    _h264_pick[ffmpeg] = chosen
+    if chosen:
+        log.info("h264 encoder: %s", chosen[0])
+    return chosen
+
+
+def _probe(ffmpeg: str, venc: list) -> bool:
+    """Encode 2 black frames with this encoder; False if the hardware/driver is not there."""
+    try:
+        r = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=320x240:r=5", "-frames:v", "2",
+                            *venc, "-pix_fmt", "yuv420p", "-f", "null", "-"], capture_output=True, timeout=15, creationflags=CREATE_NO_WINDOW)
+        return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def pick_codec(phone_codecs: list, ffmpeg: str) -> str | None:
+    """h264 if both sides can, else vp8, else None."""
+    if "avc1" in phone_codecs and h264_encoder(ffmpeg):
         return "h264"
-    if "vp8" in phone_codecs and "libvpx" in have:
+    if "vp8" in phone_codecs and "libvpx" in _encoders(ffmpeg):
         return "vp8"
     return None
 
@@ -77,13 +116,15 @@ class Encoder:
         br = BITRATE.get(profile, BITRATE["normal"])
         gop = str(self.fps * 2)
         if codec == "h264":
-            if "h264_nvenc" in have and os.name == "nt":
-                venc = ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-rc", "cbr", "-b:v", br, "-g", gop, "-bf", "0", "-profile:v", "baseline"]
-            else:
-                venc = ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline", "-b:v", br,
-                        "-maxrate", br, "-bufsize", br, "-g", gop, "-bf", "0", "-x264-params", "repeat-headers=1:aud=1:sliced-threads=1"]
+            name, args = h264_encoder(ffmpeg) or H264_CHAIN[-1]
+            self.encoder_name = name
+            venc = [*args, "-b:v", br, "-maxrate", br, "-bufsize", br, "-g", gop]
+            if name != "libx264":
+                # hardware encoders do not emit AUD/repeat headers via x264-params: use the bitstream filter
+                venc += ["-bsf:v", "h264_metadata=aud=insert", "-flags", "-global_header"]
             fmt = ["-f", "h264"]
         else:
+            self.encoder_name = "libvpx"
             venc = ["-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", br, "-maxrate", br, "-bufsize", br,
                     "-g", gop, "-lag-in-frames", "0", "-error-resilient", "1", "-auto-alt-ref", "0"]
             fmt = ["-f", "ivf"]

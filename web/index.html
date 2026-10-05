@@ -278,7 +278,7 @@
       <button class="icon back" data-close="sysPage"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>
       <div class="tabs stabs" id="sysTabs">
         <button data-tab="state" class="on">Состояние</button><button data-tab="procs">Процессы</button><button data-tab="timers">Таймеры</button>
-        <button data-tab="devices">Устройства</button><button data-tab="dl">Загрузки</button><button data-tab="log">Журнал</button>
+        <button data-tab="devices">Устройства</button><button data-tab="dl">Загрузки</button><button data-tab="log">Журнал</button><button data-tab="diag">Диагностика</button>
       </div>
       <button id="sysRefresh" class="icon" title="Обновить">⟳</button>
     </header>
@@ -306,6 +306,13 @@
       <div class="tinput"><input id="dlUrl" type="url" placeholder="https://… — ПК скачает сам"><button id="dlStart" class="btn primary">Скачать</button></div>
       <p class="muted">Файлы попадают в папку загрузок на ПК; прогресс виден здесь.</p>
       <div class="flist" id="dlList"><div class="empty">Пока ничего</div></div>
+    </div>
+    <div class="pbody" id="sysDiag" hidden>
+      <div class="flist mono" id="diagList"><div class="empty">Запрашиваю…</div></div>
+      <h3>Последние ошибки</h3>
+      <div class="flist mono" id="diagErrors"><div class="empty">Ошибок не было</div></div>
+      <button id="diagReport" class="btn primary">Сохранить отчёт на ПК</button>
+      <p class="muted small">Отчёт (эти данные + журнал ПК) сохраняется в папку загрузок ПК, его удобно показать Claude Code.</p>
     </div>
     <div class="pbody" id="sysLog" hidden><div class="flist mono page-list" id="logList"><div class="empty">Загружаю…</div></div></div>
   </section>

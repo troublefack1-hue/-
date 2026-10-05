@@ -85,7 +85,7 @@ def load_config() -> dict:
 GUEST_ALLOW = {"ping", "ack", "profile", "cmd", "hello_phone", "monitor", "sys_get"}
 # agent -> phone message types a guest must NOT receive (terminal, clipboard, notifications,
 # window list, downloads). A guest sees the screen and power results, nothing private.
-GUEST_RECV_BLOCK = {"term_out", "term_exit", "term_open", "pc_clip", "pc_notify", "attention",
+GUEST_RECV_BLOCK = {"term_out", "term_exit", "term_open", "pc_clip", "pc_notify", "attention", "diag",
                     "sys", "procs", "timers", "downloads", "dl", "powerplans", "windows"}
 
 
@@ -896,6 +896,28 @@ class Hub:
             raise web.HTTPNotFound(headers=CORS)
         return web.Response(body=data, content_type="image/jpeg", headers={**CORS, "Cache-Control": "private, max-age=3600"})
 
+    async def report_handler(self, request: web.Request):
+        """Diagnostics from the phone + our event log -> a text file in the PC's upload folder."""
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        try:
+            body = await request.json()
+        except ValueError:
+            raise web.HTTPBadRequest(headers=CORS)
+        folder = Path(self.cfg.get("upload_dir") or ".") / "reports"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"pc-remote-report-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+        lines = ["PC Remote — отчёт диагностики", time.strftime("%Y-%m-%d %H:%M:%S"), "",
+                 "== Телефон ==", *(f"{k}: {v}" for k, v in (body.get("client") or {}).items()), "",
+                 "== Агент ПК ==", json.dumps(body.get("agent"), ensure_ascii=False, indent=1), "",
+                 "== Сеть relay ==", json.dumps(self.net, ensure_ascii=False), "",
+                 "== Ошибки на телефоне ==", *(f"{time.strftime('%H:%M:%S', time.localtime(e.get('ts', 0) / 1000))} {e.get('text')}" for e in (body.get("errors") or [])), "",
+                 "== Журнал ПК (последние 200) ==", *(f"{time.strftime('%d.%m %H:%M:%S', time.localtime(ts))} {text}" for ts, text in self.events),
+                 "", f"UA: {body.get('ua', '')}", f"prefs: {json.dumps(body.get('prefs'), ensure_ascii=False)}"]
+        path.write_text("\n".join(str(x) for x in lines), encoding="utf-8")
+        self.log_event(f"отчёт диагностики: {path.name}")
+        return web.json_response({"ok": True, "path": str(path)}, headers=CORS)
+
     async def ticket_handler(self, request: web.Request):
         """A short-lived, single-use token for one file, so a download can be a plain link that the
         phone's download manager streams to disk instead of the page holding it in memory."""
@@ -963,6 +985,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_get("/api/files", hub.files_handler)
     app.router.add_get("/api/file", hub.file_handler)
     app.router.add_post("/api/ticket", hub.ticket_handler)
+    app.router.add_post("/api/report", hub.report_handler)
     app.router.add_get("/api/thumb", hub.thumb_handler)
     app.router.add_post("/api/fs", hub.fs_handler)
     app.router.add_get("/api/phone", hub.phone_files_handler)

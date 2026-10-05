@@ -30,7 +30,7 @@ async def main():
         for sel in ["#menuBtn", "#settingsBtn"]: await page.click(sel); await page.wait_for_timeout(200)
         await page.click("#mouseMode [data-mouse=trackpad]"); await page.click("#settingsPage [data-close]")
         await page.click("#menuBtn"); await page.click("#sysBtn"); await page.wait_for_timeout(200)
-        for tab in ["procs", "timers", "devices", "dl", "log"]: await page.click(f"#sysTabs [data-tab={tab}]"); await page.wait_for_timeout(120)
+        for tab in ["procs", "timers", "devices", "dl", "log", "diag"]: await page.click(f"#sysTabs [data-tab={tab}]"); await page.wait_for_timeout(120)
         await page.click("#sysPage [data-close]")
         await page.click("#filesBtn"); await page.wait_for_timeout(300); await page.click("#filesPage [data-close]")
         await page.click("#termBtn"); await page.wait_for_timeout(200); await page.click("#termBack")

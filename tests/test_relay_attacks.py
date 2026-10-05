@@ -82,6 +82,8 @@ async def main():
         r = await s.get(U + f"/api/pair?code={code}"); ok1 = r.status == 200
         r = await s.get(U + f"/api/pair?code={code}"); report("pairing code single-use", ok1 and r.status == 403)
 
+        if phone.closed:   # the 12 000-request lockout test can starve the heartbeat: not what ATTACK 6 measures
+            phone = await ws_auth(s, "/ws/phone"); await phone.receive()
         # ---------- ATTACK 6: oversized / malformed events from a phone ----------
         bad = await ws_auth(s, "/ws/phone"); await bad.receive()
         await bad.send_str("x" * (relay.MAX_EVENT + 1000)); m = await bad.receive()

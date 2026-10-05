@@ -770,6 +770,8 @@ class Agent:
         self.codecs: list = []      # what the phone can decode: ["avc1", "vp8"]
         self.video_gen = 0          # bump to restart the encoder (new viewer -> key frame)
         self.enc = None
+        self.last_input = time.monotonic()   # activity-adaptive frame rate: idle hands -> fewer frames
+        self.reconnects = 0
         self.audio_source = "speakers"
         self._ws = None
 
@@ -820,6 +822,7 @@ class Agent:
                 raise
             except Exception as e:  # noqa: BLE001
                 log.warning("relay connection lost: %s", e)
+            self.reconnects += 1
             await asyncio.sleep(delay)
             delay = min(delay * 2, 60)
 
@@ -829,6 +832,9 @@ class Agent:
         loop = asyncio.get_running_loop()
         while True:
             fps = self.screen.profile["fps"]
+            # nobody touched the phone for 10 s: 5 fps is plenty (a video in the HD zone keeps its own rate)
+            if fps > 5 and time.monotonic() - self.last_input > 10 and not self.screen.zone:
+                fps = 5
             if self.viewers and time.monotonic() - last_probe > 5:
                 last_probe = time.monotonic()
                 try:
@@ -1191,6 +1197,16 @@ class Agent:
                     self.screen.set_profile(str(ev.get("name", "normal")))
                 elif t == "audio":
                     self.audio_on = bool(ev.get("on"))
+                if t in ("move", "btn", "click", "wheel", "key", "text", "combo", "clip"):
+                    self.last_input = time.monotonic()
+                if t == "diag_get":
+                    await ws.send_str(json.dumps({"t": "diag", "ffmpeg": bool(self.ffmpeg), "codec": self.enc.codec if self.enc else None,
+                                                  "encoder": getattr(self.enc, "encoder_name", None) if self.enc else None,
+                                                  "enc_fps": self.enc.fps if self.enc else None, "size": list(self.screen.size),
+                                                  "profile": self.screen.profile_name, "rtt_ms": int(self.rtt * 1000), "viewers": self.viewers,
+                                                  "zone": bool(self.screen.zone), "terms": len(self.terms), "monitor": self.screen.mon_index,
+                                                  "codecs": self.codecs, "reconnects": self.reconnects,
+                                                  "idle_s": int(time.monotonic() - self.last_input)}))
                 elif t == "move":
                     self.input.move(float(ev["x"]), float(ev["y"]))
                 elif t == "btn":
