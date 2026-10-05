@@ -186,6 +186,7 @@
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
         sendRules(); sendAudioSrc(); if (m.video) announceCodecs();
+        if (!$("termPanel").hidden && !terms.size) renderTermEmpty();   // project folders may have changed on the PC
       } else if (m.t === "cmd_result") {
         const okText = { open_url: "Ссылка открыта на ПК", print: "Отправлено на печать", kill: "Процесс завершён", monitor_off: "Экран выключен", monitor_on: "Экран включён", powerplan: "Схема питания изменена" };
         show(m.result === "ok" ? (okText[m.cmd] || "Команда отправлена на ПК") : "Ошибка: " + m.result);
