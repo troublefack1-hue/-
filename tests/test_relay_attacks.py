@@ -136,7 +136,8 @@ async def main():
         await drain(pc2)
         await bg.send_str(json.dumps({"t": "hello_phone", "model": "Service", "fs": False, "bg": True})); await asyncio.sleep(0.2)
         vmsgs = [json.loads(m) for m in await drain(pc2) if '"viewers"' in m]
-        report("background service -> viewers 0", vmsgs and vmsgs[-1]["n"] == 0, str(vmsgs[-1:]))
+        others = len([p for p in hub.phones if p not in hub.bg])   # the first test phone is still connected
+        report("background service is not counted as a viewer", len(hub.bg) == 1 and vmsgs and vmsgs[-1]["n"] == others, f"{vmsgs[-1:]} others={others}")
         await bg.send_str(json.dumps({"t": "profile", "name": "idle"})); await asyncio.sleep(0.2)
         report("background service's profile is not forwarded", not any('"profile"' in m for m in await drain(pc2)))
         await pc2.send_bytes(b"\x01FRAME"); await asyncio.sleep(0.2)
