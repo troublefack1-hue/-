@@ -79,8 +79,9 @@ def load_config() -> dict:
     home = Path.home()
     cfg.setdefault("projects", [])                                   # folders for the terminal panel
     cfg.setdefault("upload_dir", str(home / "Downloads" / "PC Remote"))  # files from the phone
-    cfg.setdefault("share_dirs", [str(home / "Downloads"), str(home / "Desktop"),
-                                  str(home / "Pictures"), str(home / "Documents")])
+    # the whole PC is browsable from the phone: every drive letter that exists
+    drives = [f"{d}:\\" for d in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.exists(f"{d}:\\")]
+    cfg.setdefault("share_dirs", drives or [str(home)])
     if not cfg.get("public_ip"):
         cfg["public_ip"] = public_ip()
         changed = True

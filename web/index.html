@@ -61,6 +61,7 @@
     <div class="status">
       <div id="state">подключение…</div>
       <div id="sub" class="sub"></div>
+      <div id="speed" class="speed"><span id="spdDown">↓ 0 Б/с</span> <span id="spdUp">↑ 0 Б/с</span></div>
     </div>
     <button id="audioBtn" class="icon" title="Звук с ПК" hidden>
       <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
@@ -263,7 +264,7 @@
       <p id="filesTitle">Файлы на ПК</p>
       <div class="frow">
         <button id="filesUp" class="btn">↑ Вверх</button>
-        <label class="btn primary" for="fileInput">⬆ Отправить на ПК</label>
+        <label class="btn primary" for="fileInput" id="uploadLbl">⬆ Отправить сюда</label>
         <input id="fileInput" type="file" multiple hidden>
       </div>
       <div id="filesList" class="flist"></div>
@@ -286,6 +287,17 @@ url: https://youtube.com
 shell: git pull"></textarea>
       <div class="actions"><button id="macroSave" class="btn primary">Сохранить</button><button id="macroClose" class="btn">Закрыть</button></div>
     </div>
+  </div>
+
+  <!-- image viewer (photos from the PC, screenshots) -->
+  <div id="imgView" hidden>
+    <header class="tbar">
+      <button id="imgBack" class="icon"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>
+      <div class="tabs"><span id="imgName" class="imgname"></span></div>
+      <button id="imgSave" class="btn primary">Сохранить</button>
+    </header>
+    <div id="imgStage"><img id="imgEl" alt=""></div>
+    <p id="imgHint" class="muted">щипок — масштаб · двойное касание — 100% / по размеру</p>
   </div>
 
   <!-- event log -->

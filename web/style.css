@@ -271,3 +271,20 @@ label.btn { display: block; }
 .flist.mono .it { font: 12px ui-monospace, Consolas, monospace; }
 .flist .empty { padding: 18px; text-align: center; color: var(--muted); }
 #macroRow button { color: var(--warn); }
+
+/* ===================== image viewer / thumbnails / speed ===================== */
+#imgView { position: fixed; inset: 0; z-index: 31; display: flex; flex-direction: column; background: #000; animation: fadeIn .2s; }
+#imgView .tbar { background: rgba(10,12,18,.85); }
+.imgname { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 4px; }
+#imgView .btn { padding: 8px 14px; }
+#imgStage { flex: 1; min-height: 0; overflow: hidden; position: relative; touch-action: none; display: grid; place-items: center; }
+#imgEl { max-width: 100%; max-height: 100%; transform-origin: 0 0; will-change: transform; user-select: none; -webkit-user-drag: none; }
+#imgHint { margin: 0; padding: 8px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); text-align: center; font-size: 12px; background: rgba(10,12,18,.85); }
+.flist.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; background: transparent; border: 0; }
+.flist.grid .th { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: var(--panel2); }
+.flist.grid .th img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.flist.grid .th span { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; padding: 3px 6px; background: #000a; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flist.grid .th.dir { display: grid; place-items: center; font-size: 34px; }
+.speed { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.speed span.hot { color: var(--ok); }

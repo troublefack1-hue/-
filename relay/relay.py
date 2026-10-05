@@ -383,6 +383,12 @@ class Hub:
         name = Path(request.headers.get("X-Filename", "file")).name or "file"
         name = "".join(c for c in name if c not in '<>:"/\\|?*')[:120] or "file"
         dest_dir = Path(self.cfg["upload_dir"])
+        # optional: drop the file into the folder currently open on the phone
+        want = request.headers.get("X-Dir", "")
+        if want:
+            d = self._safe_path(want)
+            if d is not None and d.is_dir():
+                dest_dir = d
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / name
         n = 1
@@ -424,6 +430,30 @@ class Hub:
             raise web.HTTPForbidden(headers=CORS)
         return web.json_response({"path": str(p), "items": items}, headers=CORS)
 
+    async def thumb_handler(self, request: web.Request):
+        """Small JPEG preview of an image for the files grid (needs Pillow)."""
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        p = self._safe_path(request.query.get("path", ""))
+        if p is None or not p.is_file():
+            raise web.HTTPForbidden(headers=CORS)
+        try:
+            from PIL import Image, ImageOps
+            import io
+            loop = asyncio.get_running_loop()
+
+            def make():
+                with Image.open(p) as im:
+                    im = ImageOps.exif_transpose(im)
+                    im.thumbnail((240, 240))
+                    buf = io.BytesIO()
+                    im.convert("RGB").save(buf, "JPEG", quality=70)
+                    return buf.getvalue()
+            data = await loop.run_in_executor(None, make)
+        except Exception:  # noqa: BLE001
+            raise web.HTTPNotFound(headers=CORS)
+        return web.Response(body=data, content_type="image/jpeg", headers={**CORS, "Cache-Control": "private, max-age=3600"})
+
     async def file_handler(self, request: web.Request):
         if not self.check_header(request):
             raise web.HTTPForbidden(headers=CORS)
@@ -431,7 +461,8 @@ class Hub:
         if p is None or not p.is_file():
             raise web.HTTPForbidden(headers=CORS)
         self.log_event(f"файл на телефон: {p.name}")
-        return web.FileResponse(p, headers={**CORS, "Content-Disposition": f'attachment; filename="{p.name}"'})
+        disp = "inline" if request.query.get("inline") else "attachment"
+        return web.FileResponse(p, headers={**CORS, "Content-Disposition": f'{disp}; filename="{p.name}"'})
 
 
 async def index(_request):
@@ -451,6 +482,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_post("/api/upload", hub.upload_handler)
     app.router.add_get("/api/files", hub.files_handler)
     app.router.add_get("/api/file", hub.file_handler)
+    app.router.add_get("/api/thumb", hub.thumb_handler)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", hub.options_handler)
     app.router.add_static("/static", WEB_DIR)
     if cfg["ca_cert"]:

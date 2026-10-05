@@ -256,14 +256,31 @@ def run_command(name: str) -> str:
 
 # ------------------------------------------------------------ terminal ---
 
-class Term:
-    """One console on the PC (PowerShell or the Claude Code CLI), streamed to the phone."""
+def find_git_bash() -> str | None:
+    """bash.exe from Git for Windows, if installed."""
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+        if base:
+            p = os.path.join(base, "Git", "bin", "bash.exe")
+            if os.path.isfile(p):
+                return p
+    return None
 
-    SHELLS = {
-        "shell": "powershell.exe -NoLogo",
-        "cmd": "cmd.exe",
-        "claude": "cmd.exe /c claude",          # Claude Code CLI must be on PATH
-    }
+
+class Term:
+    """One console on the PC (Git Bash, PowerShell, cmd or the Claude Code CLI), streamed to the phone."""
+
+    @staticmethod
+    def shells() -> dict:
+        bash = find_git_bash()
+        d = {}
+        if bash:
+            d["bash"] = f'"{bash}" --login -i'
+            d["claude"] = f'"{bash}" --login -i -c claude'   # Claude Code inside Git Bash
+        d["shell"] = "powershell.exe -NoLogo"
+        d["cmd"] = "cmd.exe"
+        d.setdefault("claude", "cmd.exe /c claude")        # Claude Code CLI must be on PATH
+        return d
 
     @staticmethod
     def available() -> bool:
@@ -275,7 +292,8 @@ class Term:
 
     def __init__(self, kind: str, cwd: str | None, cols: int, rows: int):
         import winpty
-        cmd = self.SHELLS.get(kind, self.SHELLS["shell"])
+        shells = self.shells()
+        cmd = shells.get(kind) or shells.get("bash") or shells["shell"]
         if cwd and not os.path.isdir(cwd):
             cwd = None
         self.proc = winpty.PtyProcess.spawn(cmd, cwd=cwd or os.path.expanduser("~"),
@@ -458,7 +476,8 @@ class Agent:
                             "t": "hello", "w": self.screen.size[0], "h": self.screen.size[1],
                             "host": os.environ.get("COMPUTERNAME", ""), "audio": self.audio.available(),
                             "monitors": len(self.screen.sct.monitors) - 1, "monitor": self.screen.mon_index,
-                            "term": Term.available(), "projects": self.cfg.get("projects", [])}))
+                            "term": Term.available(), "shells": list(Term.shells().keys()),
+                            "projects": self.cfg.get("projects", [])}))
                         tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws)),
                                  asyncio.create_task(self.watch_clipboard(ws))]
                         try:

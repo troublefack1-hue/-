@@ -36,7 +36,9 @@
     toast.textContent = msg; toast.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(() => (toast.hidden = true), ms);
   }
-  const send = (obj) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); };
+  let bytesIn = 0, bytesOut = 0;
+  const send = (obj) => { if (ws && ws.readyState === 1) { const j = JSON.stringify(obj); bytesOut += j.length; ws.send(j); } };
+  const fmtSpeed = (b) => b > 1e6 ? `${(b / 1e6).toFixed(1)} МБ/с` : b > 1024 ? `${Math.round(b / 1024)} КБ/с` : `${b} Б/с`;
   function setState(text, cls, sub = "") { stateEl.textContent = text; dot.className = "dot " + cls; subEl.textContent = sub; }
   // ---- preferences: accent colour, sounds, haptics
   const prefs = JSON.parse(localStorage.getItem("pcr_prefs") || "{}");
@@ -144,7 +146,8 @@
     ws.onopen = () => { ws.send(JSON.stringify({ t: "auth", token: secret })); lastMsgAt = Date.now(); };
     ws.onmessage = (e) => {
       lastMsgAt = Date.now();
-      if (e.data instanceof ArrayBuffer) { onBinary(e.data); return; }
+      if (e.data instanceof ArrayBuffer) { bytesIn += e.data.byteLength; onBinary(e.data); return; }
+      bytesIn += e.data.length;
       let m; try { m = JSON.parse(e.data); } catch { return; }
       if (!authed) { // first server message = we are in
         authed = true; backoff = 1000;
@@ -174,7 +177,7 @@
       } else if (m.t === "hello") {
         pcHost = `${m.host || "ПК"} · ${m.w}×${m.h}`; pcAudio = !!m.audio;
         pill(`${m.host || "ПК"} · ${m.w}×${m.h}`);
-        pcInfo = { term: !!m.term, projects: m.projects || [], monitors: m.monitors || 1, monitor: m.monitor || 1 };
+        pcInfo = { term: !!m.term, shells: m.shells || ["shell"], projects: m.projects || [], monitors: m.monitors || 1, monitor: m.monitor || 1 };
         $("termBtn").hidden = false;
         renderMonitors();
         $("audioBtn").hidden = !pcAudio;
@@ -262,11 +265,13 @@
   }
   function clearCanvas() { frameW = frameH = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.classList.remove("live"); }
   setInterval(() => {
+    $("spdDown").textContent = "↓ " + fmtSpeed(bytesIn); $("spdUp").textContent = "↑ " + fmtSpeed(bytesOut);
+    $("spdDown").classList.toggle("hot", bytesIn > 2048); $("spdUp").classList.toggle("hot", bytesOut > 2048);
+    bytesIn = 0; bytesOut = 0;
     if (pcOnline) {
       const parts = [pcHost];
       if (frames) parts.push(`${frames} к/с`);
       if (latency) parts.push(`${latency} мс`);
-      if (bytes) parts.push(bytes > 1e6 ? `${(bytes / 1e6).toFixed(1)} МБ/с` : `${Math.round(bytes / 1024)} КБ/с`);
       subEl.textContent = parts.join(" · ");
       signal.className = "signal " + (latency ? (latency < 120 ? "s3" : latency < 350 ? "s2" : "s1") : "s3");
       $("stats").textContent = `Профиль: ${{ eco: "эконом", normal: "обычный", hq: "максимум" }[profile]}` +
@@ -509,9 +514,8 @@
   $("shotBtn").onclick = () => {
     menu.hidden = true;
     if (!frameW) { show("Нет кадра"); return; }
-    const a = document.createElement("a");
-    a.download = `pc-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.png`;
-    a.href = canvas.toDataURL("image/png"); a.click(); show("Снимок сохранён"); sfx("ok");
+    canvas.toBlob((b) => openViewer(URL.createObjectURL(b), `pc-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.png`), "image/png");
+    sfx("ok");
   };
   function textDialog(title, placeholder, onOk) {
     $("textDlgTitle").textContent = title; $("textDlgInput").placeholder = placeholder; $("textDlgInput").value = "";
@@ -626,7 +630,9 @@
       const row = document.createElement("div");
       const name = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "домашняя папка";
       row.innerHTML = `<b>${name}</b><br>`;
-      for (const [kind, label] of [["claude", "Claude Code"], ["shell", "PowerShell"]]) {
+      const shells = pcInfo.shells || ["shell"];
+      const options = [["claude", "Claude Code"], ...(shells.includes("bash") ? [["bash", "Git Bash"]] : []), ["shell", "PowerShell"]];
+      for (const [kind, label] of options) {
         const b = document.createElement("button"); b.textContent = label; b.onclick = () => newTerm(kind, cwd); row.appendChild(b);
       }
       d.appendChild(row);
@@ -658,7 +664,7 @@
     const tabs = $("termTabs"); tabs.innerHTML = "";
     for (const [id, t] of terms) {
       const b = document.createElement("button"); b.classList.toggle("on", id === activeTerm);
-      const name = t.kind === "claude" ? "Claude" : t.kind === "cmd" ? "cmd" : "PowerShell";
+      const name = { claude: "Claude", bash: "Git Bash", cmd: "cmd" }[t.kind] || "PowerShell";
       b.innerHTML = `${name}${t.exited ? " <i>·</i>" : ""} <i data-close="${id}">✕</i>`;
       b.onclick = (e) => { if (e.target.dataset.close) closeTerm(e.target.dataset.close); else showTerm(id); };
       tabs.appendChild(b);
@@ -683,7 +689,7 @@
   });
   $("termGit").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-cmd]"); if (!b) return;
-    if (!activeTerm) { const p = pcInfo.projects[0]; newTerm("shell", p); setTimeout(() => termSend(b.dataset.cmd + "\r"), 1200); }
+    if (!activeTerm) { const p = pcInfo.projects[0]; newTerm((pcInfo.shells || []).includes("bash") ? "bash" : "shell", p); setTimeout(() => termSend(b.dataset.cmd + "\r"), 1500); }
     else termSend(b.dataset.cmd + "\r");
     buzz(8);
   });
@@ -710,45 +716,105 @@
   // Files: browse share folders, download to the phone, upload from the phone
   // ================================================================
   let filesPath = "";
+  const isImage = (n) => /\.(jpe?g|png|gif|webp|bmp|avif)$/i.test(n);
+  const thumbCache = new Map();
   async function loadFiles(path) {
     filesPath = path;
     const r = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
     if (!r.ok) { $("filesList").innerHTML = `<div class="empty">Нет доступа</div>`; return; }
     const j = await r.json(); const list = $("filesList"); list.innerHTML = "";
     $("filesTitle").textContent = j.path ? j.path.split(/[\\/]/).filter(Boolean).pop() : "Файлы на ПК";
+    $("uploadLbl").textContent = j.path ? "⬆ Отправить сюда" : "⬆ Отправить на ПК";
     if (!j.items.length) list.innerHTML = `<div class="empty">Пусто</div>`;
+    const images = j.items.filter((it) => !it.dir && isImage(it.name));
+    const grid = images.length >= 2 && images.length >= j.items.length / 2;   // a photo folder -> thumbnails
+    list.classList.toggle("grid", grid);
     for (const it of j.items) {
-      const d = document.createElement("div"); d.className = "it";
       const size = it.dir ? "" : it.size > 1e6 ? `${(it.size / 1e6).toFixed(1)} МБ` : `${Math.round(it.size / 1024)} КБ`;
-      d.innerHTML = `<i>${it.dir ? "📁" : "📄"}</i><span class="n">${it.name}</span><span class="s">${size}</span>`;
-      d.onclick = () => it.dir ? loadFiles(it.path) : downloadFile(it);
+      const d = document.createElement("div");
+      if (grid) {
+        d.className = "th" + (it.dir ? " dir" : "");
+        if (it.dir) d.textContent = "📁"; else if (isImage(it.name)) { const im = document.createElement("img"); loadThumb(im, it.path); d.appendChild(im); } else d.textContent = "📄";
+        const cap = document.createElement("span"); cap.textContent = it.name; d.appendChild(cap);
+      } else {
+        d.className = "it";
+        d.innerHTML = `<i>${it.dir ? "📁" : isImage(it.name) ? "🖼" : "📄"}</i><span class="n">${it.name}</span><span class="s">${size}</span>`;
+      }
+      d.onclick = () => it.dir ? loadFiles(it.path) : isImage(it.name) ? viewImage(it) : downloadFile(it);
       list.appendChild(d);
     }
+  }
+  async function loadThumb(img, path) {
+    if (thumbCache.has(path)) { img.src = thumbCache.get(path); return; }
+    try {
+      const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
+      if (!r.ok) return; const b = await r.blob(); bytesIn += b.size;
+      const u = URL.createObjectURL(b); thumbCache.set(path, u); img.src = u;
+    } catch {}
   }
   async function downloadFile(it) {
     show(`Скачиваю ${it.name}…`, 6000);
     const r = await fetch(`/api/file?path=${encodeURIComponent(it.path)}`, { headers: authHeaders() });
     if (!r.ok) return show("Не удалось скачать");
-    const blob = await r.blob(); const a = document.createElement("a");
+    const blob = await r.blob(); bytesIn += blob.size; const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = it.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     show("Сохранено на телефон"); sfx("ok");
   }
-  $("filesBtn").onclick = () => { menu.hidden = true; $("filesDlg").hidden = false; loadFiles(""); };
-  $("filesClose").onclick = () => ($("filesDlg").hidden = true);
-  $("filesUp").onclick = () => { const parts = filesPath.split(/[\\/]/); parts.pop(); loadFiles(parts.length > 1 ? parts.join("\\") : ""); };
+  // ---- image viewer: photos from the PC and screenshots, pinch to zoom
+  let imgBlobUrl = null, imgName = "", iz = 1, ix = 0, iy = 0, ipinch = null, ilastTap = 0;
+  function openViewer(url, name) {
+    imgBlobUrl = url; imgName = name; $("imgName").textContent = name; $("imgEl").src = url;
+    iz = 1; ix = iy = 0; applyImg(); $("imgView").hidden = false; $("filesDlg").hidden = true;
+  }
+  async function viewImage(it) {
+    show(`Открываю ${it.name}…`, 4000);
+    const r = await fetch(`/api/file?path=${encodeURIComponent(it.path)}&inline=1`, { headers: authHeaders() });
+    if (!r.ok) return show("Не удалось открыть");
+    const blob = await r.blob(); bytesIn += blob.size; toast.hidden = true;
+    openViewer(URL.createObjectURL(blob), it.name);
+  }
+  function applyImg() { $("imgEl").style.transform = `translate(${ix}px, ${iy}px) scale(${iz})`; }
+  const stage = $("imgStage");
+  stage.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) { const [a, b] = e.touches; ipinch = { d0: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), z0: iz, x0: ix, y0: iy, cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2 }; }
+    else if (e.touches.length === 1) { ipinch = { pan: true, x0: ix, y0: iy, cx: e.touches[0].clientX, cy: e.touches[0].clientY }; }
+  }, { passive: true });
+  stage.addEventListener("touchmove", (e) => {
+    if (!ipinch) return; e.preventDefault();
+    if (e.touches.length === 2 && !ipinch.pan) {
+      const [a, b] = e.touches; const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      iz = Math.min(8, Math.max(1, ipinch.z0 * d / ipinch.d0));
+      const cx = (a.clientX + b.clientX) / 2, cy = (a.clientY + b.clientY) / 2;
+      ix = ipinch.x0 + (cx - ipinch.cx); iy = ipinch.y0 + (cy - ipinch.cy); applyImg();
+    } else if (e.touches.length === 1 && ipinch.pan && iz > 1) {
+      ix = ipinch.x0 + (e.touches[0].clientX - ipinch.cx); iy = ipinch.y0 + (e.touches[0].clientY - ipinch.cy); applyImg();
+    }
+  }, { passive: false });
+  stage.addEventListener("touchend", (e) => {
+    if (e.touches.length === 0) {
+      const now = Date.now();
+      if (ipinch && ipinch.pan && now - ilastTap < 300) { iz = iz > 1 ? 1 : 2.5; ix = iy = 0; applyImg(); }
+      ilastTap = now; ipinch = null; if (iz === 1) { ix = iy = 0; applyImg(); }
+    }
+  }, { passive: true });
+  $("imgBack").onclick = () => { $("imgView").hidden = true; };
+  $("imgSave").onclick = () => { const a = document.createElement("a"); a.href = imgBlobUrl; a.download = imgName; a.click(); show("Сохранено на телефон"); sfx("ok"); };
   $("fileInput").onchange = async () => {
     const files = [...$("fileInput").files]; $("fileInput").value = "";
     for (const f of files) {
       $("filesProgress").textContent = `Отправляю ${f.name} (${Math.round(f.size / 1024)} КБ)…`;
       try {
-        const r = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "X-Filename": f.name }, body: f });
-        const j = await r.json();
-        $("filesProgress").textContent = j.ok ? `✓ ${j.name} на ПК (папка «PC Remote» в Загрузках)` : "Ошибка: " + j.error;
+        const r = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "X-Filename": f.name, ...(filesPath ? { "X-Dir": filesPath } : {}) }, body: f });
+        const j = await r.json(); bytesOut += f.size;
+        $("filesProgress").textContent = j.ok ? `✓ ${j.name} на ПК` : "Ошибка: " + j.error;
+        if (j.ok && filesPath) loadFiles(filesPath);
       } catch (e) { $("filesProgress").textContent = "Ошибка: " + e; }
     }
     sfx("ok");
   };
-
+  $("filesBtn").onclick = () => { menu.hidden = true; $("filesDlg").hidden = false; loadFiles(""); };
+  $("filesClose").onclick = () => ($("filesDlg").hidden = true);
+  $("filesUp").onclick = () => { const parts = filesPath.split(/[\\/]/); parts.pop(); loadFiles(parts.length > 1 ? parts.join("\\") : ""); };
   // ================================================================
   // Macros: named step lists, shown as buttons in the keyboard panel
   // ================================================================
@@ -768,7 +834,7 @@
         case "wait": await new Promise((r) => setTimeout(r, Math.min(5000, +arg || 300))); break;
         case "url": send({ t: "open_url", url: arg }); break;
         case "cmd": send({ t: "cmd", cmd: arg }); break;
-        case "shell": if (!activeTerm) { newTerm("shell", pcInfo.projects[0]); await new Promise((r) => setTimeout(r, 1200)); } termSend(arg + "\r"); break;
+        case "shell": if (!activeTerm) { newTerm((pcInfo.shells || []).includes("bash") ? "bash" : "shell", pcInfo.projects[0]); await new Promise((r) => setTimeout(r, 1500)); } termSend(arg + "\r"); break;
       }
       await new Promise((r) => setTimeout(r, 120));
     }
