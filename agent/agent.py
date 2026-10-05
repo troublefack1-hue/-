@@ -370,7 +370,8 @@ class Term:
         d = {}
         # Claude Code learns about the phone from PHONE.md (claude-phone.sh appends it to the system prompt)
         launcher = os.path.join(Term.BIN, "claude-phone.sh").replace("\\", "/") if Term.BIN else ""
-        claude = f"'{launcher}'" if launcher and os.path.isfile(launcher) else "claude"
+        # invoke via `sh` so it runs even though copyfile did not set the execute bit
+        claude = f"sh '{launcher}'" if launcher and os.path.isfile(launcher) else "claude"
         if bash:
             d["bash"] = f'"{bash}" --login -i'
             d["claude"] = f'"{bash}" --login -i -c "{claude}"'   # Claude Code inside Git Bash
