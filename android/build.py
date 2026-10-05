@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 Builds pcremote.apk without Gradle, using only the Android SDK command-line
 tools (build-tools + a platform) and a JDK.
 
@@ -32,7 +32,13 @@ def find_sdk(arg: str | None) -> Path:
 
 
 def newest(path: Path) -> Path:
-    items = sorted(p for p in path.iterdir() if p.is_dir())
+    """Highest stable version directory (build-tools/34.0.0, platforms/android-34); betas last resort."""
+    def key(p: Path):
+        name = p.name.replace("android-", "")
+        stable = "beta" not in name and "rc" not in name and "alpha" not in name
+        nums = [int(x) for x in name.replace("-", ".").split(".") if x.isdigit()]
+        return (stable, nums)
+    items = sorted((p for p in path.iterdir() if p.is_dir()), key=key)
     if not items:
         sys.exit(f"nothing in {path}")
     return items[-1]
@@ -79,8 +85,8 @@ def main():
     # 2. java -> classes
     sources = glob.glob(str(HERE / "src" / "**" / "*.java"), recursive=True) + \
         glob.glob(str(build / "gen" / "**" / "R.java"), recursive=True)
-    run(["javac", "-source", "11", "-target", "11", "-encoding", "UTF-8", "-nowarn",
-         "-bootclasspath", android_jar, "-d", build / "classes", *sources])
+    run(["javac", "-source", "11", "-target", "11", "-Xlint:-options", "-encoding", "UTF-8", "-nowarn",
+         "-classpath", android_jar, "-d", build / "classes", *sources])
 
     # 3. classes -> classes.dex
     classes = glob.glob(str(build / "classes" / "**" / "*.class"), recursive=True)
