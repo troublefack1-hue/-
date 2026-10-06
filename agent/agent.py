@@ -969,6 +969,7 @@ class Agent:
         # frames in flight, oldest first: (sent_at, size, alone). One ack settles one frame. A single timestamp used
         # to make a key frame's ack look like the next P-frame's, poisoning the latency and throughput (06.10.2026)
         self.inflight = collections.deque()
+        self.sent_log = collections.deque()   # (sent_at, bytes) of the last seconds: the rung's byte budget
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
         self.terms: dict[str, Term] = {}
         self.volume = Volume()
@@ -1071,9 +1072,10 @@ class Agent:
                 fps = 5
             # the link's rung caps the grab rate too: it used to cap only the encoder's declared rate, so a 12 KB/s
             # link got 10+ tiny frames a second, each with its own ack round trip and ~60 B of framing
-            lfps = LADDER[self.rung][1] if self.ffmpeg and self.codecs else None
-            if lfps:
-                fps = min(fps, lfps)
+            # the rung limits BYTES per second (token bucket in video_step), not frames: a cursor move is a 100-byte
+            # frame and may come 12 times a second even on 12 KB/s; a big change pays for itself with a pause
+            if self.rung >= 4 and self.ffmpeg and self.codecs:
+                fps = min(fps, 12)
             if self.viewers and time.monotonic() - last_probe > 5:
                 last_probe = time.monotonic()
                 try:
@@ -1184,6 +1186,7 @@ class Agent:
     def mark_sent(self, size: int):
         now = time.monotonic()
         self.inflight.append((now, size, not self.inflight))
+        self.sent_log.append((now, size))
         self.sent_at, self.sent_bytes = now, size
         self.ack.clear()
 
@@ -1364,6 +1367,14 @@ class Agent:
         if len(self.inflight) >= 2 and time.monotonic() - self.inflight[0][0] > 60.0:
             self.inflight.popleft()   # TCP loses no acks, only whole links (the relay drops those in ~30 s): a 60 s
                                       # safety net; 8 s was less than a 100 KB key frame needs on a 12 KB/s link
+        rung_now = self.refine_rung if self.refine else self.rung
+        rung_bps = _kbit(LADDER[rung_now][2]) * 1000 / 8 if LADDER[rung_now][2] else 0
+        if rung_bps:   # the rung's budget over the last 2 s: wait when it is spent (fresh picture > old frames)
+            while self.sent_log and self.sent_log[0][0] < now - 2.0:
+                self.sent_log.popleft()
+            if sum(n for _, n in self.sent_log) > 2 * rung_bps:
+                await asyncio.sleep(min(interval, 0.05))
+                return
         oldest = self.inflight[0] if self.inflight else None
         expect = (self.rtt_min + (oldest[1] / self.bw * 1.2 if self.bw else 1.2) + 0.2) if oldest else 0   # ack due
         if oldest and (len(self.inflight) >= 2 or time.monotonic() - oldest[0] < min(8.0, max(0.25, expect))):
