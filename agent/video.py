@@ -49,7 +49,9 @@ def find_ffmpeg() -> str | None:
 # H.264 encoders in order of preference; each is tried for real once (a build may list
 # h264_nvenc without an NVIDIA card), the first that encodes a frame wins for the session.
 H264_CHAIN = [
-    ("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-rc", "cbr", "-bf", "0", "-profile:v", "baseline"]),
+    # zerolatency + delay 0: the frame leaves NVENC at once instead of after its internal lookahead/output queue
+    ("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-rc", "cbr", "-bf", "0", "-profile:v", "baseline",
+                    "-zerolatency", "1", "-delay", "0"]),
     ("h264_qsv", ["-c:v", "h264_qsv", "-preset", "veryfast", "-bf", "0", "-profile:v", "baseline", "-look_ahead", "0"]),
     ("h264_amf", ["-c:v", "h264_amf", "-usage", "ultralowlatency", "-quality", "speed", "-bf", "0", "-profile:v", "baseline"]),
     ("libx264", ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline", "-bf", "0",

@@ -586,6 +586,7 @@ class Screen:
         self._dxgi_quiet_since = 0.0   # DXGI has said "unchanged" since then
         self._dxgi_checked_at = 0.0    # last GDI cross-check of a silent DXGI
         self._gdi_check_hash = b""     # that check's previous GDI frame
+        self._stale_hits = []          # times DXGI was found deaf (twice a minute -> GDI for a while)
         self.grab_ms = 0.0
         self._make_capture()
 
@@ -663,11 +664,20 @@ class Screen:
                         gh = hashlib.blake2b(g[0], digest_size=8).digest() if g else b""
                         prev, self._gdi_check_hash = self._gdi_check_hash, gh
                         if g and prev and gh != prev:
-                            log.warning("dxgi stale (screen changed, dxgi silent): rebuilding capture")
                             self.cap_switches += 1
-                            self._make_capture_locked(False)
-                            if self.cap.name == "dxgi":
-                                self.cap.last = g
+                            self._stale_hits = [t for t in self._stale_hits if now - t < 60] + [now]
+                            if len(self._stale_hits) >= 2:
+                                # rebuilt and still deaf: with the display off or in a fallback mode the desktop
+                                # duplication gets no updates at all (06.10.2026, 1024x768) — GDI for 5 minutes
+                                log.warning("dxgi deaf again: gdi for the next 5 minutes")
+                                self.cap_retry_at = now + 300
+                                self._stale_hits = []
+                                self._make_capture_locked(True)
+                            else:
+                                log.warning("dxgi stale (screen changed, dxgi silent): rebuilding capture")
+                                self._make_capture_locked(False)
+                                if self.cap.name == "dxgi":
+                                    self.cap.last = g
                             self._dxgi_quiet_since = 0.0
                             out = g
                     except Exception as e:  # noqa: BLE001
@@ -1218,10 +1228,15 @@ class Agent:
                 self.screen.set_width(want2)
             raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True))
         if raw is None:
+            # ffmpeg hands a frame out a little after it got it; we used to read only right after writing the next one,
+            # so on a still screen the last change sat in the encoder until something else moved — the phone was one
+            # frame behind and every pause felt like lag (06.10.2026). Ship whatever is ready on every tick.
+            if self.enc is not None and self.enc.alive:
+                await self._ship(ws, codec, 0.0)
             await asyncio.sleep(interval)
             return
         data, pix_fmt, size = raw
-        # the ladder: resolution, frame rate and bitrate follow the link; low rungs keep one frame in flight
+        # the ladder: resolution, frame rate and bitrate follow the link
         rung = max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0
         lw, lfps, lbr = LADDER[rung]
         tier = self.screen.profile_name
@@ -1229,9 +1244,13 @@ class Agent:
         bitrate = lbr if lbr and _kbit(lbr) < _kbit(video.BITRATE.get(tier, "2500k")) else None
         if self.refine:
             bitrate = None   # the profile's ceiling: a still frame may take its time
-        thin = rung >= TINY_RUNG - 1 and not self.refine
-        if thin and not self.ack.is_set() and time.monotonic() - self.sent_at < 1.5:
-            await asyncio.sleep(interval)   # the previous frame is still on the wire: don't pile up behind it
+        # One frame in flight, on every rung: the next picture is grabbed only after the phone decoded the previous one
+        # (or after a link-sized wait if an ack got lost). A narrow link then gets fewer frames, each of them fresh,
+        # instead of a queue of old ones seconds deep — and nothing is spent on frames nobody would see in time.
+        if not self.ack.is_set() and time.monotonic() - self.sent_at < min(1.5, max(0.25, 2 * self.rtt_min + 0.15)):
+            if self.enc is not None and self.enc.alive:
+                await self._ship(ws, codec, 0.0)
+            await asyncio.sleep(min(interval, 0.02))
             return
         key = (codec, size, enc_fps, tier, bitrate, self.video_gen, pix_fmt, self.refine)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
@@ -1249,9 +1268,15 @@ class Agent:
         if not await loop.run_in_executor(None, self.enc.write, data):
             self.video_close()
             return
+        await self._ship(ws, codec, min(0.25, interval))
+        await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
+
+    async def _ship(self, ws, codec: str, wait: float):
+        """Send every frame the encoder has finished; wait up to `wait` s for the first one."""
         cid = 1 if codec == "h264" else 2
         while True:
-            item = self.enc.get(0.0 if self.enc.out.qsize() else min(0.25, interval))
+            item = self.enc.get(0.0 if self.enc.out.qsize() else wait)
+            wait = 0.0
             if item is None:
                 break
             is_key, pts, payload = item
@@ -1266,7 +1291,6 @@ class Agent:
             await ws.send_bytes(video.FRAME_VIDEO_CODEC + bytes([1 if is_key else 0, cid]) + pts.to_bytes(8, "little") + payload)
             if not self.enc.out.qsize():
                 break
-        await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
 
     async def stream_zone(self, ws):
         """The HD zone goes beside the normal picture, at its own (higher) frame rate."""
