@@ -335,6 +335,7 @@
         pill(m.vpn ? "VPN на ПК включён" : "VPN на ПК выключен", m.vpn);
         pingSentAt = Date.now(); send({ t: "ping" });
         setTimeout(() => { if (Date.now() - lastMsgAt > 1400 && ws && ws.readyState === 1) { backoff = 300; ws.close(); } }, 1500);
+      } else if (m.t === "traffic") { renderTraffic(m);
       } else if (m.t === "cur") {   // the PC cursor moved: draw it now, the picture need not carry it
         pcCur = { x: m.x, y: m.y };
         if (trackpad.checked && t0 === null && !dragging) cur = pcCur;   // the pad resyncs while no finger is down
@@ -905,7 +906,7 @@
 
   // --------------------------------------------------------------- menu
   // pages (settings, files, terminal) and sheets (menu, power) + dock state
-  const pages = ["settingsPage", "filesPage", "termPanel", "sysPage"];
+  const pages = ["settingsPage", "filesPage", "termPanel", "sysPage", "trafficPage"];
   const hideSheets = () => { menu.hidden = true; for (const id of ["powerSheet", "winSheet", "zoneSheet"]) $(id).hidden = true; };
   function showPage(id) { for (const p of pages) $(p).hidden = p !== id; hideSheets(); dockState(id); }
   function closePages() { for (const p of pages) $(p).hidden = true; dockState("screen"); }
@@ -1628,6 +1629,31 @@
     document.querySelectorAll("#sysTabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
     clearInterval(sysTimer); sysRequest();
     if (tab === "state" || tab === "procs") sysTimer = setInterval(() => { if (!$("sysPage").hidden && !isHidden()) sysRequest(); }, tab === "state" ? 3000 : 5000);
+  }
+  // «Кто ест трафик»: asked once a second while the page is open, nothing otherwise
+  let trafTimer = null;
+  $("trafficBtn").onclick = () => {
+    showPage("trafficPage"); if (!pcOnline) show("ПК не в сети");
+    clearInterval(trafTimer); send({ t: "traffic_get" });
+    trafTimer = setInterval(() => { if ($("trafficPage").hidden) { clearInterval(trafTimer); return; } send({ t: "traffic_get" }); }, 1000);
+  };
+  const fmtB = (n) => n >= 1048576 ? (n / 1048576).toFixed(1).replace(".", ",") + " МБ" : n >= 1024 ? Math.round(n / 1024) + " КБ" : n + " Б";
+  const fmtR = (n) => n >= 1048576 ? (n / 1048576).toFixed(1).replace(".", ",") + " МБ/с" : (n / 1024).toFixed(n >= 10240 ? 0 : 1).replace(".", ",") + " КБ/с";
+  function renderTraffic(m) {
+    const since = Math.max(1, Math.round((Date.now() / 1000 - m.since) / 60));
+    $("trafSum").innerHTML = `Канал телефона: <b>${m.bw ? "≈ " + fmtR(m.bw) : "ещё не измерен"}</b> · Claude сейчас: <b>${fmtR(m.claude || 0)}</b><br>` +
+      `Остальным приложениям: <b>${m.others === null ? "без ограничений (Claude и экран не заняты)" : "не больше " + fmtR(m.others)}</b>` +
+      `<br><span class="muted">Счёт за ${since < 120 ? since + " мин" : Math.round(since / 60) + " ч"} с запуска PC Remote</span>`;
+    const top = Math.max(1, ...m.rows.map((r) => r.rate || 0));
+    $("trafList").innerHTML = m.rows.map((r) => {
+      const place = r.name === "Claude" ? "1-й в очереди" : r.name.startsWith("Мой ПК") ? "2-й в очереди" : "3-й, остаток";
+      const waiting = (r.queued || 0) > 0;
+      return `<div class="r${waiting ? " wait" : ""}"><div class="h"><span>${esc(r.name)}</span><span class="p">${place}</span></div>` +
+        `<div class="l">получает <b>${fmtR(r.rate || 0)}</b>` + (r.wants !== undefined ? ` · хочет <b>${fmtR(r.wants || 0)}</b>` : "") +
+        (waiting ? ` · <span class="q">ждёт у ПК ${fmtB(r.queued)}</span>` : "") + `</div>` +
+        `<div class="l">всего съело: <b>${fmtB((r.down || 0) + (r.up || 0))}</b> (к телефону ${fmtB(r.down || 0)}, от телефона ${fmtB(r.up || 0)})</div>` +
+        `<div class="bar" style="width:${Math.round(100 * (r.rate || 0) / top)}%"></div></div>`;
+    }).join("") || `<p class="muted small">Пока ничего: включите на телефоне «Интернет через ПК».</p>`;
   }
   $("sysBtn").onclick = () => { showPage("sysPage"); if (!pcOnline) show("ПК не в сети"); sysShowTab(guest ? "state" : sysTab); };
   document.querySelectorAll("#sysTabs button").forEach((b) => (b.onclick = () => { sysShowTab(b.dataset.tab); buzz(6); }));

@@ -19,6 +19,8 @@ A flow id is chosen by the phone (one per SOCKS UDP association); its PC-side so
 dropped after 60 s of silence.
 """
 import asyncio
+import collections
+import ipaddress
 import json
 import logging
 import socket
@@ -177,6 +179,7 @@ class Dns:
 
     def __init__(self, upstream: list, blocklist: BlockList):
         self.upstream = upstream or ["1.1.1.1", "8.8.8.8"]
+        self.on_reply = None   # (name, reply) -> None: NetProxy hooks Traffic.learn here
         self.block = blocklist
         self.queries = 0
         self.blocked = 0
@@ -205,8 +208,12 @@ class Dns:
             c = self.cache.get(key)
             if c and c[0] > time.monotonic():
                 self.cached += 1
+                if self.on_reply is not None:
+                    self.on_reply(key[0], pkt[:2] + c[1])
                 return pkt[:2] + c[1]
         reply = await self.race(pkt)
+        if reply is not None and key is not None and self.on_reply is not None:
+            self.on_reply(key[0], reply)   # which app is behind an address (Traffic.learn)
         if reply is not None and key is not None and len(reply) >= 12 and (reply[3] & 0x0F) in (0, 3):   # NOERROR / NXDOMAIN
             ttl = dns_min_ttl(reply)
             ttl = self.TTL_NEG if ttl is None else max(self.TTL_MIN, min(self.TTL_MAX, ttl))
@@ -265,6 +272,201 @@ class Dns:
                 "dns_upstreams": [{"server": u, "ms": round(self.latency[u]) if u in self.latency else None, "wins": self.wins.get(u, 0)} for u in self.upstream]}
 
 
+def dns_addresses(pkt: bytes) -> list:
+    """Every A/AAAA address in a DNS reply (CNAME chains included): the IPs the asking app will connect to."""
+    out = []
+    try:
+        qd, an = struct.unpack("!HH", pkt[4:8])
+        i = 12
+
+        def skip_name(i):
+            while True:
+                n = pkt[i]
+                if n == 0:
+                    return i + 1
+                if n & 0xC0 == 0xC0:
+                    return i + 2
+                i += 1 + n
+        for _ in range(qd):
+            i = skip_name(i) + 4
+        for _ in range(an):
+            i = skip_name(i)
+            rtype, _c, _ttl, rdlen = struct.unpack("!HHIH", pkt[i:i + 10])
+            i += 10
+            if rtype == 1 and rdlen == 4:
+                out.append(socket.inet_ntoa(pkt[i:i + 4]))
+            elif rtype == 28 and rdlen == 16:
+                out.append(socket.inet_ntop(socket.AF_INET6, pkt[i:i + 16]))
+            i += rdlen
+    except (IndexError, struct.error, OSError):
+        pass
+    return out
+
+
+STREAM_QUEUE = 256 * 1024       # read ahead per connection at the PC
+QUEUE_TOTAL = 16 * 1024 * 1024  # and for all of them together (memory)
+
+# Which app a connection belongs to, by the name it asked for (the proxy only sees names and addresses, not apps)
+CLAUDE = ("anthropic.com", "claude.ai", "claude.com", "claudeusercontent.com")
+APPS = [
+    (CLAUDE, "Claude"),
+    (("telegram.org", "t.me", "telegram.me", "tdesktop.com", "telesco.pe", "cdn-telegram.org"), "Telegram"),
+    (("googlevideo.com", "youtube.com", "ytimg.com", "youtubei.googleapis.com", "ggpht.com", "youtube-nocookie.com"), "YouTube"),
+    (("whatsapp.net", "whatsapp.com"), "WhatsApp"),
+    (("cdninstagram.com", "instagram.com", "fbcdn.net", "facebook.com", "fbsbx.com"), "Instagram / Facebook"),
+    (("vk.com", "vk.ru", "userapi.com", "vkuser.net", "vk-cdn.net", "vkuseraudio.net", "vkuservideo.net", "mycdn.me", "ok.ru"), "VK / OK"),
+    (("tiktokcdn.com", "tiktok.com", "tiktokv.com", "byteoversea.com", "ibytedtos.com", "tiktokcdn-eu.com"), "TikTok"),
+    (("play.googleapis.com", "android.clients.google.com", "gvt1.com", "play-fe.googleapis.com", "play-lh.googleusercontent.com"), "Google Play"),
+    (("googleapis.com", "gstatic.com", "google.com", "googleusercontent.com", "gvt2.com", "1e100.net", "google.ru"), "Google"),
+    (("yandex.ru", "yandex.net", "yandex.com", "yastatic.net", "ya.ru", "yandex.st"), "Яндекс"),
+    (("miui.com", "xiaomi.com", "xiaomi.net", "mi.com", "mi-img.com"), "Xiaomi (система)"),
+    (("discord.com", "discord.gg", "discordapp.com", "discordapp.net", "discord.media"), "Discord"),
+    (("spotify.com", "scdn.co", "spotifycdn.com"), "Spotify"),
+    (("twitch.tv", "ttvnw.net", "jtvnw.net"), "Twitch"),
+    (("openai.com", "chatgpt.com", "oaiusercontent.com"), "ChatGPT"),
+    (("avito.ru", "avito.st"), "Авито"),
+]
+TELEGRAM_NETS = [ipaddress.ip_network(n) for n in ("149.154.160.0/20", "91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22",
+                                                    "91.108.16.0/22", "91.108.20.0/22", "91.108.56.0/22", "95.161.64.0/20",
+                                                    "185.76.151.0/24", "2001:b28:f23d::/48", "2001:b28:f23f::/48", "2001:67c:4e8::/48")]
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+class Meter:
+    __slots__ = ("down", "up", "win", "win_at", "rate")
+
+    def __init__(self):
+        self.down = self.up = self.win = 0
+        self.win_at = time.monotonic()
+        self.rate = 0.0
+
+    def add(self, down: int, up: int):
+        now = time.monotonic()
+        self.down += down; self.up += up; self.win += down + up
+        if now - self.win_at >= 1.0:
+            self.rate = self.win / (now - self.win_at)
+            self.win, self.win_at = 0, now
+
+    def now_rate(self) -> float:
+        return 0.0 if time.monotonic() - self.win_at > 2.5 else self.rate
+
+
+class Traffic:
+    """Names behind addresses, eaten bytes per app, and the queue for the phone's downlink.
+
+    Priority (owner): Claude — always, unshaped; the PC screen — next (the agent yields to Claude, see "prio");
+    every other app — what is left of the link while Claude or the screen is busy, else nothing (it waits: its server
+    is simply not read, TCP holds it back; UDP datagrams over the budget are dropped, QUIC slows down by itself)."""
+
+    def __init__(self, hub):
+        self.hub = hub
+        self.names: "collections.OrderedDict[str, str]" = collections.OrderedDict()   # ip -> name the phone asked for
+        self.meters: dict = {}            # label -> Meter, since the PC Remote start (memory only, nothing on disk)
+        self.asking: dict = {}            # label -> Meter of bytes the app's servers sent us (what it asks for)
+        self.queued: dict = {}            # label -> bytes waiting at the PC for the phone's link
+        self.queued_total = 0
+        self.since = time.time()
+        self.tokens = 0.0
+        self.tokens_at = time.monotonic()
+
+    def learn(self, name: str, reply: bytes):
+        for ip in dns_addresses(reply):
+            self.names.pop(ip, None)
+            self.names[ip] = name.lower().rstrip(".")
+            if len(self.names) > 8192:
+                self.names.popitem(last=False)
+
+    def label(self, host: str) -> str:
+        h = host.lower().rstrip(".")
+        name = self.names.get(h, h) if _is_ip(h) else h
+        if _is_ip(name):
+            try:
+                a = ipaddress.ip_address(name)
+                if any(a in n for n in TELEGRAM_NETS):
+                    return "Telegram"
+            except ValueError:
+                pass
+            return "Без имени (только адрес)"
+        for suffixes, lab in APPS:
+            if any(name == s or name.endswith("." + s) for s in suffixes):
+                return lab
+        parts = name.split(".")
+        return ".".join(parts[-3:] if len(parts) >= 3 and len(parts[-2]) <= 3 and parts[-2] in ("com", "co", "org", "net") else parts[-2:])
+
+    def count(self, label: str, down: int, up: int):
+        m = self.meters.get(label)
+        if m is None:
+            m = self.meters[label] = Meter()
+        m.add(down, up)
+
+    def wants(self, label: str, n: int, queued_only: bool = False):
+        """n bytes came from the app's server into its queue (n < 0: left the queue towards the phone)."""
+        self.queued[label] = self.queued.get(label, 0) + n
+        self.queued_total += n
+        if not queued_only and n > 0:
+            m = self.asking.get(label)
+            if m is None:
+                m = self.asking[label] = Meter()
+            m.add(n, 0)
+
+    def claude_rate(self) -> float:
+        m = self.meters.get("Claude")
+        return m.now_rate() if m else 0.0
+
+    def budget(self):
+        """Bytes/s the other apps may take now, or None = unlimited (nobody with priority is busy)."""
+        claude = self.claude_rate()
+        screen = self.hub.screen_rate() if hasattr(self.hub, "screen_rate") else 0.0
+        watching = getattr(self.hub, "screen_watching", lambda: False)()
+        if claude < 300 and not watching:
+            return None
+        bw = getattr(self.hub, "phone_bw", 0.0) or 0.0
+        if not bw:
+            return 2000.0                                   # link unknown: a trickle, the priority apps first
+        return max(1000.0, bw * 0.9 - claude - screen)
+
+    def _refill(self, rate: float):
+        now = time.monotonic()
+        self.tokens = min(max(4096.0, rate * 0.5), self.tokens + (now - self.tokens_at) * rate)
+        self.tokens_at = now
+
+    async def take(self, n: int):
+        """Wait until an other-app chunk of n bytes may go to the phone."""
+        while True:
+            rate = self.budget()
+            if rate is None:
+                return
+            self._refill(rate)
+            if self.tokens >= n or self.tokens >= max(4096.0, rate * 0.5):
+                self.tokens -= n
+                return
+            await asyncio.sleep(min(0.25, (n - self.tokens) / rate))
+
+    def may_send_udp(self, n: int) -> bool:
+        rate = self.budget()
+        if rate is None:
+            return True
+        self._refill(rate)
+        if self.tokens >= n:
+            self.tokens -= n
+            return True
+        return False
+
+    def rows(self) -> list:
+        out = [{"name": k, "down": m.down, "up": m.up, "rate": round(m.now_rate()),
+                "wants": round(self.asking[k].now_rate()) if k in self.asking else 0, "queued": max(0, self.queued.get(k, 0)),
+                "prio": 1 if k == "Claude" else 3} for k, m in self.meters.items()]
+        out.sort(key=lambda r: -(r["down"] + r["up"]))
+        return out[:40]
+
+
 class _OneShot(asyncio.DatagramProtocol):
     def __init__(self, fut):
         self.fut = fut
@@ -281,6 +483,9 @@ class _OneShot(asyncio.DatagramProtocol):
 # -------------------------------------------------------------- proxy ---
 
 class _UdpFlow(asyncio.DatagramProtocol):
+    label = "?"
+    prio = False
+
     def __init__(self, session, fid: int):
         self.session, self.fid = session, fid
         self.transport = None
@@ -290,6 +495,10 @@ class _UdpFlow(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data, addr):
+        tr = self.session.proxy.traffic
+        if not self.prio and not tr.may_send_udp(len(data)):
+            return   # an other app over its share while Claude or the screen is busy: dropped, QUIC backs off
+        tr.count(self.label, len(data), 0)
         self.last = time.monotonic()
         self.session.udp_bytes += len(data)
         asyncio.ensure_future(self.session.send_udp(self.fid, addr[0], addr[1], data))
@@ -338,6 +547,8 @@ class Session:
                 try:
                     st[0].write(frame[5:])
                     self.tcp_bytes += len(frame) - 5
+                    if len(st) > 2:
+                        self.proxy.traffic.count(st[2], 0, len(frame) - 5)
                     await st[0].drain()
                 except (ConnectionError, OSError):
                     await self.close_stream(sid, tell=True)
@@ -366,17 +577,66 @@ class Session:
             writer.close()
             return
         st[0] = writer
+        tr = self.proxy.traffic
+        label = tr.label(host)
+        prio = label == "Claude"
+        st.append(label)
         await self.send(bytes([OPENED]) + struct.pack("!I", sid))
+        # The server's bytes are read ahead into a queue here (the PC's own link is fast) and go to the phone in the
+        # owner's order: Claude at once, the others from what is left. The queue shows what each app asks for (read
+        # rate) against what it gets (sent rate), and how much of it waits at the PC.
+        q = collections.deque()
+        have, room = asyncio.Event(), asyncio.Event()
+        room.set()
+        held = [0, False]          # bytes queued for this stream, server finished
+
+        async def pump():
+            try:
+                while True:
+                    await room.wait()
+                    while tr.queued_total > QUEUE_TOTAL:
+                        await asyncio.sleep(0.05)
+                    data = await reader.read(CHUNK)
+                    if not data:
+                        break
+                    q.append(data); held[0] += len(data)
+                    tr.wants(label, len(data))
+                    if held[0] >= STREAM_QUEUE:
+                        room.clear()
+                    have.set()
+            except (ConnectionError, OSError, asyncio.CancelledError):
+                pass
+            finally:
+                held[1] = True
+                have.set()
+        pumper = asyncio.ensure_future(pump())
         try:
             while True:
-                data = await reader.read(CHUNK)
-                if not data:
-                    break
+                if not q:
+                    if held[1]:
+                        break
+                    have.clear()
+                    await have.wait()
+                    continue
+                data = q.popleft()
+                piece = len(data) if prio or tr.budget() is None else 4096   # fine-grained while others wait
+                if len(data) > piece:
+                    q.appendleft(data[piece:])
+                    data = data[:piece]
+                if not prio:
+                    await tr.take(len(data))
+                held[0] -= len(data); tr.wants(label, -len(data), queued_only=True)
+                if held[0] < STREAM_QUEUE:
+                    room.set()
                 self.tcp_bytes += len(data)
+                tr.count(label, len(data), 0)
                 await self.send(bytes([DATA]) + struct.pack("!I", sid) + data)
         except (ConnectionError, OSError, asyncio.CancelledError):
             pass
         finally:
+            pumper.cancel()
+            tr.wants(label, -held[0], queued_only=True)
+            held[0] = 0
             if self.streams.pop(sid, None) is not None:
                 writer.close()
                 await self.send(bytes([CLOSE]) + struct.pack("!I", sid))
@@ -385,7 +645,7 @@ class Session:
         st = self.streams.pop(sid, None)
         if not st:
             return
-        writer, task = st
+        writer, task = st[0], st[1]
         if writer is not None:
             writer.close()
         elif task is not None and not task.done():
@@ -407,6 +667,8 @@ class Session:
                 return
             loop = asyncio.get_running_loop()
             flow = _UdpFlow(self, fid)
+            flow.label = self.proxy.traffic.label(host)
+            flow.prio = flow.label == "Claude"
             try:
                 await loop.create_datagram_endpoint(lambda: flow, family=socket.AF_INET, local_addr=("0.0.0.0", 0))
             except OSError as e:
@@ -415,6 +677,7 @@ class Session:
             self.udp[fid] = flow
         flow.last = time.monotonic()
         self.udp_bytes += len(payload)
+        self.proxy.traffic.count(flow.label, 0, len(payload))
         try:
             flow.transport.sendto(payload, (host, port))
         except (OSError, ValueError):
@@ -444,6 +707,8 @@ class NetProxy:
         self.block = BlockList(folder, cfg.get("net_block_lists") or DEFAULT_LISTS, bool(cfg.get("net_block_ads", True)))
         self.block.custom = {k.lower(): v for k, v in (cfg.get("net_hosts") or {}).items()}
         self.dns = Dns(cfg.get("dns_upstream") or [], self.block)
+        self.traffic = Traffic(hub)
+        self.dns.on_reply = self.traffic.learn
         self.sessions: set = set()
         self.started = 0.0
 

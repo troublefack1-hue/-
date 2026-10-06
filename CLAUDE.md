@@ -40,7 +40,8 @@ python tests/test_relay_attacks.py      # 38 проверок relay, включ�
 python tests/test_phone_cli.py          # файлы телефона: relay + fake_phone + tools/phone.py
 python tests/test_web_smoke.py          # веб-клиент в настоящем браузере (нужен playwright + chromium)
 python tests/test_web_trackpad.py       # тачпад: медленно/быстро, перетаскивание, правый клик двумя пальцами (касания через CDP)
-python tests/test_netproxy.py           # «Интернет через ПК», серверная часть: 17 проверок
+python tests/test_netproxy.py           # «Интернет через ПК», серверная часть: 21 проверка
+python tests/test_traffic_priority.py   # очередь канала телефона (Claude первым, остальным остаток) и таблица «Кто ест трафик»
 python tests/test_files_jvm.py          # «Проводник»: ядро Fs.java на JVM (20 проверок)
 python tests/test_files_locs_jvm.py     # «Проводник»: zip как папка, фильтры поиска, переименование по шаблону (JVM)
 python tests/test_netmux_jvm.py         # телефонная часть (NetMux + SOCKS5) на обычной JVM против relay по TLS; нужны javac/java и curl
@@ -101,6 +102,12 @@ node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"
   (Lanczos-2 с деринг-клампом + RCAS, SHARP 0.75; резкость краёв +25 % без потери PSNR), зум рисуется в увеличенный
   `buf` (раньше детали области терялись в холсте 480 px). Кодеки на одном кадре 1080 px различаются на 5–15 %:
   менять кодек ради рабочего стола смысла мало. Уведомление «Телефон подключился» — только для гостя.
+
+- 06.10.2026 вечер, очередь канала телефона (`netproxy.Traffic`): приложение узнаётся по имени, которое оно спросило
+  у DNS ПК (`dns_addresses` → `Traffic.learn`), или по сетям Telegram; Claude (anthropic.com, claude.ai, claude.com) —
+  без ограничений, экран — уступает Claude (агент получает `{"t":"prio"}`, relay — `{"t":"linkbw"}`), остальным —
+  `bw·0,9 − Claude − экран`, данные читаются заранее в очередь у ПК (256 КБ на соединение, 16 МБ всего), UDP сверх
+  доли отбрасывается. Таблица «Кто ест трафик» (Ещё → Трафик, `traffic_get`): получает / хочет / ждёт у ПК / всего.
 
 ## Что ещё НЕ проверялось на живом железе (проверить в первую очередь)
 

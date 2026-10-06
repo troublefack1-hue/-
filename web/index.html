@@ -143,6 +143,7 @@
         <button id="winBtn"><i>🗗</i>Окна</button>
         <button id="zoneBtn"><i>🎬</i>HD-зона</button>
         <button id="sysBtn"><i>🖥</i>Система</button>
+        <button id="trafficBtn"><i>📶</i>Трафик</button>
       </div>
       <p class="sec">Обмен</p>
       <div class="grid tools">
@@ -290,6 +291,18 @@
   </section>
 
   <!-- system page: state / processes / timers / devices / downloads / log -->
+  <section id="trafficPage" class="page" hidden>
+    <header class="tbar"><button class="icon back" data-close="trafficPage"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button><h2>Кто ест трафик</h2></header>
+    <div class="pbody">
+      <p class="small" id="trafSum">Жду данные от ПК…</p>
+      <div id="trafList" class="traf"></div>
+      <h3>Как устроена очередь</h3>
+      <p class="muted small">1. <b>Claude</b> — всегда первым и без ограничений.<br>2. <b>Экран «Мой ПК»</b> — вторым: пока Claude качает, кадры уступают ему канал (но не меньше пятой части).<br>3. <b>Все остальные</b> получают только то, что осталось от канала. Если не осталось — ждут: ПК заранее забирает их данные из интернета по своему проводу и держит у себя («ждёт у ПК»), чтобы отдать сразу, как канал освободится. Когда ни Claude, ни экран не заняты, ограничений нет.</p>
+      <p class="muted small"><b>Получает</b> — сколько в секунду уходит приложению на телефон. <b>Хочет</b> — сколько в секунду ему приходит из интернета на ПК. Если «хочет» больше «получает», приложение упёрлось в очередь.</p>
+      <p class="muted small">Сколько осталось до конца загрузки целиком, ПК не видит: почти весь трафик зашифрован (HTTPS), и размер файла внутри не виден. Видно только то, что уже пришло на ПК и ждёт отправки на телефон.</p>
+      <p class="muted small">Всё считается на самом ПК, без внешних сервисов. Приложения видны, пока на телефоне включён «Интернет через ПК»: кто ходит в сеть мимо него, ПК не видит и придержать не может. Счётчики — с запуска PC Remote, на диск ничего не пишется.</p>
+    </div>
+  </section>
   <section id="sysPage" class="page" hidden>
     <header class="tbar">
       <button class="icon back" data-close="sysPage"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button>

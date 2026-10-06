@@ -209,6 +209,15 @@ label.row span { flex: 1; }
 .seg .lbl { flex: 1; padding-left: 8px; }
 .seg button { padding: 8px 12px; border-radius: 10px; font-size: 13px; background: transparent; border-color: transparent; }
 .seg button.on { background: var(--accent); color: #fff; }
+/* «Кто ест трафик»: one card per app */
+.traf { display: flex; flex-direction: column; gap: 6px; }
+.traf .r { background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r); padding: 9px 12px; }
+.traf .r .h { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+.traf .r .h .p { font-weight: 400; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.traf .r .l { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.traf .r .l b { color: var(--fg, #fff); font-weight: 600; }
+.traf .r .bar { height: 4px; border-radius: 2px; background: var(--accent); margin-top: 6px; opacity: .85; transition: width .4s; }
+.traf .r.wait .l .q { color: #f0b429; }
 /* a choice of four with a title above: an even 2x2 grid instead of buttons wrapping wherever they happen to */
 .seg.stack { display: grid; grid-template-columns: 1fr 1fr; }
 .seg.stack .lbl { grid-column: 1 / -1; padding: 4px 8px 2px; }

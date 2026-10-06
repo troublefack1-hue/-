@@ -987,6 +987,9 @@ class Agent:
         self.link_kind = ""                   # "wifi" / "cellular" / "" — what the page says its network is
         self.phone_maxw = 1920                # the widest H.264 picture the phone's decoder takes (the page probes it)
         self.pq_boost = 0                     # the page's picture quality choice (PQ_BOOST)
+        self.claude_bps = 0.0                 # Claude's traffic through «Интернет через ПК» (relay "prio"): it goes first
+        self._bw_told_at = 0.0
+        self.outbox: list = []                # small messages for the relay, sent by the stream loop
         self.bw_mem: dict = {}                # link kind -> (bytes/s, monotonic time): the last measurement of each
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
         self.terms: dict[str, Term] = {}
@@ -1210,6 +1213,10 @@ class Agent:
                                       # safety net; 8 s was less than a 100 KB key frame needs on a 12 KB/s link
         oldest = self.inflight[0] if self.inflight else None
         ceiling = CEILING.get(self.screen.profile_name)
+        if self.claude_bps > 300 and self.bw:
+            # the owner's order: Claude first — the picture takes what Claude leaves (at least a fifth of the link)
+            share = max(self.bw * 0.2, self.bw * 0.9 - self.claude_bps)
+            ceiling = min(ceiling, share) if ceiling else share
         if not oldest and ceiling and self.bw > ceiling and self.sent_at:
             # the network is faster than the owner's traffic ceiling: the next frame waits until the last one, spread
             # over the ceiling, would have finished (on a link slower than the ceiling the network paces by itself)
@@ -1275,6 +1282,9 @@ class Agent:
             self.bw_at = time.monotonic()
             if self.link_kind:
                 self.bw_mem[self.link_kind] = (self.bw, self.bw_at)
+            if self.bw_at - self._bw_told_at > 2:   # the relay's tunnel queue works with this figure
+                self._bw_told_at = self.bw_at
+                self.outbox.append(json.dumps({"t": "linkbw", "bw": round(self.bw)}))
 
     @staticmethod
     def _afford(bw: float) -> int:
@@ -1467,6 +1477,8 @@ class Agent:
 
     async def _ship(self, ws, codec: str, wait: float):
         """Send every frame the encoder has finished; wait up to `wait` s for the first one."""
+        while self.outbox:   # small notes for the relay (the phone link figure), from code that cannot await
+            await ws.send_str(self.outbox.pop(0))
         cid = getattr(self.enc, "cid", 1 if codec == "h264" else 2)
         region = getattr(self.enc, "region", None)
         head = b""
@@ -1782,6 +1794,8 @@ class Agent:
                         self.screen.set_width(self.screen.profile["max_width"])   # JPEG path
                         self._vid_w = None                                        # video path: re-apply on the next frame
                     self.set_view_rect(ev.get("rect"))
+                elif t == "prio":
+                    self.claude_bps = float(ev.get("claude") or 0)
                 elif t == "pq":
                     self.pq_boost = PQ_BOOST.get(str(ev.get("level")), 0)
                 elif t == "profile":

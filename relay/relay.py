@@ -316,6 +316,9 @@ class Hub:
         # `phone` CLI asks /api/phone, we forward to that phone and wait for its answer
         self.fs_phone = None
         self.bg: set = set()          # the phones' background services: no picture/sound, no viewer count
+        self.screen_meter = netproxy.Meter()   # picture and sound to the phones (their share of the link)
+        self.phone_bw = 0.0                     # the phone's link, bytes/s, as the agent measures it ("linkbw")
+        self._claude_told = 0
         self.profiles: dict = {}      # phone ws -> its last {"t":"profile"} text, newest last; re-sent when a bg link took over
         self.tickets: dict = {}       # one-time download tokens: token -> (path, expires); lets the phone stream big files
         self.pfs_pending: dict = {}   # id -> {"fut": Future, "chunks": asyncio.Queue | None}
@@ -423,7 +426,34 @@ class Hub:
                 "addrs": local_ipv4s(),
                 "ports": [self.cfg.get("tls_port")] + [int(p) for p in self.cfg.get("extra_ports") or [] if int(p) != self.cfg.get("tls_port")]}
 
+    def screen_rate(self) -> float:
+        """Bytes/s of picture and sound going to the phones (the screen's share of the link)."""
+        return self.screen_meter.now_rate()
+
+    def screen_watching(self) -> bool:
+        """Somebody looks at the PC screen right now (a viewer and picture bytes in the last seconds)."""
+        return any(ws not in self.bg for ws in self.phones) and self.screen_meter.now_rate() > 0
+
+    async def tell_pc_priority(self):
+        """Claude's share of the phone's link, to the agent: the picture yields to it (owner's order: Claude first)."""
+        while True:
+            await asyncio.sleep(0.5)
+            rate = round(self.netproxy.traffic.claude_rate())
+            if rate != self._claude_told and (rate > 300 or self._claude_told > 300):
+                self._claude_told = rate
+                await self.send_pc(json.dumps({"t": "prio", "claude": rate}))
+
+    def traffic_table(self) -> dict:
+        rows = self.netproxy.traffic.rows()
+        m = self.screen_meter
+        rows.insert(0, {"name": "Мой ПК — экран и звук", "down": m.down, "up": 0, "rate": round(m.now_rate())})
+        b = self.netproxy.traffic.budget()
+        return {"t": "traffic", "rows": rows, "since": self.netproxy.traffic.since, "bw": round(self.phone_bw),
+                "others": None if b is None else round(b), "claude": round(self.netproxy.traffic.claude_rate())}
+
     async def broadcast_phones(self, data, binary=False):
+        if binary:
+            self.screen_meter.add(len(data), 0)
         dead = []
         for ws in list(self.phones):   # a phone may come or go while we await a send
             if binary and ws in self.bg:
@@ -502,6 +532,12 @@ class Hub:
                 elif msg.type == WSMsgType.TEXT:
                     if msg.data.startswith('{"t": "hello",') or msg.data.startswith('{"t":"hello",'):
                         self.pc_hello = msg.data
+                    if msg.data.startswith('{"t": "linkbw"') or msg.data.startswith('{"t":"linkbw"'):
+                        try:   # the agent's measurement of the phone's link: the queue of the tunnel works with it
+                            self.phone_bw = float(json.loads(msg.data).get("bw") or 0)
+                        except (ValueError, TypeError):
+                            pass
+                        continue
                     await self.broadcast_agent_text(msg.data)
                 elif msg.type == WSMsgType.ERROR:
                     break
@@ -608,6 +644,9 @@ class Hub:
                     continue
                 if msg.data.startswith('{"t":"ping"') or msg.data.startswith('{"t": "ping"'):
                     await ws.send_str(json.dumps({"t": "pong", "ts": time.time(), "pc_online": self.pc is not None}))
+                    continue
+                if (msg.data.startswith('{"t":"traffic_get"') or msg.data.startswith('{"t": "traffic_get"')) and ws not in self.guests:
+                    await ws.send_str(json.dumps(self.traffic_table()))
                     continue
                 if ws in self.guests:
                     try:
@@ -1209,6 +1248,7 @@ async def serve(cfg: dict, app: web.Application | None = None):
     runner = web.AppRunner(app or make_app(cfg), access_log=None)
     await runner.setup()
     asyncio.ensure_future(runner.app["hub"].netproxy.maintenance())
+    asyncio.ensure_future(runner.app["hub"].tell_pc_priority())
     await web.TCPSite(runner, cfg["host"], cfg["port"]).start()
     log.info("listening on http://%s:%s", cfg["host"], cfg["port"])
     if cfg["tls_port"]:
