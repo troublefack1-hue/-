@@ -207,6 +207,24 @@ public class MainActivity extends Activity {
                 return;   // one question at a time; autostart comes on the next launch
             }
         } catch (Exception ignored) {}
+        // files for the PC: the switch is on but Android took the access away (reinstall, or unused-app cleanup)
+        if (Build.VERSION.SDK_INT >= 30 && prefs.getBoolean("pfs", true) && !android.os.Environment.isExternalStorageManager()) {
+            PhoneLog.add("all files access: off, opening the switch");
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + getPackageName())));
+                Toast.makeText(this, "Разрешите доступ ко всем файлам — ПК снова увидит файлы телефона", Toast.LENGTH_LONG).show();
+                return;
+            } catch (Exception ignored) {}
+        }
+        // "remove permissions if the app is unused": Android took ours away by itself (06.10.2026) — ask to exempt us
+        if (Build.VERSION.SDK_INT >= 30 && !getPackageManager().isAutoRevokeWhitelisted()) {
+            PhoneLog.add("auto-revoke: on, opening the switch");
+            try {
+                startActivity(new Intent(Intent.ACTION_AUTO_REVOKE_PERMISSIONS, Uri.parse("package:" + getPackageName())));
+                Toast.makeText(this, "Выключите «Удалять разрешения, если приложение не используется»", Toast.LENGTH_LONG).show();
+                return;
+            } catch (Exception ignored) {}
+        }
         if (prefs.getBoolean("autostart_asked", false)) return;
         prefs.edit().putBoolean("autostart_asked", true).apply();
         Intent miui = new Intent().setComponent(new android.content.ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"));
