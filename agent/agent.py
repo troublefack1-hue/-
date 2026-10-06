@@ -585,6 +585,7 @@ class Screen:
         self._cap_lock = threading.RLock()
         self._dxgi_quiet_since = 0.0   # DXGI has said "unchanged" since then
         self._dxgi_checked_at = 0.0    # last GDI cross-check of a silent DXGI
+        self._gdi_check_hash = b""     # that check's previous GDI frame
         self.grab_ms = 0.0
         self._make_capture()
 
@@ -650,15 +651,18 @@ class Screen:
             # 2 s with one GDI frame; a different picture means DXGI is stale: hand out the GDI frame, rebuild DXGI.
             if out is not None:
                 self._dxgi_quiet_since = 0.0
+                self._gdi_check_hash = b""   # a fresh quiet period starts its comparison anew
             else:
                 self._dxgi_quiet_since = self._dxgi_quiet_since or now
                 if now - self._dxgi_quiet_since > 2 and now - self._dxgi_checked_at > 2:
                     self._dxgi_checked_at = now
                     try:
                         g = capture.MssCapture(self.sct, self.mon).grab(None, True)
-                        last = getattr(self.cap, "last", None)
-                        if g and last and (g[1] != last[1] or hashlib.blake2b(g[0], digest_size=8).digest()
-                                            != hashlib.blake2b(last[0], digest_size=8).digest()):
+                        # compare GDI with the previous GDI check, never with DXGI's frame: the two never match byte
+                        # for byte (alpha channel), and that rebuilt DXGI every 2 s until PC Remote fell (06.10 08:03)
+                        gh = hashlib.blake2b(g[0], digest_size=8).digest() if g else b""
+                        prev, self._gdi_check_hash = self._gdi_check_hash, gh
+                        if g and prev and gh != prev:
                             log.warning("dxgi stale (screen changed, dxgi silent): rebuilding capture")
                             self.cap_switches += 1
                             self._make_capture_locked(False)
