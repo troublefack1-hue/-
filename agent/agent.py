@@ -583,6 +583,8 @@ class Screen:
         # without a lock _grab once met self.cap = None mid-swap ('NoneType' has no attribute 'last_ms'), and DXGI
         # is not meant to be driven from two threads at once
         self._cap_lock = threading.RLock()
+        self._dxgi_quiet_since = 0.0   # DXGI has said "unchanged" since then
+        self._dxgi_checked_at = 0.0    # last GDI cross-check of a silent DXGI
         self.grab_ms = 0.0
         self._make_capture()
 
@@ -642,6 +644,30 @@ class Screen:
                     self.cap.last = out
             except Exception as e:  # noqa: BLE001
                 log.info("first frame via gdi failed: %s", e)
+        if self.cap.name == "dxgi" and region is None:
+            # A DXGI duplication can go deaf (seen 06.10.2026 after the display dropped to 1024x768): it keeps
+            # saying "unchanged", and the phone showed a 35-minute-old desktop. While it is silent, check every
+            # 2 s with one GDI frame; a different picture means DXGI is stale: hand out the GDI frame, rebuild DXGI.
+            if out is not None:
+                self._dxgi_quiet_since = 0.0
+            else:
+                self._dxgi_quiet_since = self._dxgi_quiet_since or now
+                if now - self._dxgi_quiet_since > 2 and now - self._dxgi_checked_at > 2:
+                    self._dxgi_checked_at = now
+                    try:
+                        g = capture.MssCapture(self.sct, self.mon).grab(None, True)
+                        last = getattr(self.cap, "last", None)
+                        if g and last and (g[1] != last[1] or hashlib.blake2b(g[0], digest_size=8).digest()
+                                            != hashlib.blake2b(last[0], digest_size=8).digest()):
+                            log.warning("dxgi stale (screen changed, dxgi silent): rebuilding capture")
+                            self.cap_switches += 1
+                            self._make_capture_locked(False)
+                            if self.cap.name == "dxgi":
+                                self.cap.last = g
+                            self._dxgi_quiet_since = 0.0
+                            out = g
+                    except Exception as e:  # noqa: BLE001
+                        log.info("dxgi staleness check failed: %s", e)
         self.grab_ms = self.cap.last_ms if not self.grab_ms else self.grab_ms * 0.8 + self.cap.last_ms * 0.2
         return out
 
