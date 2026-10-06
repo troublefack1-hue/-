@@ -146,7 +146,10 @@ class Encoder:
             self.encoder_name = name
             if cq is not None and name == "h264_nvenc":
                 args = [a for i, a in enumerate(args) if not (a == "-rc" or (i and args[i - 1] == "-rc"))]
-                venc = [*args, "-rc", "vbr", "-cq", str(cq), "-b:v", "0", "-maxrate", br, "-bufsize", br, "-g", gop]
+                # thin link: one frame may not hold more than half a second of the link (bufsize), so a big change
+                # arrives rough at once and the next frames refine it, instead of one sharp frame seconds late
+                buf = f"{max(16, _kbit(br) // 2)}k" if thin else br
+                venc = [*args, "-rc", "vbr", "-cq", str(cq), "-b:v", "0", "-maxrate", br, "-bufsize", buf, "-g", gop]
             elif cq is not None and name == "libx264":
                 venc = [*args, "-crf", str(cq + 3), "-maxrate", br, "-bufsize", br, "-g", gop]
             else:
@@ -251,12 +254,32 @@ class Encoder:
             self._emit(key, data)
 
     def _read_annexb(self):
-        """Split the H.264 byte stream into access units at AUD NALs (aud=1), mark IDR as key."""
+        """Split the H.264 byte stream into access units at AUD NALs (aud=1), mark IDR as key.
+
+        A unit is also complete when the pipe goes quiet for 40 ms: ffmpeg writes a frame's packet in one go, and
+        waiting for the NEXT unit's delimiter held every frame back until the next one was encoded — after a
+        restart the first (key) frame never left on a still screen (zoomed-in region, 06.10.2026)."""
         r = self.proc.stdout
+        chunks: queue.Queue = queue.Queue()
+
+        def pump():
+            while True:
+                c = r.read(65536)
+                chunks.put(c)
+                if not c:
+                    return
+        threading.Thread(target=pump, daemon=True, name="ffmpeg-pump").start()
+        aud_only = b"\x00\x00\x00\x01\x09\xf0"
         buf = b""
         au = b""
         while True:
-            chunk = r.read(65536)
+            try:
+                chunk = chunks.get(timeout=0.015)
+            except queue.Empty:
+                if len(buf) > len(aud_only) and buf != aud_only:
+                    self._emit(_is_key(buf), buf)
+                    buf = b""
+                continue
             if not chunk:
                 if buf:
                     self._emit(_is_key(buf), buf)

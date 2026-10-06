@@ -199,7 +199,7 @@
         $("audioBtn").hidden = !pcAudio;
         setState("ПК в сети", "on", pcHost);
         sendRules(); sendAudioSrc(); sendAdapt(); sendCapture(); if (m.video) announceCodecs();
-        viewSent = 0; reportView();   // the agent may have restarted and forgotten how wide we show it
+        viewSent = ""; reportView();   // the agent may have restarted and forgotten how wide we show it
         if (!$("termPanel").hidden && !terms.size) renderTermEmpty();   // project folders may have changed on the PC
       } else if (m.t === "cmd_result") {
         const okText = { open_url: "Ссылка открыта на ПК", print: "Отправлено на печать", kill: "Процесс завершён", monitor_off: "Экран выключен", monitor_on: "Экран включён", powerplan: "Схема питания изменена" };
@@ -359,8 +359,14 @@
     try {
       vdec = new VideoDecoder({
         output: (f) => {
-          if (f.displayWidth !== frameW || f.displayHeight !== frameH) { frameW = f.displayWidth; frameH = f.displayHeight; canvas.width = frameW; canvas.height = frameH; layout(); }
-          ctx.drawImage(f, 0, 0, frameW, frameH); paintZone(); f.close();
+          const r = frameRects.get(f.timestamp); frameRects.delete(f.timestamp);
+          if (r && frameW) {   // a zoomed-in region: onto the last full picture, where it belongs
+            ctx.drawImage(f, r.x * frameW, r.y * frameH, r.w * frameW, r.h * frameH);
+          } else if (!r) {
+            if (f.displayWidth !== frameW || f.displayHeight !== frameH) { frameW = f.displayWidth; frameH = f.displayHeight; canvas.width = frameW; canvas.height = frameH; layout(); }
+            ctx.drawImage(f, 0, 0, frameW, frameH);
+          }
+          paintZone(); f.close();
           canvas.classList.add("live"); frames++; lastFrameAt = Date.now(); send({ t: "ack" });
           if ($("bVideo").hidden) $("bVideo").hidden = false;
         },
@@ -371,17 +377,22 @@
     } catch (e) { vdec = null; send({ t: "video", off: true }); return false; }
   }
   let keyAskedAt = 0;
+  const frameRects = new Map();   // pts -> rect of a region frame, read back when the decoder outputs it
   function requestKey() {
     if (Date.now() - keyAskedAt < 2000) return;
     keyAskedAt = Date.now(); send({ t: "keyreq" });
   }
   function decodeFrame(buf) {
-    const u = new Uint8Array(buf); const key = !!(u[1] & 1), codec = u[2];
+    const u = new Uint8Array(buf); const key = !!(u[1] & 1), region = !!(u[1] & 2), codec = u[2];
     const v = new DataView(buf); const pts = Number(v.getBigUint64(3, true));
+    let off = 11, rect = null;
+    if (region) { rect = { x: v.getUint16(11, true) / 65535, y: v.getUint16(13, true) / 65535, w: v.getUint16(15, true) / 65535, h: v.getUint16(17, true) / 65535 }; off = 19; }
     if (!ensureDecoder(codec)) return;
     if (waitKey && !key) { requestKey(); return; }   // decoder (re)started: ask instead of waiting for the GOP
     waitKey = false;
-    try { vdec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: pts, data: buf.slice(11) })); }
+    if (rect) frameRects.set(pts, rect); else frameRects.delete(pts);
+    if (frameRects.size > 64) frameRects.delete(frameRects.keys().next().value);
+    try { vdec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: pts, data: buf.slice(off) })); }
     catch (e) { waitKey = true; }
   }
   document.querySelectorAll("#capture button").forEach((b) => {
@@ -493,11 +504,20 @@
   let viewSent = 0, viewTimer = null;
   function reportView() {
     if (!frameW || !frameH) return;
-    const shown = Math.min(view.clientWidth, view.clientHeight * frameW / frameH) * zoom * (window.devicePixelRatio || 1);
+    const dpr = window.devicePixelRatio || 1, s = base * zoom;
+    const shown = Math.min(view.clientWidth, view.clientHeight * frameW / frameH) * dpr;   // device px of what we show
     const w = Math.ceil(shown / 160) * 160;   // steps of 160 px: the encoder restarts only on real changes
-    if (w === viewSent) return;
+    // zoomed in: the part of the screen that is on the display, in 1/64 steps (fractions of the frame)
+    let rect = null;
+    if (zoom > 1.2) {
+      const q = (v) => Math.max(0, Math.min(1, Math.round(v * 64) / 64));
+      const x = q(-panX / (s * frameW)), y = q(-panY / (s * frameH));
+      rect = { x, y, w: q(Math.min(1 - x, view.clientWidth / (s * frameW))), h: q(Math.min(1 - y, view.clientHeight / (s * frameH))) };
+    }
+    const key = w + "|" + JSON.stringify(rect);
+    if (key === viewSent) return;
     clearTimeout(viewTimer);
-    viewTimer = setTimeout(() => { viewSent = w; send({ t: "view", w }); }, 400);
+    viewTimer = setTimeout(() => { viewSent = key; send({ t: "view", w, rect }); }, 400);
   }
   function applyTransform() {
     reportView();

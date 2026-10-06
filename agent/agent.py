@@ -15,6 +15,7 @@ Config: config.json next to this file (see config.example.json).
 """
 import array
 import asyncio
+import struct
 import collections
 import ctypes
 import hashlib
@@ -64,9 +65,9 @@ LADDER = [
     (960, 10, "600k"),
     (720, 8, "300k"),
     (480, 6, "150k"),
-    (480, 4, "64k"),
-    (320, 3, "40k"),
-    (320, 2, "24k"),
+    (480, 6, "64k"),           # the bottom favours frames per second over pixels: movement and feedback matter
+    (320, 6, "40k"),           # more than detail on a thin link, and detail comes from zooming into a region
+    (320, 4, "24k"),
 ]
 TINY_RUNG = 5                   # the "10 KB/s" profile never goes above this
 
@@ -638,7 +639,7 @@ class Screen:
                 out = self.cap.grab(region, force)
             else:
                 raise
-        if out is None and force and self.cap.name == "dxgi" and getattr(self.cap, "last", None) is None:
+        if out is None and force and self.cap.name == "dxgi" and (region is not None or getattr(self.cap, "last", None) is None):
             # DXGI hands out changes only: right after a (re)start, with a still or sleeping display, there was no
             # frame at all and the phone stayed black until something moved on the PC. This one frame via GDI.
             try:
@@ -686,10 +687,17 @@ class Screen:
         self.grab_ms = self.cap.last_ms if not self.grab_ms else self.grab_ms * 0.8 + self.cap.last_ms * 0.2
         return out
 
-    def grab_raw(self, still: bool = False):
+    def grab_raw(self, still: bool = False, region=None):
         """Raw pixels for the video encoder: (bytes, pix_fmt, (w, h)); None if unchanged.
-        still=True: the current picture even if unchanged (sharpening a still screen)."""
-        got = self._grab(force=still or not self._last_hash)
+        still=True: the current picture even if unchanged (sharpening a still screen).
+        region=(x, y, w, h) in fractions of the monitor: only that part, scaled no wider than the full frame would
+        be — a third of the screen then gets three times the detail for the same bytes (zoomed-in phone)."""
+        px = None
+        if region:
+            mw, mh = self.mon["width"], self.mon["height"]
+            px = (int(region[0] * mw) // 2 * 2, int(region[1] * mh) // 2 * 2,
+                  max(16, int(region[2] * mw) // 2 * 2), max(16, int(region[3] * mh) // 2 * 2))
+        got = self._grab(px, force=still or not self._last_hash)
         if got is None:
             return None
         raw, size = got
@@ -697,10 +705,14 @@ class Screen:
         if digest == self._last_hash and not still:
             return None
         self._last_hash = digest
-        if self.size == size:
+        target = self.size
+        if px:
+            scale = min(1.0, self.size[0] / size[0])
+            target = (max(16, int(size[0] * scale) // 2 * 2), max(16, int(size[1] * scale) // 2 * 2))
+        if target == size:
             return raw, "bgra", size
-        img = Image.frombytes("RGB", size, raw, "raw", "BGRX").resize(self.size, Image.BILINEAR)
-        return img.tobytes(), "rgb24", self.size
+        img = Image.frombytes("RGB", size, raw, "raw", "BGRX").resize(target, Image.BILINEAR)
+        return img.tobytes(), "rgb24", target
 
     def set_zone(self, rect):
         if not rect:
@@ -983,6 +995,7 @@ class Agent:
         self.refine = 0              # 0 = live; 1..3 = sharpening a still picture step by step
         self.refine_at = 0.0
         self.refine_rung = 0         # the rung a sharpened frame is encoded at (what the measured link affords)
+        self.enc_region = None       # (x, y, w, h) fractions: the part of the screen the video shows (zoomed phone)
         self._probe_at = 0.0         # last probe key frame on an unmeasured link
         self.busy_at = 0.0           # last frame that carried real motion
         self.excess = 0.0            # lateness of acks beyond the transfer a frame needs: a queue is building
@@ -1142,6 +1155,32 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
 
+    def set_view_rect(self, rect):
+        """The phone shows only this part of the screen (zoomed in): encode a region around it. The region has a
+        margin of a quarter on each side, so a small pan stays inside it; only leaving it, or zooming in to under
+        40 % of it, restarts the encoder (a key frame)."""
+        if not rect or not self.ffmpeg:
+            if self.enc_region is not None:
+                self.enc_region = None
+                self.video_gen += 1
+            return
+        try:
+            x, y, w, h = (max(0.0, min(1.0, float(rect[k]))) for k in ("x", "y", "w", "h"))
+        except (KeyError, TypeError, ValueError):
+            return
+        if w <= 0 or h <= 0 or (w >= 0.85 and h >= 0.85):   # nearly the whole screen: the full stream is simpler
+            self.set_view_rect(None)
+            return
+        cur = self.enc_region
+        inside = cur and x >= cur[0] and y >= cur[1] and x + w <= cur[0] + cur[2] and y + h <= cur[1] + cur[3]
+        if inside and w * h >= 0.4 * cur[2] * cur[3]:
+            return
+        mx, my = w * 0.25, h * 0.25
+        nx, ny = max(0.0, x - mx), max(0.0, y - my)
+        self.enc_region = (nx, ny, min(1.0 - nx, w + 2 * mx), min(1.0 - ny, h + 2 * my))
+        self.video_gen += 1
+        log.info("video: region %.2f,%.2f %.2fx%.2f of the screen", *self.enc_region)
+
     def mark_sent(self, size: int):
         now = time.monotonic()
         self.inflight.append((now, size, not self.inflight))
@@ -1174,7 +1213,7 @@ class Agent:
             self.rtt_min = min(sample / 4, 0.3)
         transfer = sample - self.rtt_min
         self.acks_since_view += 1
-        if size >= (6000 if self.rung >= 4 else 16000) and transfer > 0.015:
+        if size >= (4000 if self.rung >= 4 else 16000) and transfer > 0.015:
             bw = size / transfer
             # down at once, up smoothly: after Wi-Fi -> mobile data the old 400 KB/s took a dozen samples to fade,
             # and every frame until then was sized for Wi-Fi (bench 06.10.2026)
@@ -1188,9 +1227,11 @@ class Agent:
             return self.rung
         now = time.monotonic()
         rung = self.rung
-        if self.acks_since_view < 1 and rung < 3 and self.screen.profile_name != "tiny":
-            rung = 3   # a new viewer, nothing measured on ITS link yet: a 1024-px key frame (~100 KB) would cost a
-                       # 12 KB/s link 8 s; a 720-px one (~40 KB) tells us the speed in 3 s, Wi-Fi then jumps up
+        if self.acks_since_view < 1 and rung < len(LADDER) - 1:
+            # a new viewer, nothing measured on ITS link yet: the smallest picture first (a ~6 KB key frame, half a
+            # second even on 12 KB/s), its ack measures the link, and the ladder jumps to what the link affords —
+            # on Wi-Fi within the next second. A 720-px start cost a thin link 3.4 s of nothing (bench 06.10.2026)
+            rung = len(LADDER) - 1
         # what the measured throughput affords: the highest rung whose bitrate fits in 70 % of it
         # the last measurement is trusted for a long time until a few acks of this viewer came in: a reconnect on a
         # 12 KB/s link used to start at full quality (a 100 KB key frame = 8 s) before measuring again
@@ -1209,8 +1250,9 @@ class Agent:
                 rung = afford                                   # down: at once
             elif afford < rung and fresh and self.bw > 150 * 1024 and self.excess < 0.1:
                 rung = afford                                   # a plainly fast link (Wi-Fi): straight up
-            elif afford < rung and fresh and self.excess < 0.25 and now - self.rung_at > 15:
-                rung -= 1                                       # up: one rung per 15 s, only with headroom and quick acks
+            elif afford < rung and fresh and self.excess < 0.25 and (now - self.rung_at > 15 or self.acks_since_view <= 3):
+                rung = afford                                   # up to what the fresh measurement affords (30 % headroom
+                                                                # is in `afford`): at once after the tiny start, else per 15 s
         elif rung > 0 and self.acks_since_view >= 1 and self.excess < 0.15 and now - self.rung_at > (60 if rung >= 4 else 15):
             rung -= 1                                           # no recent measurement, acks are quick: probe upward
         if self.excess > 0.5 and now - self.rung_at > 2:
@@ -1236,7 +1278,8 @@ class Agent:
             self._vid_w = want_w
             self.screen.set_width(want_w)
         try:
-            raw = await loop.run_in_executor(None, self.screen.grab_raw)
+            region = self.enc_region
+            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(region=region))
             if not self.screen_ok:
                 self.screen_ok = True
                 await ws.send_str(json.dumps({"t": "screen", "ok": True}))
@@ -1288,13 +1331,13 @@ class Agent:
             if want2 != self._vid_w:
                 self._vid_w = want2
                 self.screen.set_width(want2)
-            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True))
+            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True, region=region))
         elif quiet and (not self.bw or now - self.bw_at > 60) and now - self._probe_at > 60:
             # small frames cannot measure the link: once a minute, when nothing moves, one ordinary key frame at the
             # CURRENT size (10-20 KB on a thin rung) measures it — and tells the agent when Wi-Fi is back
             self._probe_at = now
             self.video_gen += 1
-            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True))
+            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True, region=region))
         if raw is None:
             # ffmpeg hands a frame out a little after it got it; we used to read only right after writing the next one,
             # so on a still screen the last change sat in the encoder until something else moved — the phone was one
@@ -1331,7 +1374,7 @@ class Agent:
         # every key change restarts ffmpeg = a full key frame (100-300 KB): the ladder flapping 0->2->1->0 cost one each
         # time. With constant quality and one frame in flight the bitrate ceiling matters on a thin link only.
         thin = rung >= TINY_RUNG - 1 and not self.refine
-        key = (codec, size, enc_fps, tier, bitrate if thin else None, self.video_gen, pix_fmt, self.refine)
+        key = (codec, size, enc_fps, tier, bitrate if thin else None, self.video_gen, pix_fmt, self.refine, region)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
             try:
@@ -1347,25 +1390,33 @@ class Agent:
         if not await loop.run_in_executor(None, self.enc.write, data):
             self.video_close()
             return
+        self.enc.region = region
         await self._ship(ws, codec, min(0.25, interval))
         await asyncio.sleep(max(0, interval - (time.monotonic() - t0)))
 
     async def _ship(self, ws, codec: str, wait: float):
         """Send every frame the encoder has finished; wait up to `wait` s for the first one."""
         cid = 1 if codec == "h264" else 2
+        region = getattr(self.enc, "region", None)
+        head = b""
+        if region:   # flag bit 1 + the rect as 4 x uint16/65535: the page draws this frame there, not full-screen
+            head = struct.pack("<4H", *(min(65535, int(v * 65535)) for v in region))
         while True:
             item = self.enc.get(0.0 if self.enc.out.qsize() else wait)
             wait = 0.0
             if item is None:
                 break
             is_key, pts, payload = item
+            if is_key:
+                log.info("video: key frame %d B%s", len(payload), " (region)" if region else "")
             if not is_key and len(payload) > 6000:      # real motion, not a cursor blink
                 self.busy_at = time.monotonic()
                 if self.refine and len(payload) > 40000:
                     log.info("video: motion, back to the link's settings")
                     self.refine = 0
             self.mark_sent(len(payload))      # the phone acks decoded frames: that gives us the RTT
-            await ws.send_bytes(video.FRAME_VIDEO_CODEC + bytes([1 if is_key else 0, cid]) + pts.to_bytes(8, "little") + payload)
+            await ws.send_bytes(video.FRAME_VIDEO_CODEC + bytes([(1 if is_key else 0) | (2 if region else 0), cid])
+                                + pts.to_bytes(8, "little") + head + payload)
             if not self.enc.out.qsize():
                 break
 
@@ -1500,6 +1551,7 @@ class Agent:
                         self.acks_since_view = 0
                         # a new link: its latency is unknown, and frames sent to the previous one are nobody's
                         self.inflight.clear(); self.ack.set(); self.rtt = 0.0; self.rtt_min = 0.0; self.excess = 0.0
+                        self.enc_region = None
                     if not self.viewers:
                         self.codecs = []              # last viewer left: next one re-announces
                     # keep the PC awake while someone is connected (monitor may be off)
@@ -1623,9 +1675,11 @@ class Agent:
                         self.screen.view_w = vw
                         self.screen.set_width(self.screen.profile["max_width"])   # JPEG path
                         self._vid_w = None                                        # video path: re-apply on the next frame
+                    self.set_view_rect(ev.get("rect"))
                 elif t == "profile":
                     was = self.screen.profile_name
                     self.screen.set_profile(str(ev.get("name", "normal")))
+                    self._vid_w = None   # set_profile set the profile's width: the rung's cap goes back on next frame
                     if (was == "tiny") != (self.screen.profile_name == "tiny") and self.audio.stream:
                         self.audio.stop()   # Opus bitrate follows the profile
                 elif t == "audio":
