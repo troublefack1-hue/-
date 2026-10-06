@@ -53,13 +53,21 @@ public final class Pinned {
     public static SSLSocket connectPreferLan(String lan, String host, int port, String pin, String[] seen, int timeoutMs, boolean tryLan)
             throws IOException {
         java.util.List<Paths.Candidate> cands = Paths.candidates(Paths.pcAddrs, lan, tryLan, host);
+        // the road that worked last time goes first: a guest Wi-Fi used to cost 1.5 s on the LAN address and a
+        // refused public one before the mobile fallback, on every reconnect
+        String lastGood = Paths.lastGoodHost;
+        if (lastGood != null) {
+            for (int i = 1; i < cands.size(); i++) {
+                if (cands.get(i).host.equals(lastGood)) { cands.add(0, cands.remove(i)); break; }
+            }
+        }
         IOException last = null;
         for (int i = 0; i < cands.size(); i++) {
             Paths.Candidate c = cands.get(i);
             boolean lastOne = i == cands.size() - 1;
             try {
                 SSLSocket s = connect(c.host, port, pin, seen, lastOne ? timeoutMs : 1500);   // near paths get a short try
-                Paths.lastPath = c.kind() + " " + c.host;
+                Paths.lastPath = c.kind() + " " + c.host; Paths.lastGoodHost = c.host;
                 return s;
             } catch (Mismatch m) {
                 throw m;                                   // a different certificate is never "try the next address"
@@ -72,7 +80,7 @@ public final class Pinned {
         if (sf != null) {
             try {
                 SSLSocket s = connect(sf, host, port, pin, seen, timeoutMs);
-                Paths.lastPath = "mobile " + host;
+                Paths.lastPath = "mobile " + host; Paths.lastGoodHost = null;
                 return s;
             } catch (Mismatch m) {
                 throw m;
@@ -89,8 +97,15 @@ public final class Pinned {
     }
 
     /** @param net the network to go through (its socket factory), or null for the default one */
-    public static SSLSocket connect(javax.net.SocketFactory net, String host, int port, final String pin, final String[] seen, int timeoutMs)
-            throws IOException {
+    // one SSLContext per pinned certificate: Java resumes TLS sessions only within a context, and a fresh context per
+    // connection made every one of the WebView's parallel connections, the WebSocket and the updater pay the full
+    // handshake (2 round trips + the certificate) on a 200 ms mobile link
+    private static final java.util.Map<String, SSLContext> CONTEXTS = new java.util.HashMap<>();
+
+    private static synchronized SSLContext context(final String pin, final String[] seen) throws Exception {
+        String key = pin == null ? "" : pin.toLowerCase();
+        SSLContext ctx = pin == null ? null : CONTEXTS.get(key);   // trust-on-first-use (pairing) is never cached
+        if (ctx != null && seen == null) return ctx;
         TrustManager tm = new X509TrustManager() {
             public void checkClientTrusted(X509Certificate[] chain, String authType) {}
             public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
@@ -100,10 +115,16 @@ public final class Pinned {
                 if (pin != null && !pin.equalsIgnoreCase(fp)) throw new CertificateException("PIN:" + fp);
             }
         };
+        ctx = SSLContext.getInstance("TLS");
+        ctx.init(null, new TrustManager[]{tm}, null);
+        if (pin != null && seen == null) CONTEXTS.put(key, ctx);
+        return ctx;
+    }
+
+    public static SSLSocket connect(javax.net.SocketFactory net, String host, int port, final String pin, final String[] seen, int timeoutMs)
+            throws IOException {
         try {
-            SSLContext ctx = SSLContext.getInstance("TLS");
-            ctx.init(null, new TrustManager[]{tm}, null);
-            SSLSocketFactory f = ctx.getSocketFactory();
+            SSLSocketFactory f = context(pin, seen).getSocketFactory();
             Socket raw = net != null ? net.createSocket() : new Socket();
             raw.connect(new InetSocketAddress(host, port), timeoutMs);
             raw.setSoTimeout(timeoutMs);

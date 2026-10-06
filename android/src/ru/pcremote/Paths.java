@@ -24,6 +24,8 @@ public final class Paths {
     public static volatile String pcAddrs = "";
     /** What the last successful connection used, for diagnostics ("direct 192.168.42.129" …). */
     public static volatile String lastPath = "";
+    /** The address that worked last: tried first next time (null = the mobile fallback did). */
+    public static volatile String lastGoodHost = null;
 
     public static final int DIRECT = 0, LAN = 1, PUBLIC = 2;
 

@@ -8,8 +8,8 @@
   const splash = $("splash"), ripples = $("ripples"), signal = $("signal");
   const splashShownAt = Date.now();
   function hideSplash(then) {
-    // keep the intro on screen for at least 1.4 s so the animation completes
-    const wait = Math.max(0, 1400 - (Date.now() - splashShownAt));
+    // the intro leaves as soon as the page is ready: 1.4 s of animation was 1.4 s of waiting on every start
+    const wait = 0;
     setTimeout(() => { splash.classList.add("out"); setTimeout(() => (splash.hidden = true), 520); then && then(); }, wait);
   }
   function ripple(x, y, right) {
@@ -1019,9 +1019,10 @@
     if (window.Terminal && window.FitAddon) return Promise.resolve();
     if (!xtermLoading) {
       show("Загружаю терминал…");
-      const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "/static/vendor/xterm.css"; document.head.appendChild(css);
+      const v = window.PCR_V ? "?v=" + window.PCR_V : "";
+      const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "/static/vendor/xterm.css" + v; document.head.appendChild(css);
       const load = (src) => new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = bad; document.head.appendChild(s); });
-      xtermLoading = load("/static/vendor/xterm.js").then(() => load("/static/vendor/addon-fit.js")).catch((e) => { xtermLoading = null; show("Терминал не загрузился", 4000); throw e; });
+      xtermLoading = load("/static/vendor/xterm.js" + v).then(() => load("/static/vendor/addon-fit.js" + v)).catch((e) => { xtermLoading = null; show("Терминал не загрузился", 4000); throw e; });
     }
     return xtermLoading;
   }

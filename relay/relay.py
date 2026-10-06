@@ -22,6 +22,7 @@ The secret never appears in a URL: it travels in a header or inside the
 WebSocket, so it cannot leak through browser history or access logs.
 """
 import asyncio
+import re
 import hmac
 import ipaddress
 import json
@@ -1121,8 +1122,37 @@ class Hub:
         return web.FileResponse(p, headers=headers)
 
 
+_INDEX = {"ver": "", "html": b""}
+
+
+def web_version() -> str:
+    """A stamp of the page's files: static URLs carry it, so the phone caches them for good and refetches only
+    when a release changed them (index.html itself is always revalidated — one small request per start)."""
+    import hashlib
+    h = hashlib.blake2b(digest_size=6)
+    for p in sorted(list(WEB_DIR.glob("*")) + list((WEB_DIR / "vendor").glob("*"))):
+        if p.suffix in (".js", ".css", ".html", ".svg", ".json"):
+            st = p.stat()
+            h.update(f"{p.name}:{st.st_size}:{int(st.st_mtime)};".encode())
+    return h.hexdigest()
+
+
 async def index(_request):
-    return web.FileResponse(WEB_DIR / "index.html")
+    ver = web_version()
+    if _INDEX["ver"] != ver:
+        html = (WEB_DIR / "index.html").read_text("utf-8")
+        html = re.sub(r'(/static/[A-Za-z0-9_./-]+)(?=["\'])', lambda m: f"{m.group(1)}?v={ver}", html)
+        html = html.replace("<head>", f'<head><script>window.PCR_V="{ver}";</script>', 1)
+        _INDEX.update(ver=ver, html=html.encode("utf-8"))
+    return web.Response(body=_INDEX["html"], content_type="text/html", charset="utf-8",
+                        headers={"Cache-Control": "no-cache"})
+
+
+async def _cache_static(request, response):
+    # a versioned static URL never changes its content: the phone keeps it as long as it likes (a release gives a
+    # new ?v=); without ?v= aiohttp's "no-cache" stays (a revalidation per request)
+    if request.path.startswith("/static/") and request.query.get("v"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
 
 
 def make_app(cfg: dict) -> web.Application:
@@ -1152,6 +1182,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_route("OPTIONS", "/api/{tail:.*}", hub.options_handler)
     precompress(WEB_DIR)
     app.router.add_static("/static", WEB_DIR)
+    app.on_response_prepare.append(_cache_static)
 
     @web.middleware
     async def no_stale_client(request, handler):
