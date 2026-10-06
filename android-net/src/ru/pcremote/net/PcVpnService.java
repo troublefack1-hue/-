@@ -41,7 +41,7 @@ public class PcVpnService extends VpnService {
     private ParcelFileDescriptor tun;
     private NetMux mux;
     private Socks5Server socks;
-    private Thread worker;
+    private Thread worker, updater;
     private volatile boolean wanted;
     private SharedPreferences prefs;
 
@@ -60,6 +60,13 @@ public class PcVpnService extends VpnService {
         startForeground(NOTIF_ID, notification("Интернет через ПК", "подключаюсь…"));
         wanted = true; prefs.edit().putBoolean("wanted", true).apply();
         if (worker == null || !worker.isAlive()) { worker = new Thread(this::loop, "pcnet"); worker.setDaemon(true); worker.start(); }
+        if (updater == null || !updater.isAlive()) {   // our own updates while the tunnel runs, every 15 minutes
+            updater = new Thread(() -> {
+                try { Thread.sleep(90_000); } catch (InterruptedException e) { return; }
+                while (true) { NetInstaller.check(this, "timer"); try { Thread.sleep(15 * 60_000); } catch (InterruptedException e) { return; } }
+            }, "netupdate");
+            updater.setDaemon(true); updater.start();
+        }
         return START_STICKY;
     }
 

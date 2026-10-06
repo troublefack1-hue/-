@@ -10,8 +10,8 @@ import android.content.SharedPreferences;
  * Every step goes to PhoneLog: with the screen off this is the only way to see what happened.
  */
 final class AutoUpdate {
+    // «Интернет через ПК» updates itself (NetInstaller): two apps updating the same package got in each other's way
     private static final String[][] OTHERS = {
-            {"ru.pcremote.net", "pcremote-net.apk", "Интернет через ПК"},
             {"ru.pcremote.files", "pcremote-files.apk", "Проводник"}};
     private static volatile long busyUntil;
 

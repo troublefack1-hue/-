@@ -226,7 +226,11 @@ public class MainActivity extends Activity {
     }
 
     // ----------------------------------------------------------- update ---
-    private void checkUpdate() { checkUpdate(false); }
+    private void checkUpdate() {
+        // paired with a PC: update from it silently, on our own (NetInstaller); otherwise the GitHub question below
+        if (prefs.contains("secret")) { new Thread(() -> NetInstaller.check(this, "open"), "netupdate").start(); return; }
+        checkUpdate(false);
+    }
 
     /** At every launch, silently (one small request to GitHub); from the row, with a word back either way. */
     private void checkUpdate(boolean manual) {

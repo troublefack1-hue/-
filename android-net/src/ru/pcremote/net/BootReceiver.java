@@ -5,7 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
 
-/** After a reboot: the tunnel comes back if it was on (Android keeps the VPN consent). */
+/** After a reboot or an update of this app: the tunnel comes back if it was on (Android keeps the VPN consent). */
 public class BootReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context ctx, Intent intent) {
         PairShare.sync(ctx);
