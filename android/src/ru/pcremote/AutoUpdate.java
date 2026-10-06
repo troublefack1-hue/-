@@ -24,6 +24,8 @@ final class AutoUpdate {
      *  downloading it again every 15 minutes cost ~0.8 MB each time, ~77 MB a day on mobile data. On "open" the
      *  owner is looking at the phone: try at once. */
     private static boolean recentlyTried(SharedPreferences p, String asset, String version, String why) {
+        String failed = p.getString("upd_fail_" + asset, "");
+        if (!"manual".equals(why) && failed.startsWith(version + "|")) return true;   // refused by the phone: button only
         if ("open".equals(why) || "push".equals(why)) return false;
         String key = "upd_try_" + asset, was = p.getString(key, "");
         int bar = was.indexOf('|');
@@ -32,6 +34,31 @@ final class AutoUpdate {
         }
         p.edit().putString(key, version + "|" + System.currentTimeMillis()).apply();
         return false;
+    }
+
+    /** Downloads only on Wi-Fi or by the owner's button: on mobile data every build is 70-330 KB the owner did not
+     *  ask for (and on a 12 KB/s link half a minute of a frozen screen). There a notification offers it instead. */
+    private static boolean mayDownload(Context ctx, String why) {
+        return "manual".equals(why) || !Updater.metered(ctx);
+    }
+
+    /** Once per build: "a new version is on the PC, tap to install" — the tap runs the manual update. */
+    private static void offer(Context ctx, SharedPreferences p, String label, String version) {
+        if (version.equals(p.getString("upd_offered", ""))) return;
+        p.edit().putString("upd_offered", version).apply();
+        PhoneLog.add("update: " + label + " " + version + " offered (mobile data: no download without a tap)");
+        try {
+            android.content.Intent open = new android.content.Intent(ctx, MainActivity.class)
+                    .putExtra("update_now", true).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            android.app.PendingIntent tap = android.app.PendingIntent.getActivity(ctx, 3, open,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+            android.app.NotificationManager nm = ctx.getSystemService(android.app.NotificationManager.class);
+            nm.createNotificationChannel(new android.app.NotificationChannel("offers", "Новые версии", android.app.NotificationManager.IMPORTANCE_LOW));
+            nm.notify(8, new android.app.Notification.Builder(ctx, "offers").setSmallIcon(R.drawable.ic_launcher)
+                    .setContentTitle("Новая версия " + version + " на ПК")
+                    .setContentText("Нажмите — скачаю и установлю. Сам по мобильной сети не качаю.")
+                    .setContentIntent(tap).setAutoCancel(true).build());
+        } catch (Exception e) { PhoneLog.add("offer: " + e); }
     }
 
     /** Blocking; call off the main thread. Returns true when something was handed to the installer. */
@@ -48,9 +75,10 @@ final class AutoUpdate {
             try {
                 Updater.Info i = Updater.checkPc(v, app[1]);
                 if (i == null) { PhoneLog.add("update(" + why + "): " + app[2] + " " + v + " is current"); continue; }
-                if (recentlyTried(p, app[1], i.version, why)) { PhoneLog.add("update(" + why + "): " + app[2] + " " + i.version + " waits for a tap, not again yet"); continue; }
+                if (!mayDownload(ctx, why)) { offer(ctx, p, app[2], i.version); continue; }
+                if (recentlyTried(p, app[1], i.version, why)) { PhoneLog.add("update(" + why + "): " + app[2] + " " + i.version + " waits for a tap or was refused, not again yet"); continue; }
                 PhoneLog.add("update(" + why + "): " + app[2] + " " + v + " -> " + i.version + ", downloading");
-                SilentInstaller.install(ctx, Updater.downloadPcUnique(app[1], ctx.getCacheDir(), i.sha256), app[2] + " " + i.version);
+                SilentInstaller.install(ctx, Updater.downloadPcCached(app[1], ctx.getCacheDir(), i.sha256), app[2] + " " + i.version, app[1], i.version);
                 any = true;
             } catch (Throwable e) {
                 PhoneLog.add("update(" + why + "): " + app[2] + " failed: " + e);
@@ -72,10 +100,11 @@ final class AutoUpdate {
             }
             Updater.Info me = Updater.checkPc(cur, Updater.ASSET);
             if (me == null) PhoneLog.add("update(" + why + "): Мой ПК " + cur + " is current");
-            else if (recentlyTried(p, Updater.ASSET, me.version, why)) PhoneLog.add("update(" + why + "): Мой ПК " + me.version + " waits for a tap, not again yet");
+            else if (!mayDownload(ctx, why)) offer(ctx, p, "Мой ПК", me.version);
+            else if (recentlyTried(p, Updater.ASSET, me.version, why)) PhoneLog.add("update(" + why + "): Мой ПК " + me.version + " waits for a tap or was refused, not again yet");
             else {
                 PhoneLog.add("update(" + why + "): Мой ПК " + cur + " -> " + me.version + ", downloading");
-                SilentInstaller.install(ctx, Updater.downloadPcUnique(Updater.ASSET, ctx.getCacheDir(), me.sha256), "Мой ПК " + me.version);
+                SilentInstaller.install(ctx, Updater.downloadPcCached(Updater.ASSET, ctx.getCacheDir(), me.sha256), "Мой ПК " + me.version, Updater.ASSET, me.version);
                 any = true;
             }
         } catch (Throwable e) {

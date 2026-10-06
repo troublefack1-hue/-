@@ -56,6 +56,12 @@ public final class NetInstaller extends BroadcastReceiver {
      *  Updates «Мой ПК» (silent once we installed it: Android asks only for an app updating ITSELF), then ourselves,
      *  unless «Мой ПК» 1.147+ is there to do that silently. */
     static synchronized void check(Context ctx, String why) {
+        if (!"manual".equals(why) && Updater.metered(ctx)) {
+            // mobile data: no downloads the owner did not ask for («Мой ПК» offers new builds by a notification;
+            // its cross-install of «Мой ПК» never got through HyperOS anyway, 06.10.2026)
+            log("update(" + why + "): mobile data, nothing downloaded", false);
+            return;
+        }
         String moy = null;
         try { moy = ctx.getPackageManager().getPackageInfo("ru.pcremote", 0).versionName; } catch (Exception notInstalled) {}
         SharedPreferences p0 = ctx.getSharedPreferences("pcnet", Context.MODE_PRIVATE);
@@ -66,7 +72,7 @@ public final class NetInstaller extends BroadcastReceiver {
                 if (m == null) log("update(" + why + "): Мой ПК " + moy + " is current", !"timer".equals(why));
                 else if (!backoff(p0, "upd_try_moy", m.version, why)) {
                     log("update(" + why + "): Мой ПК " + moy + " -> " + m.version + ", downloading");
-                    install(ctx, Updater.downloadPcUnique("pcremote.apk", ctx.getCacheDir(), m.sha256), "Мой ПК " + m.version);
+                    install(ctx, Updater.downloadPcCached("pcremote.apk", ctx.getCacheDir(), m.sha256), "Мой ПК " + m.version);
                 }
             } catch (Throwable e) { log("update(" + why + "): Мой ПК failed: " + e); }
             boolean background = "timer".equals(why) || "partner".equals(why);
@@ -98,7 +104,7 @@ public final class NetInstaller extends BroadcastReceiver {
             if (i == null) { log("update(" + why + "): " + cur + " is current", !"timer".equals(why)); return; }
             if (backoff(p, "upd_try", i.version, why)) return;
             log("update(" + why + "): " + cur + " -> " + i.version + ", downloading");
-            install(ctx, Updater.downloadPcUnique(ASSET, ctx.getCacheDir(), i.sha256), "Интернет через ПК " + i.version);
+            install(ctx, Updater.downloadPcCached(ASSET, ctx.getCacheDir(), i.sha256), "Интернет через ПК " + i.version);
         } catch (Throwable e) {
             log("update(" + why + "): " + cur + " failed: " + e);
         }

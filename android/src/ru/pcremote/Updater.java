@@ -86,6 +86,41 @@ public final class Updater {
     /** Download {@code asset} from the PC into dir/update.apk, checking the published sum. */
     /** Like downloadPc, into a file of its own (upd-*.apk): two installs at once used to share update.apk and Android
      *  got half of one file ("INSTALL_PARSE_FAILED_NOT_APK", 163840 bytes instead of 70515). Delete it after use. */
+    /** Mobile data or a metered hotspot: nothing optional goes over it. */
+    public static boolean metered(android.content.Context ctx) {
+        try {
+            return ((android.net.ConnectivityManager) ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)).isActiveNetworkMetered();
+        } catch (Exception e) { return true; }
+    }
+
+    /** One copy per build, kept until a newer one: a retry (Android wanted a tap, the phone refused, the owner
+     *  pressed the button) reuses it — 06.10.2026 the same 330 KB came down five times in a day over mobile data. */
+    public static File downloadPcCached(String asset, File dir, String sha256) throws IOException {
+        String tag = sha256 == null || sha256.length() < 16 ? "nosha" : sha256.substring(0, 16).toLowerCase();
+        String prefix = "apk-" + asset.replace(".apk", "") + "-";
+        File f = new File(dir, prefix + tag + ".apk");
+        File[] all = dir.listFiles();
+        if (all != null) for (File o : all) if (o.getName().startsWith(prefix) && !o.getName().equals(f.getName())) o.delete();
+        if (f.length() > 0 && sha256 != null && sha256.equalsIgnoreCase(sha256Of(f))) return f;
+        File tmp = File.createTempFile("dl-", ".apk", dir);
+        try { pcGet("/api/apk?name=" + asset, tmp, sha256); }
+        catch (IOException e) { tmp.delete(); throw e; }
+        f.delete();
+        if (!tmp.renameTo(f)) { tmp.delete(); throw new IOException("не удалось сохранить " + f.getName()); }
+        return f;
+    }
+
+    static String sha256Of(File f) {
+        try (InputStream in = new java.io.FileInputStream(f)) {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[65536]; int n;
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+            StringBuilder sb = new StringBuilder();
+            for (byte x : md.digest()) sb.append(String.format("%02x", x));
+            return sb.toString();
+        } catch (Exception e) { return ""; }
+    }
+
     public static File downloadPcUnique(String asset, File dir, String sha256) throws IOException {
         File f = File.createTempFile("upd-", ".apk", dir);
         try { pcGet("/api/apk?name=" + asset, f, sha256); return f; } catch (IOException e) { f.delete(); throw e; }

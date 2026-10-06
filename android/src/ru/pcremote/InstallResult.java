@@ -30,6 +30,12 @@ public final class InstallResult extends BroadcastReceiver {
         } else if (status == PackageInstaller.STATUS_SUCCESS) {
             Toast.makeText(ctx, label + " обновлено", Toast.LENGTH_SHORT).show();
         } else {
+            // the phone refused this build (HyperOS: "Permission denied", Play Protect: VERIFICATION_FAILURE): it will
+            // refuse it again — no background retries of it, only the owner's button
+            String asset = intent.getStringExtra("asset"), version = intent.getStringExtra("version");
+            if (asset != null && version != null)
+                ctx.getSharedPreferences("pcremote", Context.MODE_PRIVATE).edit()
+                        .putString("upd_fail_" + asset, version + "|" + System.currentTimeMillis()).apply();
             String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
             Toast.makeText(ctx, label + ": не установилось — " + (msg == null ? "код " + status : msg), Toast.LENGTH_LONG).show();
         }

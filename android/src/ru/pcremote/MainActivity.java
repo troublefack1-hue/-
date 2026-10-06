@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = getSharedPreferences("pcremote", MODE_PRIVATE);
+        handleUpdateTap(getIntent());
         CellularLink.install(this);   // mobile data as the last road when Wi-Fi cannot reach the PC
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
@@ -82,6 +83,15 @@ public class MainActivity extends Activity {
         super.onNewIntent(i);
         setIntent(i);
         handlePairLink(i);
+        handleUpdateTap(i);
+    }
+
+    /** The "new version on the PC" notification: the owner said yes — download and install now. */
+    private void handleUpdateTap(Intent i) {
+        if (i == null || !i.getBooleanExtra("update_now", false)) return;
+        i.removeExtra("update_now");
+        Toast.makeText(this, "Скачиваю обновление с ПК…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> { try { AutoUpdate.fromPc(this, "manual"); } catch (Throwable e) { PhoneLog.add("update tap: " + e); } }, "update-tap").start();
     }
 
     /** pcremote://pair?host=IP:port&code=…&fp=…&lan=… from a scanned QR: pair without typing anything. */

@@ -25,7 +25,9 @@ final class SilentInstaller {
 
     private SilentInstaller() {}
 
-    static void install(Context ctx, File apk, String label) throws IOException {
+    static void install(Context ctx, File apk, String label) throws IOException { install(ctx, apk, label, null, null); }
+
+    static void install(Context ctx, File apk, String label, String asset, String version) throws IOException {
         PackageInstaller pi = ctx.getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         if (Build.VERSION.SDK_INT >= 31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
@@ -37,7 +39,8 @@ final class SilentInstaller {
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 s.fsync(out);
             }
-            Intent result = new Intent(ctx, InstallResult.class).setAction(ACTION).putExtra("label", label);
+            Intent result = new Intent(ctx, InstallResult.class).setAction(ACTION).putExtra("label", label)
+                    .putExtra("asset", asset).putExtra("version", version);
             // mutable: the system adds the status and, when it wants the owner's consent, the screen to show
             int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
             s.commit(PendingIntent.getBroadcast(ctx, id, result, flags).getIntentSender());
