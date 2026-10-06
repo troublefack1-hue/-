@@ -974,7 +974,11 @@ class Agent:
         # to make a key frame's ack look like the next P-frame's, poisoning the latency and throughput (06.10.2026)
         self.inflight = collections.deque()
         self.sent_log = collections.deque()   # (sent_at, bytes) of the last seconds: the rung's byte budget
+        self._changed_at = 0.0                # the screen last changed (a grab returned a new picture)
+        self._polish_left = 0                 # still-picture refinement steps left on a thin link
+        self._last_ship_size = 0              # bytes of the last frame shipped (tiny = nothing left to refine)
         self._bw_low = 0                      # consecutive throughput samples under half the estimate
+        self._fast_acks = 0                   # capped frames that crossed instantly (a fast link on a thin rung)
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
         self.terms: dict[str, Term] = {}
         self.volume = Volume()
@@ -1186,6 +1190,25 @@ class Agent:
         self.video_gen += 1
         log.info("video: region %.2f,%.2f %.2fx%.2f of the screen", *self.enc_region)
 
+    def _gate_closed(self, now: float) -> bool:
+        """True while no frame may go out: the previous one is not decoded yet (one frame in flight, or a link-sized
+        wait if its ack is late), or the rung's byte budget for the last 2 s is spent."""
+        if len(self.inflight) >= 2 and now - self.inflight[0][0] > 60.0:
+            self.inflight.popleft()   # TCP loses no acks, only whole links (the relay drops those in ~30 s): a 60 s
+                                      # safety net; 8 s was less than a 100 KB key frame needs on a 12 KB/s link
+        rung_now = self.refine_rung if self.refine else self.rung
+        rung_bps = _kbit(LADDER[rung_now][2]) * 1000 / 8 if LADDER[rung_now][2] else 0
+        if rung_bps:
+            while self.sent_log and self.sent_log[0][0] < now - 2.0:
+                self.sent_log.popleft()
+            if sum(n for _, n in self.sent_log) > 2 * rung_bps:
+                return True
+        oldest = self.inflight[0] if self.inflight else None
+        if not oldest:
+            return False
+        expect = self.rtt_min + (oldest[1] / self.bw * 1.2 if self.bw else 1.2) + 0.2   # when its ack is due
+        return len(self.inflight) >= 2 or now - oldest[0] < min(8.0, max(0.25, expect))
+
     def mark_sent(self, size: int):
         now = time.monotonic()
         self.inflight.append((now, size, not self.inflight))
@@ -1208,7 +1231,8 @@ class Agent:
             exc = max(0.0, sample - (self.rtt_min + size / self.bw))
             self.excess = exc if not self.excess_set else self.excess * 0.7 + exc * 0.3
             self.excess_set = True
-        if size <= 3000:   # a small frame measures the link's latency, not its throughput
+        if size <= 400:   # a small frame measures the link's latency, not its throughput (3000 B were 0.25 s of
+                          # transfer on a 12 KB/s link: the "latency" swallowed it and nothing was left to measure)
             if not self.rtt_min or sample < self.rtt_min:
                 self.rtt_min = sample
             else:
@@ -1219,7 +1243,10 @@ class Agent:
             self.rtt_min = min(sample / 4, 0.3)
         transfer = sample - self.rtt_min
         self.acks_since_view += 1
-        if size >= (4000 if self.rung >= 4 else 16000) and transfer > 0.015:
+        thin = self.rung >= 4
+        if thin and size >= 600 and transfer < 0.01:
+            self._fast_acks += 2 if size >= 1000 else 1   # crossed in under 10 ms: far faster than a thin rung
+        if size >= (600 if thin else 16000) and transfer > 0.02:   # x264 caps frames on thin rungs at 0.9-5.6 KB
             bw = size / transfer
             # down at once, up smoothly: after Wi-Fi -> mobile data the old 400 KB/s took a dozen samples to fade,
             # and every frame until then was sized for Wi-Fi (bench 06.10.2026). But one low sample is mobile
@@ -1238,6 +1265,11 @@ class Agent:
             return self.rung
         now = time.monotonic()
         rung = self.rung
+        if rung >= 4 and self._fast_acks >= 2:
+            # capped frames are too small to time a fast link, but they crossed it instantly: go where frames are big
+            # enough to measure (720 px, NVENC), the ladder takes it from there
+            self._fast_acks = 0
+            rung = 3
         if self.acks_since_view < 1 and rung < len(LADDER) - 1:
             # a new viewer, nothing measured on ITS link yet: the smallest picture first (a ~6 KB key frame, half a
             # second even on 12 KB/s), its ack measures the link, and the ladder jumps to what the link affords —
@@ -1290,9 +1322,19 @@ class Agent:
         if want_w != self._vid_w:
             self._vid_w = want_w
             self.screen.set_width(want_w)
+        # May a frame go out now? Checked BEFORE grabbing: a frame grabbed and then held back was lost — grab_raw had
+        # already remembered its hash, the next grab said "unchanged", and the last change of an action reached the
+        # phone only when something else moved (06.10.2026). Now the grab happens when it can be sent at once.
+        if self._gate_closed(time.monotonic()):
+            if self.enc is not None and self.enc.alive:
+                await self._ship(ws, codec, 0.0)
+            await asyncio.sleep(min(interval, 0.02))
+            return
         try:
             region = self.enc_region
             raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(region=region))
+            if raw is not None:
+                self._changed_at = time.monotonic(); self._polish_left = 30
             if not self.screen_ok:
                 self.screen_ok = True
                 await ws.send_str(json.dumps({"t": "screen", "ok": True}))
@@ -1345,6 +1387,13 @@ class Agent:
                 self._vid_w = want2
                 self.screen.set_width(want2)
             raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True, region=region))
+        if (raw is None and self.enc is not None and self.enc.alive and getattr(self.enc, "frame_cap", 0)
+                and self._polish_left > 0 and self._last_ship_size >= 300 and now - self._changed_at > 0.25):
+            # Thin link, the picture stands: feed the same frame again — x264 sends only what is still missing (each
+            # step under the frame cap), and stops by itself when there is nothing left (a frame under 300 B). Not a
+            # re-send of the picture: the missing detail, once. NVENC cannot do this (it skips an identical frame).
+            self._polish_left -= 1
+            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True, region=region))
         if raw is None:
             # ffmpeg hands a frame out a little after it got it; we used to read only right after writing the next one,
             # so on a still screen the last change sat in the encoder until something else moved — the phone was one
@@ -1368,24 +1417,8 @@ class Agent:
         # One frame in flight, on every rung: the next picture is grabbed only after the phone decoded the previous one
         # (or after a link-sized wait if an ack got lost). A narrow link then gets fewer frames, each of them fresh,
         # instead of a queue of old ones seconds deep — and nothing is spent on frames nobody would see in time.
-        if len(self.inflight) >= 2 and time.monotonic() - self.inflight[0][0] > 60.0:
-            self.inflight.popleft()   # TCP loses no acks, only whole links (the relay drops those in ~30 s): a 60 s
-                                      # safety net; 8 s was less than a 100 KB key frame needs on a 12 KB/s link
         rung_now = self.refine_rung if self.refine else self.rung
         rung_bps = _kbit(LADDER[rung_now][2]) * 1000 / 8 if LADDER[rung_now][2] else 0
-        if rung_bps:   # the rung's budget over the last 2 s: wait when it is spent (fresh picture > old frames)
-            while self.sent_log and self.sent_log[0][0] < now - 2.0:
-                self.sent_log.popleft()
-            if sum(n for _, n in self.sent_log) > 2 * rung_bps:
-                await asyncio.sleep(min(interval, 0.05))
-                return
-        oldest = self.inflight[0] if self.inflight else None
-        expect = (self.rtt_min + (oldest[1] / self.bw * 1.2 if self.bw else 1.2) + 0.2) if oldest else 0   # ack due
-        if oldest and (len(self.inflight) >= 2 or time.monotonic() - oldest[0] < min(8.0, max(0.25, expect))):
-            if self.enc is not None and self.enc.alive:
-                await self._ship(ws, codec, 0.0)
-            await asyncio.sleep(min(interval, 0.02))
-            return
         # every key change restarts ffmpeg = a full key frame (100-300 KB): the ladder flapping 0->2->1->0 cost one each
         # time. With constant quality and one frame in flight the bitrate ceiling matters on a thin link only.
         thin = rung >= TINY_RUNG - 1 and not self.refine
@@ -1393,8 +1426,11 @@ class Agent:
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
             try:
+                # thin link: one frame may hold ~0.3 s of the rung's budget — the frame rate then follows the bytes
+                cap = int(rung_bps * 0.3) if thin and codec == "h264" and rung_bps else 0
                 self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt, bitrate=bitrate,
-                                         cq_boost=3 * self.refine, epoch=self.epoch)
+                                         cq_boost=3 * self.refine, epoch=self.epoch, frame_cap=cap,
+                                         high="avc1h" in self.codecs)
                 self.enc.key = key
                 log.info("video: %s %dx%d @%d (%s, rung %d, %s%s)", codec, size[0], size[1], enc_fps, tier, rung, self.enc.bitrate,
                          f", sharpening {self.refine}/3" if self.refine else "")
@@ -1411,7 +1447,7 @@ class Agent:
 
     async def _ship(self, ws, codec: str, wait: float):
         """Send every frame the encoder has finished; wait up to `wait` s for the first one."""
-        cid = 1 if codec == "h264" else 2
+        cid = getattr(self.enc, "cid", 1 if codec == "h264" else 2)
         region = getattr(self.enc, "region", None)
         head = b""
         if region:   # flag bit 1 + the rect as 4 x uint16/65535: the page draws this frame there, not full-screen
@@ -1422,6 +1458,7 @@ class Agent:
             if item is None:
                 break
             is_key, pts, payload = item
+            self._last_ship_size = len(payload)
             if is_key:
                 log.info("video: key frame %d B%s", len(payload), " (region)" if region else "")
             if not is_key and len(payload) > 6000:      # real motion, not a cursor blink
@@ -1589,7 +1626,7 @@ class Agent:
                         self.acks_since_view = 0
                         # a new link: its latency is unknown, and frames sent to the previous one are nobody's
                         self.inflight.clear(); self.ack.set(); self.rtt = 0.0; self.rtt_min = 0.0; self.excess = 0.0
-                        self.enc_region = None
+                        self.enc_region = None; self._fast_acks = 0
                     if not self.viewers:
                         self.codecs = []              # last viewer left: next one re-announces
                     # keep the PC awake while someone is connected (monitor may be off)
@@ -1635,7 +1672,8 @@ class Agent:
                     if ev.get("off"):
                         self.codecs = []
                     elif isinstance(ev.get("codecs"), list):
-                        self.codecs = [c for c in ev["codecs"] if c in ("avc1", "vp8")][:4]
+                        self.codecs = [c for c in ev["codecs"] if c in ("avc1", "avc1h", "vp8", "hvc1", "av01", "vp09")][:8]
+                        log.info("phone decodes: %s", ", ".join(self.codecs) or "nothing")
                         self.audio_opus = "opus" in ev["codecs"]
                     self.video_gen += 1
                 elif t == "audio_source":

@@ -540,6 +540,7 @@ class App(tk.Tk):
         self.cfg, self.backend = cfg, backend
         self.tray = Tray(self)
         self.last_phones = 0
+        self.last_guests = 0
         self.title(APP_NAME)
         self.resizable(False, False)
         self.configure(bg=BG)
@@ -1012,8 +1013,13 @@ class App(tk.Tk):
             # phones vanished right after VPN came up and did not return: almost always a kill switch
             if net.get("vpn") and self.last_phones and not phones:
                 self.code_hint.configure(text="Телефоны отвалились после включения VPN: выключите Kill Switch в VPN-клиенте.")
-            if phones > self.last_phones:
-                self.tray.notify("Телефон подключился")
+            # only a guest is worth a toast: the owner's phone reconnects on mobile data all the time, and every toast
+            # slides across the PC screen for seconds — the agent filmed it and sent it to that very phone, on a thin
+            # link exactly when its first picture should go (06.10.2026)
+            guests = len(getattr(b.hub, "guests", ()) or ())
+            if guests > self.last_guests:
+                self.tray.notify("Подключился гость")
+            self.last_guests = guests
             self.last_phones = phones
             self.ring_btn.configure(state="normal" if phones else "disabled")
             self.cast_btn.configure(state="normal" if b.cast_active else "disabled")

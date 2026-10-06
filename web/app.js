@@ -345,7 +345,10 @@
     if (codecList) return codecList;
     codecList = [];
     if (!("VideoDecoder" in window)) return codecList;
-    for (const [name, cfg] of [["avc1", { codec: "avc1.42E01E" }], ["vp8", { codec: "vp8" }]]) {
+    // avc1h = H.264 High (the PC uses it on a thin link when we have it); hvc1/av01/vp09 are reported for the PC's
+    // choice of codec and its log
+    for (const [name, cfg] of [["avc1", { codec: "avc1.42E01E" }], ["avc1h", { codec: "avc1.64001F" }], ["vp8", { codec: "vp8" }],
+                               ["hvc1", { codec: "hvc1.1.6.L93.B0" }], ["av01", { codec: "av01.0.04M.08" }], ["vp09", { codec: "vp09.00.10.08" }]]) {
       try { const r = await VideoDecoder.isConfigSupported({ ...cfg, codedWidth: 1280, codedHeight: 720 }); if (r.supported) codecList.push(name); } catch {}
     }
     // sound: Opus at 24 kbit/s instead of raw PCM at 256 kbit/s (the PC falls back to PCM if we can't)
@@ -376,7 +379,7 @@
         },
         error: (e) => { console.warn("video decoder", e); window.pcrError && window.pcrError("Декодер: " + (e.message || e)); try { vdec.close(); } catch {} vdec = null; send({ t: "video", off: true }); show("Видео недоступно, перехожу на JPEG"); },
       });
-      vdec.configure(codec === 1 ? { codec: "avc1.42E01E", optimizeForLatency: true } : { codec: "vp8", optimizeForLatency: true });
+      vdec.configure({ codec: codec === 1 ? "avc1.42E01E" : codec === 3 ? "avc1.64001F" : "vp8", optimizeForLatency: true });
       vcodec = codec; waitKey = true; return true;
     } catch (e) { vdec = null; send({ t: "video", off: true }); return false; }
   }
