@@ -54,6 +54,8 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = getSharedPreferences("pcremote", MODE_PRIVATE);
+        Pairing.deviceName = Build.MANUFACTURER + " " + Build.MODEL;   // what a paired phone is asked to allow
+        Pairing.status = (text) -> runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
         handleUpdateTap(getIntent());
         CellularLink.install(this);   // mobile data as the last road when Wi-Fi cannot reach the PC
         getWindow().setStatusBarColor(BG);

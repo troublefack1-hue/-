@@ -51,6 +51,7 @@ MAX_EVENT = 64 * 1024               # bytes per text event from a phone
 MAX_CAST = 2 * 1024 * 1024          # bytes per screen-cast frame from a phone
 AUTH_TIMEOUT = 15                   # seconds to send the auth message (mobile data through a VPN is slow)
 LOCKOUT_ATTEMPTS, LOCKOUT_WINDOW = 10, 600
+PAIR_WAIT = 120   # s a new phone waits for the yes of an already paired one
 CORS = {"Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": "Authorization",
         "Access-Control-Allow-Methods": "GET, POST"}
@@ -126,7 +127,7 @@ def _event_type(data: str):
 
 
 # what the phone's background service (hello_phone{bg}) handles; everything else is for the open page only
-BG_ALLOW = {"status", "ring", "attention", "pc_notify", "pfs", "apps", "role", "net"}
+BG_ALLOW = {"status", "ring", "attention", "pc_notify", "pfs", "apps", "role", "net", "pair_request", "pair_done"}
 GUEST_RECV_BLOCK = {"term_out", "term_exit", "term_open", "pc_clip", "pc_notify", "attention", "diag",
                     "sys", "procs", "timers", "downloads", "dl", "powerplans", "windows"}
 
@@ -317,6 +318,7 @@ class Hub:
         self.fs_phone = None
         self.bg: set = set()          # the phones' background services: no picture/sound, no viewer count
         self.screen_meter = netproxy.Meter()   # picture and sound to the phones (their share of the link)
+        self.pair_requests: dict = {}          # id -> a new phone waiting for a paired phone's yes
         self.phone_bw = 0.0                     # the phone's link, bytes/s, as the agent measures it ("linkbw")
         self._claude_told = 0
         self.profiles: dict = {}      # phone ws -> its last {"t":"profile"} text, newest last; re-sent when a bg link took over
@@ -410,6 +412,11 @@ class Hub:
             self.pair_code = None  # a temporary code is single use; the permanent one stays
         else:
             self.pair_guest = False  # the permanent code always gives the owner secret
+            # ...but only after an already paired phone said yes: the code is printed in the PC window and sits in the
+            # PC-signed apps, and whoever got it had full access (owner, 06.10.2026: «вход только для моего телефона»)
+            waiting = await self._pair_wait(request, ip)
+            if waiting is not None:
+                return waiting
         log.info("phone paired from %s", ip)
         self.log_event(f"телефон привязан ({ip})")
         if self.on_paired:
@@ -417,6 +424,72 @@ class Hub:
         secret = self.cfg["guest_secret"] if (self.pair_guest and self.cfg.get("guest_secret")) else self.cfg["secret"]
         return web.json_response({"secret": secret, "ntfy": self.cfg.get("ntfy_phone_url", ""), "wake": self.cfg.get("ntfy_wake_url", ""),
                                   "lan": LAN_IP.get("ip") or ""})
+
+    async def _pair_wait(self, request, ip):
+        """None = the owner's phone said yes; else the answer for the asking phone (wait / refused)."""
+        now = time.time()
+        for k in [k for k, r in self.pair_requests.items() if now - r["at"] > PAIR_WAIT]:
+            del self.pair_requests[k]
+        rid = request.query.get("req", "")
+        r = self.pair_requests.get(rid) if rid else None
+        if r is None:
+            if len(self.pair_requests) >= 3:
+                return web.json_response({"error": "слишком много запросов привязки, подождите 2 минуты"}, status=429)
+            rid = secrets.token_urlsafe(9)
+            model = "".join(ch for ch in request.query.get("model", "") if ch.isprintable())[:60] or "неизвестный телефон"
+            r = self.pair_requests[rid] = {"ip": ip, "model": model, "at": now, "state": "wait"}
+            log.warning("pairing by the permanent code from %s (%s): waiting for a paired phone", ip, model)
+            self.log_event(f"новый телефон просит доступ: {model} ({ip})")
+            asked = await self.ask_paired(rid, r)
+            if not asked:
+                del self.pair_requests[rid]
+                return web.json_response({"error": "некому подтвердить: ни один привязанный телефон сейчас не на связи. "
+                                                   "Возьмите одноразовый код в окне PC Remote"}, status=409)
+        if r["state"] == "ok":
+            del self.pair_requests[rid]
+            return None
+        if r["state"] == "no":
+            del self.pair_requests[rid]
+            return web.json_response({"error": "отклонено на привязанном телефоне"}, status=403)
+        return web.json_response({"pending": rid, "wait": int(PAIR_WAIT - (now - r["at"]))}, status=202)
+
+    async def ask_paired(self, rid: str, r: dict) -> int:
+        """The question to every paired app of the owner («Мой ПК», its background service, «Интернет через ПК»)."""
+        msg = json.dumps({"t": "pair_request", "id": rid, "model": r["model"], "ip": r["ip"]})
+        sent = 0
+        for ws in list(self.phones):
+            if ws in self.guests:
+                continue
+            try:
+                await ws.send_str(msg); sent += 1
+            except Exception:  # noqa: BLE001
+                pass
+        for s in list(self.netproxy.sessions):
+            try:
+                await s.ws.send_str(msg); sent += 1
+            except Exception:  # noqa: BLE001
+                pass
+        return sent
+
+    async def answer_pair(self, rid: str, ok: bool, where: str):
+        r = self.pair_requests.get(rid)
+        if not r or r["state"] != "wait":
+            return
+        r["state"] = "ok" if ok else "no"
+        log.warning("pairing of %s (%s) %s on %s", r["model"], r["ip"], "allowed" if ok else "refused", where)
+        self.log_event(f"новый телефон {r['model']} ({r['ip']}): {'разрешён' if ok else 'отклонён'} ({where})")
+        done = json.dumps({"t": "pair_done", "id": rid, "ok": ok})   # the other apps drop their question
+        for ws in list(self.phones):
+            if ws not in self.guests:
+                try:
+                    await ws.send_str(done)
+                except Exception:  # noqa: BLE001
+                    pass
+        for s in list(self.netproxy.sessions):
+            try:
+                await s.ws.send_str(done)
+            except Exception:  # noqa: BLE001
+                pass
 
     # --- status broadcast ----------------------------------------------
     def status(self) -> dict:
@@ -644,6 +717,13 @@ class Hub:
                     continue
                 if msg.data.startswith('{"t":"ping"') or msg.data.startswith('{"t": "ping"'):
                     await ws.send_str(json.dumps({"t": "pong", "ts": time.time(), "pc_online": self.pc is not None}))
+                    continue
+                if ('"pair_answer"' in msg.data[:30]) and ws not in self.guests:
+                    try:
+                        ev = json.loads(msg.data)
+                        await self.answer_pair(str(ev.get("id", "")), bool(ev.get("ok")), "«Мой ПК»")
+                    except (ValueError, TypeError):
+                        pass
                     continue
                 if (msg.data.startswith('{"t":"traffic_get"') or msg.data.startswith('{"t": "traffic_get"')) and ws not in self.guests:
                     await ws.send_str(json.dumps(self.traffic_table()))

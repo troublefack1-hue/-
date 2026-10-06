@@ -46,6 +46,15 @@ public class RemoteService extends Service {
 
     private SharedPreferences prefs;
     private WsClient ws;
+    private static volatile RemoteService self;
+
+    /** A small message to the PC over the background link (PairApprove); false when the link is down. */
+    static boolean sendText(String json) {
+        RemoteService s = self;
+        WsClient c = s == null ? null : s.ws;
+        if (c == null || !c.isOpen()) return false;
+        try { c.sendText(json); return true; } catch (Exception e) { return false; }
+    }
     private volatile boolean running = true;
     private Thread keeper;
     private MediaProjection projection;
@@ -239,6 +248,18 @@ public class RemoteService extends Service {
     }
 
     private void onMessage(String s) {
+        self = this;
+        if (s.contains("\"pair_request\"") && s.length() < 600) {   // a new phone asks: «Разрешить / Отклонить»
+            try {
+                org.json.JSONObject ev = new org.json.JSONObject(s);
+                PairApprove.ask(this, ev.optString("id"), ev.optString("model"), ev.optString("ip"));
+            } catch (Exception e) { PhoneLog.add("pair request: " + e); }
+            return;
+        }
+        if (s.contains("\"pair_done\"") && s.length() < 300) {
+            try { PairApprove.done(this, new org.json.JSONObject(s).optString("id")); } catch (Exception ignored) {}
+            return;
+        }
         if (s.startsWith("{\"t\": \"apps\"") || s.startsWith("{\"t\":\"apps\"")) {   // new builds on the PC: fetch them now
             new Thread(() -> {
                 // on mobile data a 330 KB download is half a minute of the link: not while the owner watches the screen

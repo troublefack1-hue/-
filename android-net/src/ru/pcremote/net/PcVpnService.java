@@ -154,7 +154,21 @@ public class PcVpnService extends VpnService {
 
     private void teardown(String st, String why) { teardownLink(); setState(st, why); }
 
+    /** A pairing answer to the PC over the tunnel's link (NetPairApprove). */
+    boolean answerPair(String json) { NetMux m = mux; return m != null && m.sendText(json); }
+
     private void onPcText(String json) {
+        if (json.contains("\"pair_request\"") && json.length() < 600) {
+            try {
+                org.json.JSONObject ev = new org.json.JSONObject(json);
+                NetPairApprove.ask(this, ev.optString("id"), ev.optString("model"), ev.optString("ip"));
+            } catch (Exception ignored) {}
+            return;
+        }
+        if (json.contains("\"pair_done\"") && json.length() < 300) {
+            try { NetPairApprove.done(this, new org.json.JSONObject(json).optString("id")); } catch (Exception ignored) {}
+            return;
+        }
         if (json.contains("\"net_stats\"")) {
             try {
                 blockedAds = Long.parseLong(ru.pcremote.Pairing.jsonNumber(json, "dns_blocked"));

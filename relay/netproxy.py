@@ -797,6 +797,13 @@ class NetProxy:
                 if msg.type == WSMsgType.BINARY:
                     await session.handle(msg.data)
                 elif msg.type == WSMsgType.TEXT:
+                    if '"pair_answer"' in msg.data[:30]:   # «Интернет через ПК» answered a new phone's request
+                        try:
+                            ev = json.loads(msg.data)
+                            await self.hub.answer_pair(str(ev.get("id", "")), bool(ev.get("ok")), "«Интернет через ПК»")
+                        except (ValueError, TypeError):
+                            pass
+                        continue
                     if msg.data.startswith('{"t":"stats"') or msg.data.startswith('{"t": "stats"'):
                         await ws.send_str(json.dumps({"t": "net_stats", **self.stats(),
                                                       "journal": [{"ts": t, "name": n, "blocked": b} for t, n, b in self.dns.journal[-50:]]}))

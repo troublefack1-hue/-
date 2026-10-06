@@ -48,6 +48,9 @@ public final class NetMux implements WsClient.Listener {
 
     public void close() { up = false; if (ws != null) ws.close(); }
 
+    /** A small text message to the PC (a pairing answer). */
+    public boolean sendText(String json) { try { if (isUp()) { ws.sendText(json); return true; } } catch (IOException ignored) {} return false; }
+
     public void requestStats() { try { if (isUp()) ws.sendText("{\"t\":\"stats\"}"); } catch (IOException ignored) {} }
 
     // ---- TCP ----

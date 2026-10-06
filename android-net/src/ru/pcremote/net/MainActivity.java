@@ -51,6 +51,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        ru.pcremote.Pairing.deviceName = android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL;   // for the yes on a paired phone
         prefs = getSharedPreferences("pcnet", MODE_PRIVATE);
         PairShare.sync(this);   // paired in «Мой ПК» = paired here
         getWindow().setStatusBarColor(BG); getWindow().setNavigationBarColor(BG);

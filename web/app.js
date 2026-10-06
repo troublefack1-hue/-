@@ -336,6 +336,12 @@
         pingSentAt = Date.now(); send({ t: "ping" });
         setTimeout(() => { if (Date.now() - lastMsgAt > 1400 && ws && ws.readyState === 1) { backoff = 300; ws.close(); } }, 1500);
       } else if (m.t === "traffic") { renderTraffic(m);
+      } else if (m.t === "pair_request") {   // a new phone typed the permanent code: only a paired phone lets it in
+        (async () => {
+          const ok = await ask(`Новый телефон просит доступ к ПК: ${m.model} (${m.ip}). Он ввёл постоянный код. Разрешить? Если это не вы — «Отмена».`);
+          send({ t: "pair_answer", id: m.id, ok: !!ok });
+          show(ok ? "Разрешено" : "Отклонено", 2500);
+        })();
       } else if (m.t === "cur") {   // the PC cursor moved: draw it now, the picture need not carry it
         pcCur = { x: m.x, y: m.y };
         if (trackpad.checked && t0 === null && !dragging) cur = pcCur;   // the pad resyncs while no finger is down

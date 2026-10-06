@@ -175,9 +175,34 @@ async def main():
         r = await s.post(U + "/api/ticket", json={"path": "/etc/passwd"}, headers={"Authorization": "Bearer " + T}); report("ticket for a path outside share -> 403", r.status == 403)
         # ---------- permanent connection code ----------
         hub.cfg["pair_code"] = "K7PX-4M2Q"
-        r = await s.get(U + "/api/pair", params={"code": "k7px 4m2q"}); j = await r.json() if r.status == 200 else {}
-        report("permanent code pairs (any case, spaces/dashes ignored)", r.status == 200 and j.get("secret") == T)
-        r = await s.get(U + "/api/pair", params={"code": "K7PX-4M2Q"}); report("permanent code is reusable", r.status == 200)
+        # the permanent code alone is not enough any more: an already paired phone has to say yes (owner, 06.10.2026)
+        r = await s.get(U + "/api/pair", params={"code": "k7px 4m2q", "model": "Test Phone"})
+        report("the permanent code alone gives no secret (409 if nobody can say yes, else 202)", r.status in (202, 409) and '"secret"' not in (await r.text()))
+        hub.pair_requests.clear()
+        owner = await ws_auth(s, "/ws/phone"); await owner.receive()   # a paired phone on the line
+        r = await s.get(U + "/api/pair", params={"code": "k7px 4m2q", "model": "Test Phone"}); j = await r.json()
+        report("permanent code (any case, spaces/dashes ignored) -> waits, no secret", bool(r.status == 202 and j.get("pending") and "secret" not in j), str(j))
+        q = None
+        for _ in range(5):
+            m = await asyncio.wait_for(owner.receive(), 3)
+            if m.type == aiohttp.WSMsgType.TEXT and '"pair_request"' in m.data:
+                q = json.loads(m.data); break
+        report("the paired phone is asked, with the model and the address", bool(q is not None and q.get("model") == "Test Phone" and q.get("ip")), str(q))
+        await owner.send_str(json.dumps({"t": "pair_answer", "id": q["id"] if q else "", "ok": True})); await asyncio.sleep(0.2)
+        r = await s.get(U + "/api/pair", params={"code": "K7PX-4M2Q", "req": j.get("pending", "")}); j2 = await r.json() if r.status == 200 else {}
+        report("after the yes the waiting phone gets the secret", r.status == 200 and j2.get("secret") == T)
+        r = await s.get(U + "/api/pair", params={"code": "K7PX-4M2Q"}); j = await r.json()
+        for _ in range(5):
+            m = await asyncio.wait_for(owner.receive(), 3)
+            if m.type == aiohttp.WSMsgType.TEXT and '"pair_request"' in m.data:
+                q = json.loads(m.data); break
+        await owner.send_str(json.dumps({"t": "pair_answer", "id": q["id"], "ok": False})); await asyncio.sleep(0.2)
+        r = await s.get(U + "/api/pair", params={"code": "K7PX-4M2Q", "req": j.get("pending", "")})
+        report("a refused phone gets 403 and no secret", r.status == 403 and "secret" not in (await r.text()))
+        r = await s.get(U + "/api/pair", params={"code": "K7PX-4M2Q", "req": "made-up"}); j = await r.json()
+        report("a made-up request id is a new request, not a pass", r.status == 202 and "secret" not in j)
+        hub.pair_requests.clear()
+        await owner.close()
         r = await s.get(U + "/api/pair", params={"code": "K7PX-4M2X"}); report("wrong permanent code -> 403", r.status == 403)
         hub.lockout.failed.clear()
         # ---------- revoke: new secrets, everyone dropped ----------

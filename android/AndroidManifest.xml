@@ -70,6 +70,7 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
         <receiver android:name=".InstallResult" android:exported="false" />
+        <receiver android:name=".PairApprove" android:exported="false" />
         <!-- «Интернет через ПК» asks us to update it; only our own apps hold PAIRING -->
         <receiver android:name=".PartnerUpdate" android:exported="true" android:permission="ru.pcremote.permission.PAIRING">
             <intent-filter>
