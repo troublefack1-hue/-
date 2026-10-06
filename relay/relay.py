@@ -48,7 +48,7 @@ MAX_PHONES = 4                      # simultaneous viewers
 MAX_FRAME = 4 * 1024 * 1024         # bytes per binary frame from the agent
 MAX_EVENT = 64 * 1024               # bytes per text event from a phone
 MAX_CAST = 2 * 1024 * 1024          # bytes per screen-cast frame from a phone
-AUTH_TIMEOUT = 5                    # seconds to send the auth message
+AUTH_TIMEOUT = 15                   # seconds to send the auth message (mobile data through a VPN is slow)
 LOCKOUT_ATTEMPTS, LOCKOUT_WINDOW = 10, 600
 CORS = {"Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": "Authorization",
@@ -93,6 +93,13 @@ def load_config() -> dict:
 GUEST_ALLOW = {"ping", "ack", "profile", "cmd", "hello_phone", "monitor", "sys_get"}
 # agent -> phone message types a guest must NOT receive (terminal, clipboard, notifications,
 # window list, downloads). A guest sees the screen and power results, nothing private.
+def ws_path(ws) -> str:
+    try:
+        return ws._req.path if getattr(ws, "_req", None) is not None else "?"
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
 def _event_type(data: str):
     try:
         return json.loads(data).get("t")
@@ -324,18 +331,34 @@ class Hub:
         if self.lockout.blocked(ip):
             await ws.close(code=4029, message=b"locked")   # not 4003: a lockout must not make the phone forget its secret
             return False
+        # 4003 tells the phone "your secret is revoked" and it forgets it. Only a WRONG token may say that: a slow link
+        # (mobile data through a VPN) that missed the old 5 s window got 4003 too, and the phone lost its pairing
+        # ("Доступ отозван", 06.10.2026 07:09). No message in time -> 4008, the phone just reconnects.
         try:
             msg = await asyncio.wait_for(ws.receive(), AUTH_TIMEOUT)
+        except asyncio.TimeoutError:
+            log.warning("ws auth timeout from %s (%s)", ip, ws_path(ws))
+            await ws.close(code=4008, message=b"auth timeout")
+            return False
+        token = None
+        try:
             ev = json.loads(msg.data) if msg.type == WSMsgType.TEXT else {}
-            if ev.get("t") == "auth" and self.token_ok(str(ev.get("token", ""))):
-                self.lockout.ok(ip)
-                if self.is_guest_token(str(ev.get("token", ""))):
-                    self.guests.add(ws)
-                return True
-        except (asyncio.TimeoutError, ValueError, TypeError, AttributeError):
+            if ev.get("t") == "auth":
+                token = str(ev.get("token", ""))
+        except (ValueError, TypeError, AttributeError):
             pass
+        if token is None:   # not an auth message at all: a broken client, not a wrong secret
+            log.warning("ws without auth message from %s (%s)", ip, ws_path(ws))
+            await ws.close(code=4008, message=b"auth expected")
+            return False
+        if self.token_ok(token):
+            self.lockout.ok(ip)
+            if self.is_guest_token(token):
+                self.guests.add(ws)
+            return True
         self.lockout.fail(ip)
-        log.warning("bad ws auth from %s", ip)
+        # length and first 3 characters only: enough to tell whose secret it was, not enough to be one
+        log.warning("bad ws auth from %s (%s): token of %d chars starting %r", ip, ws_path(ws), len(token), token[:3])
         await ws.close(code=4003, message=b"auth")
         return False
 
