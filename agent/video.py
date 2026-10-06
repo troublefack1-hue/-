@@ -122,7 +122,7 @@ class Encoder:
     """One ffmpeg process. write(bgra) feeds a frame; frames() yields (key, pts_us, bytes)."""
 
     def __init__(self, ffmpeg: str, codec: str, width: int, height: int, fps: int, profile: str = "normal", pix_fmt: str = "bgra",
-                 bitrate: str | None = None):
+                 bitrate: str | None = None, cq_boost: int = 0):
         self.codec, self.width, self.height, self.fps = codec, width, height, max(1, fps)
         self.key = None
         have = _encoders(ffmpeg)
@@ -133,6 +133,8 @@ class Encoder:
         # for one) and as a slow safety refresh; a 1920 key frame of a photo wallpaper is ~200 KB
         gop = str(self.fps * (10 if thin else 30))
         cq = None if thin else CQ.get(profile)
+        if cq is not None and cq_boost:
+            cq = max(14, cq - cq_boost)   # a still screen being sharpened: better than the profile
         if codec == "h264":
             name, args = h264_encoder(ffmpeg) or H264_CHAIN[-1]
             self.encoder_name = name

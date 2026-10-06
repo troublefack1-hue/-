@@ -645,14 +645,15 @@ class Screen:
         self.grab_ms = self.cap.last_ms if not self.grab_ms else self.grab_ms * 0.8 + self.cap.last_ms * 0.2
         return out
 
-    def grab_raw(self):
-        """Raw pixels for the video encoder: (bytes, pix_fmt, (w, h)); None if unchanged."""
-        got = self._grab(force=not self._last_hash)
+    def grab_raw(self, still: bool = False):
+        """Raw pixels for the video encoder: (bytes, pix_fmt, (w, h)); None if unchanged.
+        still=True: the current picture even if unchanged (sharpening a still screen)."""
+        got = self._grab(force=still or not self._last_hash)
         if got is None:
             return None
         raw, size = got
         digest = hashlib.blake2b(raw, digest_size=8).digest()
-        if digest == self._last_hash:
+        if digest == self._last_hash and not still:
             return None
         self._last_hash = digest
         if self.size == size:
@@ -930,6 +931,9 @@ class Agent:
         self.audio_only = False      # sound on the phone only: the room stays quiet while it listens
         self.audio_opus = False      # phone announced an Opus decoder
         self.bw = 0.0                # measured link throughput, bytes/s (from acks of big frames)
+        self.refine = 0              # 0 = live; 1..3 = sharpening a still picture step by step
+        self.refine_at = 0.0
+        self.busy_at = 0.0           # last frame that carried real motion
         self.rtt_min = 0.0           # the link's own latency (a VPN may add 300+ ms); the ladder reacts to time above it
         self.bw_at = 0.0             # when the last throughput sample came in
         self.sent_bytes = 0
@@ -1159,33 +1163,52 @@ class Agent:
             return
         if self.rtt and self.ack.is_set():
             self.rtt *= 0.98   # no ack pending: let a stale "slow" verdict fade so we can try the full tier again
-        if raw is None:
-            # nothing changed: the decoder keeps the last picture; still restart on demand
+        now = time.monotonic()
+        if raw is None and self.enc and (self.enc.key[5] != self.video_gen or not self.enc.alive):
             # key[4] is the bitrate (None at full quality), not the generation: comparing it with video_gen closed
             # the encoder on every still frame — 1212 restarts in an evening, a fresh key frame each time
-            if self.enc and (self.enc.key[5] != self.video_gen or not self.enc.alive):
-                self.video_close()
-                self.screen._last_hash = b""
+            self.video_close()
+            self.screen._last_hash = b""
+            await asyncio.sleep(interval)
+            return
+        # The picture is calm (no frame with real motion for 1.2 s — a blinking cursor or a clock does not count):
+        # sharpen it step by step (owner's wish, 06.10.2026) — two ladder rungs up and 3 cq better per step, at most
+        # 3 steps (full width the phone shows, cq profile-9). One key frame per step, only after the previous frame
+        # was decoded: on a slow link it simply takes longer. Real motion (send loop below) drops back at once.
+        if (self.enc and now - self.busy_at > 1.2 and self.refine < 3 and self.ack.is_set()
+                and now - self.refine_at > 1.0 and self.screen.profile_name != "tiny"):
+            self.refine += 1; self.refine_at = now
+            lw2 = LADDER[max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0][0]
+            want2 = min(self.screen.profile["max_width"], lw2) if lw2 else self.screen.profile["max_width"]
+            if want2 != self._vid_w:
+                self._vid_w = want2
+                self.screen.set_width(want2)
+            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True))
+        if raw is None:
             await asyncio.sleep(interval)
             return
         data, pix_fmt, size = raw
         # the ladder: resolution, frame rate and bitrate follow the link; low rungs keep one frame in flight
-        rung = self.rung
+        rung = max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0
         lw, lfps, lbr = LADDER[rung]
         tier = self.screen.profile_name
         enc_fps = min(fps, lfps) if lfps else fps
         bitrate = lbr if lbr and _kbit(lbr) < _kbit(video.BITRATE.get(tier, "2500k")) else None
-        thin = rung >= TINY_RUNG - 1
+        if self.refine:
+            bitrate = None   # the profile's ceiling: a still frame may take its time
+        thin = rung >= TINY_RUNG - 1 and not self.refine
         if thin and not self.ack.is_set() and time.monotonic() - self.sent_at < 1.5:
             await asyncio.sleep(interval)   # the previous frame is still on the wire: don't pile up behind it
             return
-        key = (codec, size, enc_fps, tier, bitrate, self.video_gen, pix_fmt)
+        key = (codec, size, enc_fps, tier, bitrate, self.video_gen, pix_fmt, self.refine)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
             try:
-                self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt, bitrate=bitrate)
+                self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt, bitrate=bitrate,
+                                         cq_boost=3 * self.refine)
                 self.enc.key = key
-                log.info("video: %s %dx%d @%d (%s, rung %d, %s)", codec, size[0], size[1], enc_fps, tier, rung, self.enc.bitrate)
+                log.info("video: %s %dx%d @%d (%s, rung %d, %s%s)", codec, size[0], size[1], enc_fps, tier, rung, self.enc.bitrate,
+                         f", sharpening {self.refine}/3" if self.refine else "")
             except Exception as e:  # noqa: BLE001
                 log.warning("ffmpeg failed to start: %s", e)
                 self.ffmpeg = None   # JPEG from now on
@@ -1199,6 +1222,11 @@ class Agent:
             if item is None:
                 break
             is_key, pts, payload = item
+            if not is_key and len(payload) > 6000:      # real motion, not a cursor blink
+                self.busy_at = time.monotonic()
+                if self.refine and len(payload) > 12000:
+                    log.info("video: motion, back to the link's settings")
+                    self.refine = 0
             self.sent_at = time.monotonic()   # the phone acks decoded frames: that gives us the RTT
             self.sent_bytes = len(payload)
             self.ack.clear()
