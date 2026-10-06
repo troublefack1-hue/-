@@ -1158,9 +1158,9 @@ class Agent:
                 afford = 0
             if afford > rung:
                 rung = afford                                   # down: at once
-            elif afford < rung and self.rtt - self.rtt_min < 0.25 and now - self.rung_at > 4:
+            elif afford < rung and self.rtt - self.rtt_min < 0.25 and now - self.rung_at > 15:
                 rung -= 1                                       # up: one rung per 4 s, only with headroom and quick acks
-        elif rung > 0 and self.rtt - self.rtt_min < 0.15 and now - self.rung_at > 6:
+        elif rung > 0 and self.rtt - self.rtt_min < 0.15 and now - self.rung_at > 15:
             rung -= 1                                           # no recent measurement, acks are quick: probe upward
         if self.rtt - self.rtt_min > 0.5 and now - self.rung_at > 2:
             rung = min(len(LADDER) - 1, rung + 1)               # a queue builds up (acks late beyond the base latency): step down
@@ -1217,10 +1217,13 @@ class Agent:
         # was decoded: on a slow link it simply takes longer. Real motion (send loop below) drops back at once.
         # ...and only while the owner just looks (no touch for 3 s) and the link answers quickly: on mobile data a
         # sharpened key frame stood in the queue for seconds and every tap came late (06.10.2026 08:33)
-        if (self.enc and now - self.busy_at > 1.2 and self.refine < 3 and self.ack.is_set()
-                and now - self.last_input > 3 and (not self.rtt or self.rtt - self.rtt_min < 0.3)
+        # One sharpened key frame, not three: on a 40 KB/s link three of them cost 413 KB in a 12 s pause and held
+        # the link for ~10 s (bench, 06.10.2026). And never on a slow link: there the owner wants the traffic low.
+        if (self.enc and now - self.busy_at > 2.5 and self.refine < 3 and self.ack.is_set()
+                and now - self.last_input > 5 and (not self.rtt or self.rtt - self.rtt_min < 0.3)
+                and (not self.bw or self.bw > 60 * 1024)
                 and now - self.refine_at > 1.0 and self.screen.profile_name != "tiny"):
-            self.refine += 1; self.refine_at = now
+            self.refine = 3; self.refine_at = now
             lw2 = LADDER[max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0][0]
             want2 = min(self.screen.profile["max_width"], lw2) if lw2 else self.screen.profile["max_width"]
             if want2 != self._vid_w:
@@ -1240,7 +1243,10 @@ class Agent:
         rung = max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0
         lw, lfps, lbr = LADDER[rung]
         tier = self.screen.profile_name
-        enc_fps = min(fps, lfps) if lfps else fps
+        # the encoder runs at the profile's rate; idle seconds simply feed it fewer frames. A rate change used to
+        # restart it — a full key frame (100-300 KB) on the first touch after every pause
+        prof_fps = self.screen.profile["fps"] or fps
+        enc_fps = min(prof_fps, lfps) if lfps else prof_fps
         bitrate = lbr if lbr and _kbit(lbr) < _kbit(video.BITRATE.get(tier, "2500k")) else None
         if self.refine:
             bitrate = None   # the profile's ceiling: a still frame may take its time
@@ -1252,7 +1258,10 @@ class Agent:
                 await self._ship(ws, codec, 0.0)
             await asyncio.sleep(min(interval, 0.02))
             return
-        key = (codec, size, enc_fps, tier, bitrate, self.video_gen, pix_fmt, self.refine)
+        # every key change restarts ffmpeg = a full key frame (100-300 KB): the ladder flapping 0->2->1->0 cost one each
+        # time. With constant quality and one frame in flight the bitrate ceiling matters on a thin link only.
+        thin = rung >= TINY_RUNG - 1 and not self.refine
+        key = (codec, size, enc_fps, tier, bitrate if thin else None, self.video_gen, pix_fmt, self.refine)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
             try:
@@ -1282,7 +1291,7 @@ class Agent:
             is_key, pts, payload = item
             if not is_key and len(payload) > 6000:      # real motion, not a cursor blink
                 self.busy_at = time.monotonic()
-                if self.refine and len(payload) > 12000:
+                if self.refine and len(payload) > 40000:
                     log.info("video: motion, back to the link's settings")
                     self.refine = 0
             self.sent_at = time.monotonic()   # the phone acks decoded frames: that gives us the RTT
