@@ -88,6 +88,23 @@ async def main():
             await touch("touchMove", [(180, 450 - 10 * i), (260, 450 - 10 * i)]); await asyncio.sleep(0.03)
         await touch("touchEnd", []); await page.wait_for_timeout(300)
         report("two-finger scroll is not a right click", not [e for e in got[n:] if e["t"] == "click"], str(got[n:])[:80])
+        # the PC reports its cursor a link's delay late: an old position right after the finger lifts must not throw
+        # the trackpad's cursor back (owner, 06.10.2026: «когда отпускаю экран, курсор улетает обратно»)
+        n = len(got); await swipe(100, 10, 30)
+        last = [e for e in got[n:] if e["t"] == "move"][-1]
+        await pc.send_str(json.dumps({"t": "cur", "x": round(last["x"] - 0.05, 4), "y": last["y"]}))   # where it WAS
+        await page.wait_for_timeout(300)
+        n2 = len(got); await swipe(10, 2, 30)
+        nxt = [e for e in got[n2:] if e["t"] == "move"]
+        report("a late cursor report does not throw the cursor back", bool(nxt) and nxt[0]["x"] >= last["x"] - 0.001,
+               f"last sent {last['x']}, next starts {nxt[0]['x'] if nxt else None}")
+        # ...but when the PC's cursor really moved by itself (nobody touched the phone for 2 s), the pad follows it
+        await page.wait_for_timeout(2200)
+        await pc.send_str(json.dumps({"t": "cur", "x": 0.2, "y": 0.2})); await page.wait_for_timeout(300)
+        n3 = len(got); await swipe(10, 2, 30)
+        nxt = [e for e in got[n3:] if e["t"] == "move"]
+        report("a cursor moved on the PC itself is followed after a pause", bool(nxt) and abs(nxt[0]["x"] - 0.2) < 0.05,
+               f"next starts {nxt[0]['x'] if nxt else None}")
         task.cancel(); await b.close()
     await runner.cleanup()
     print(f"\n{sum(results)}/{len(results)} passed")

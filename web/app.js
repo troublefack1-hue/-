@@ -344,7 +344,11 @@
         })();
       } else if (m.t === "cur") {   // the PC cursor moved: draw it now, the picture need not carry it
         pcCur = { x: m.x, y: m.y };
-        if (trackpad.checked && t0 === null && !dragging) cur = pcCur;   // the pad resyncs while no finger is down
+        // The PC's report comes back a link's delay late: right after the finger lifts it still says where the cursor
+        // WAS, and taking it threw the cursor back on release (owner, 06.10.2026). The trackpad keeps its own position
+        // and follows the PC only when the PC's cursor moved by itself: 2 s after the last touch, and clearly elsewhere.
+        if (trackpad.checked && t0 === null && !dragging && Date.now() - padSentAt > 2000 &&
+            (!cur || Math.abs(cur.x - pcCur.x) > 0.01 || Math.abs(cur.y - pcCur.y) > 0.01)) cur = pcCur;
         placeCursor();
       } else if (m.t === "term_out") { termOut(m.id, m.data);
       } else if (m.t === "pc_notify") {
@@ -812,9 +816,10 @@
     sendMove(cur);
     pts.set(t.identifier, { x: t.clientX, y: t.clientY });
   }, { passive: false });
-  let moveAt = 0, moveTimer = null, movePending = null;
+  let moveAt = 0, moveTimer = null, movePending = null, padSentAt = 0;
   function sendMove(p) {
     const now = Date.now();
+    padSentAt = now;   // the PC's cursor reports are echoes of this for a while (see "cur")
     if (now - moveAt >= 40) { moveAt = now; movePending = null; send({ t: "move", x: p.x, y: p.y }); return; }
     movePending = { x: p.x, y: p.y };   // the latest position wins; it goes out when the 40 ms are up
     if (!moveTimer) moveTimer = setTimeout(() => { moveTimer = null; if (movePending) { moveAt = Date.now(); send({ t: "move", ...movePending }); movePending = null; } }, 40 - (now - moveAt));
