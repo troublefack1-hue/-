@@ -69,6 +69,20 @@ public final class Updater {
         return new Info(version, "/api/apk?name=" + asset, sha);
     }
 
+    /** One line of an app's trace to the PC (POST /api/log), best effort, a few seconds at most. */
+    public static void pcLog(String app, String line) {
+        Pc p = pc; if (p == null) return;
+        try (javax.net.ssl.SSLSocket s = Pinned.connectPreferLan(p.lan, p.host, p.port, p.pin, null, 5000, true)) {
+            s.setSoTimeout(5000);
+            byte[] body = line.getBytes(StandardCharsets.UTF_8);
+            java.io.OutputStream out = s.getOutputStream();
+            out.write(("POST /api/log?app=" + app + " HTTP/1.1\r\nHost: " + p.host + "\r\nAuthorization: Bearer " + p.secret
+                    + "\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(body); out.flush();
+            readLine(s.getInputStream());
+        } catch (Exception ignored) {}
+    }
+
     /** Download {@code asset} from the PC into dir/update.apk, checking the published sum. */
     public static File downloadPc(String asset, File dir, String sha256) throws IOException {
         File f = new File(dir, "update.apk"); pcGet("/api/apk?name=" + asset, f, sha256); return f;

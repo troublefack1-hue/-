@@ -678,6 +678,16 @@ class Hub:
             raise web.HTTPForbidden(headers=CORS)
         return web.json_response(self.status(), headers=CORS)
 
+    async def log_handler(self, request: web.Request):
+        """A line of a phone app's own trace (POST, plain text) into pcapp.log: «Интернет через ПК» has no file access
+        and no background link like «Мой ПК», so this is the only place its update steps can be read."""
+        if not self.check_header(request):
+            raise web.HTTPForbidden(headers=CORS)
+        app = "".join(c for c in request.query.get("app", "?") if c.isalnum())[:16]
+        text = (await request.content.read(2048)).decode("utf-8", "replace")
+        log.info("phone log (%s): %s", app, "".join(c for c in text if c.isprintable())[:300])
+        return web.Response(text="ok", headers=CORS)
+
     async def apk_handler(self, request: web.Request):
         """The phone apps, re-signed with this PC's key: /api/apk -> index.json, /api/apk?name=x.apk -> the file."""
         if not self.check_header(request):
@@ -1088,6 +1098,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_get("/api/file", hub.file_handler)
     app.router.add_post("/api/ticket", hub.ticket_handler)
     app.router.add_post("/api/report", hub.report_handler)
+    app.router.add_post("/api/log", hub.log_handler)
     app.router.add_get("/api/thumb", hub.thumb_handler)
     app.router.add_post("/api/fs", hub.fs_handler)
     app.router.add_get("/api/phone", hub.phone_files_handler)

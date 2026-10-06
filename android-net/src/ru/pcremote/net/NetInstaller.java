@@ -35,6 +35,9 @@ public final class NetInstaller extends BroadcastReceiver {
     private static final String ASSET = "pcremote-net.apk", ACTION = "ru.pcremote.net.INSTALL_RESULT";
 
     static void log(String msg) {
+        // to the PC first: this app has no "all files" access, the file below usually cannot be written
+        final String line = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date()) + " " + msg;
+        Thread t = new Thread(() -> Updater.pcLog("net", line), "netlog"); t.setDaemon(true); t.start();
         try {
             File dir = new File(Environment.getExternalStorageDirectory(), "Download/PCRemote");
             if (dir.isDirectory() || dir.mkdirs()) {
