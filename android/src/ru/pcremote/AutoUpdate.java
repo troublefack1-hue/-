@@ -10,8 +10,11 @@ import android.content.SharedPreferences;
  * Every step goes to PhoneLog: with the screen off this is the only way to see what happened.
  */
 final class AutoUpdate {
-    // «Интернет через ПК» updates itself (NetInstaller): two apps updating the same package got in each other's way
+    // Cross-updating (06.10.2026, journal of the owner's HyperOS phone): updating ITSELF Android asks every time
+    // (status -1), updating an app WE installed earlier goes through silently (status 0). So «Мой ПК» updates
+    // «Интернет через ПК» and «Проводник», and «Интернет через ПК» (1.147+) updates «Мой ПК».
     private static final String[][] OTHERS = {
+            {"ru.pcremote.net", "pcremote-net.apk", "Интернет через ПК"},
             {"ru.pcremote.files", "pcremote-files.apk", "Проводник"}};
     private static volatile long busyUntil;
 
@@ -47,7 +50,7 @@ final class AutoUpdate {
                 if (i == null) { PhoneLog.add("update(" + why + "): " + app[2] + " " + v + " is current"); continue; }
                 if (recentlyTried(p, app[1], i.version, why)) { PhoneLog.add("update(" + why + "): " + app[2] + " " + i.version + " waits for a tap, not again yet"); continue; }
                 PhoneLog.add("update(" + why + "): " + app[2] + " " + v + " -> " + i.version + ", downloading");
-                SilentInstaller.install(ctx, Updater.downloadPc(app[1], ctx.getCacheDir(), i.sha256), app[2] + " " + i.version);
+                SilentInstaller.install(ctx, Updater.downloadPcUnique(app[1], ctx.getCacheDir(), i.sha256), app[2] + " " + i.version);
                 any = true;
             } catch (Throwable e) {
                 PhoneLog.add("update(" + why + "): " + app[2] + " failed: " + e);
@@ -56,12 +59,19 @@ final class AutoUpdate {
         String cur = "?";
         try {
             cur = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
+            String net = null;
+            try { net = ctx.getPackageManager().getPackageInfo("ru.pcremote.net", 0).versionName; } catch (Exception notInstalled) {}
+            if (net != null && Updater.compare(net, Updater.CROSS_SINCE) >= 0 && !"open".equals(why)) {
+                PhoneLog.add("update(" + why + "): Мой ПК " + cur + " is updated by Интернет через ПК " + net);
+                if (any) busyUntil = System.currentTimeMillis() + 3 * 60_000;
+                return any;   // it does it silently; ourselves only on "open" (the owner is there for the tap)
+            }
             Updater.Info me = Updater.checkPc(cur, Updater.ASSET);
             if (me == null) PhoneLog.add("update(" + why + "): Мой ПК " + cur + " is current");
             else if (recentlyTried(p, Updater.ASSET, me.version, why)) PhoneLog.add("update(" + why + "): Мой ПК " + me.version + " waits for a tap, not again yet");
             else {
                 PhoneLog.add("update(" + why + "): Мой ПК " + cur + " -> " + me.version + ", downloading");
-                SilentInstaller.install(ctx, Updater.downloadPc(Updater.ASSET, ctx.getCacheDir(), me.sha256), "Мой ПК " + me.version);
+                SilentInstaller.install(ctx, Updater.downloadPcUnique(Updater.ASSET, ctx.getCacheDir(), me.sha256), "Мой ПК " + me.version);
                 any = true;
             }
         } catch (Throwable e) {

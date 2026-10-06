@@ -156,7 +156,7 @@ public class MainActivity extends Activity {
             try {
                 Updater.Info info = Updater.checkPc("0", asset);
                 if (info == null) throw new java.io.IOException("на ПК ещё нет этого приложения: откройте окно PC Remote, оно скачает");
-                java.io.File apk = Updater.downloadPc(asset, getCacheDir(), info.sha256);
+                java.io.File apk = Updater.downloadPcUnique(asset, getCacheDir(), info.sha256);
                 // a session, not the "Install?" screen: once this app installed it, later updates need no tap
                 SilentInstaller.install(this, apk, asset + " " + info.version);
                 runOnUiThread(() -> Toast.makeText(this, "Устанавливаю " + asset + " " + info.version + " с ПК…", Toast.LENGTH_SHORT).show());
@@ -213,7 +213,7 @@ public class MainActivity extends Activity {
                 .setMessage("У вас " + cur + ".\n\nЧто нового:\n" + notes + "\n\nСкачать и установить? Android покажет свой запрос.")
                 .setPositiveButton("Обновить", (d, w) -> new Thread(() -> {
                     try {
-                        java.io.File apk = fromPc ? Updater.downloadPc(Updater.ASSET, getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
+                        java.io.File apk = fromPc ? Updater.downloadPcUnique(Updater.ASSET, getCacheDir(), info.sha256) : Updater.download(info.url, getCacheDir(), info.sha256);
                         SilentInstaller.install(this, apk, "Мой ПК " + info.version);
                     } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Не удалось скачать: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
                 }).start()).setNegativeButton("Позже", null).show();

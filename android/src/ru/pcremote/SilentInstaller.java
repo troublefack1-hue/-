@@ -45,6 +45,8 @@ final class SilentInstaller {
         } catch (IOException | RuntimeException e) {
             try { pi.abandonSession(id); } catch (Exception ignored) {}
             throw e;
+        } finally {
+            if (apk.getName().startsWith("upd-")) apk.delete();   // the session holds its own copy now
         }
     }
 }

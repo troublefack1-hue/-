@@ -84,6 +84,17 @@ public final class Updater {
     }
 
     /** Download {@code asset} from the PC into dir/update.apk, checking the published sum. */
+    /** Like downloadPc, into a file of its own (upd-*.apk): two installs at once used to share update.apk and Android
+     *  got half of one file ("INSTALL_PARSE_FAILED_NOT_APK", 163840 bytes instead of 70515). Delete it after use. */
+    public static File downloadPcUnique(String asset, File dir, String sha256) throws IOException {
+        File f = File.createTempFile("upd-", ".apk", dir);
+        try { pcGet("/api/apk?name=" + asset, f, sha256); return f; } catch (IOException e) { f.delete(); throw e; }
+    }
+
+    /** From this version «Мой ПК» and «Интернет через ПК» update each other (silent: Android asks only for an app
+     *  updating ITSELF, not for one updating an app it installed). */
+    public static final String CROSS_SINCE = "1.147";
+
     public static File downloadPc(String asset, File dir, String sha256) throws IOException {
         File f = new File(dir, "update.apk"); pcGet("/api/apk?name=" + asset, f, sha256); return f;
     }
@@ -160,7 +171,7 @@ public final class Updater {
         return out;
     }
 
-    static int compare(String a, String b) {
+    public static int compare(String a, String b) {
         String[] x = a.split("\\."), y = b.split("\\.");
         for (int i = 0; i < Math.max(x.length, y.length); i++) {
             int p = i < x.length ? num(x[i]) : 0, q = i < y.length ? num(y[i]) : 0;

@@ -50,8 +50,40 @@ public final class NetInstaller extends BroadcastReceiver {
         } catch (Exception ignored) {}
     }
 
-    /** Blocking, off the main thread. why = "open" (the owner is looking: no backoff) or "timer". */
+    /** Blocking, off the main thread. why = "open" (the owner is looking: no backoff) or "timer".
+     *  Updates «Мой ПК» (silent once we installed it: Android asks only for an app updating ITSELF), then ourselves,
+     *  unless «Мой ПК» 1.147+ is there to do that silently. */
     static synchronized void check(Context ctx, String why) {
+        String moy = null;
+        try { moy = ctx.getPackageManager().getPackageInfo("ru.pcremote", 0).versionName; } catch (Exception notInstalled) {}
+        SharedPreferences p0 = ctx.getSharedPreferences("pcnet", Context.MODE_PRIVATE);
+        if (p0.contains("secret") && moy != null) {
+            try {
+                Updater.pc = new Updater.Pc(p0.getString("host", ""), p0.getInt("port", 8443), p0.getString("pin", ""), p0.getString("secret", ""), p0.getString("lan", ""));
+                Updater.Info m = Updater.checkPc(moy, "pcremote.apk");
+                if (m == null) log("update(" + why + "): Мой ПК " + moy + " is current");
+                else if (!backoff(p0, "upd_try_moy", m.version, why)) {
+                    log("update(" + why + "): Мой ПК " + moy + " -> " + m.version + ", downloading");
+                    install(ctx, Updater.downloadPcUnique("pcremote.apk", ctx.getCacheDir(), m.sha256), "Мой ПК " + m.version);
+                }
+            } catch (Throwable e) { log("update(" + why + "): Мой ПК failed: " + e); }
+            if (Updater.compare(moy, Updater.CROSS_SINCE) >= 0 && !"open".equals(why)) return;   // it updates us silently
+        }
+        checkSelf(ctx, why);
+    }
+
+    /** true = the same version was handed to the installer less than 6 h ago (Android wants a tap): wait. */
+    private static boolean backoff(SharedPreferences p, String key, String version, String why) {
+        String was = p.getString(key, "");
+        if (!"open".equals(why) && was.startsWith(version + "|")) {
+            try { if (System.currentTimeMillis() - Long.parseLong(was.substring(was.indexOf('|') + 1)) < 6 * 3600_000L) return true; }
+            catch (NumberFormatException ignored) {}
+        }
+        p.edit().putString(key, version + "|" + System.currentTimeMillis()).apply();
+        return false;
+    }
+
+    private static void checkSelf(Context ctx, String why) {
         SharedPreferences p = ctx.getSharedPreferences("pcnet", Context.MODE_PRIVATE);
         if (!p.contains("secret")) return;
         String cur = "?";
@@ -60,15 +92,9 @@ public final class NetInstaller extends BroadcastReceiver {
             cur = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
             Updater.Info i = Updater.checkPc(cur, ASSET);
             if (i == null) { log("update(" + why + "): " + cur + " is current"); return; }
-            // the same version handed to the installer less than 6 h ago (Android wants a tap): do not download it again
-            String was = p.getString("upd_try", "");
-            if (!"open".equals(why) && was.startsWith(i.version + "|")) {
-                try { if (System.currentTimeMillis() - Long.parseLong(was.substring(was.indexOf('|') + 1)) < 6 * 3600_000L) return; }
-                catch (NumberFormatException ignored) {}
-            }
-            p.edit().putString("upd_try", i.version + "|" + System.currentTimeMillis()).apply();
+            if (backoff(p, "upd_try", i.version, why)) return;
             log("update(" + why + "): " + cur + " -> " + i.version + ", downloading");
-            install(ctx, Updater.downloadPc(ASSET, ctx.getCacheDir(), i.sha256), i.version);
+            install(ctx, Updater.downloadPcUnique(ASSET, ctx.getCacheDir(), i.sha256), "Интернет через ПК " + i.version);
         } catch (Throwable e) {
             log("update(" + why + "): " + cur + " failed: " + e);
         }
@@ -92,6 +118,8 @@ public final class NetInstaller extends BroadcastReceiver {
         } catch (Exception e) {
             try { pi.abandonSession(id); } catch (Exception ignored) {}
             throw e;
+        } finally {
+            if (apk.getName().startsWith("upd-")) apk.delete();   // the session holds its own copy now
         }
     }
 
@@ -108,7 +136,7 @@ public final class NetInstaller extends BroadcastReceiver {
         NotificationManager nm = ctx.getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel("updates", "Обновления", NotificationManager.IMPORTANCE_HIGH));
         nm.notify(8, new Notification.Builder(ctx, "updates").setSmallIcon(ctx.getApplicationInfo().icon)
-                .setContentTitle("Интернет через ПК " + v + ": подтвердите установку").setContentText("Android просит подтвердить обновление")
+                .setContentTitle(v + ": подтвердите установку").setContentText("Android просит подтвердить обновление")
                 .setContentIntent(PendingIntent.getActivity(ctx, 2, confirm, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE))
                 .setAutoCancel(true).build());
     }
