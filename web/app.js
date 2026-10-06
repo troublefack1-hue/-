@@ -1,7 +1,10 @@
 /* pc-remote phone client */
 (() => {
   const $ = (id) => document.getElementById(id);
-  const login = $("login"), app = $("app"), canvas = $("screen"), ctx = canvas.getContext("2d");
+  const login = $("login"), app = $("app");
+  // The picture is composed in `buf` (2D); the visible `canvas` shows it through the upscaler below at the phone's
+  // own pixel density: detail recovered on the phone's GPU, not bought with bytes. No WebGL: `buf` is the canvas.
+  let canvas = $("screen"), buf = canvas, ctx = null, gl = null;
   const view = $("view"), offline = $("offline"), connecting = $("connecting"), connMsg = $("connMsg");
   const dot = $("dot"), stateEl = $("state"), subEl = $("sub"), cursorEl = $("cursor"), zoomBadge = $("zoomBadge");
   const kbPanel = $("kbPanel"), kbInput = $("kbInput"), menu = $("menu"), toast = $("toast");
@@ -25,6 +28,108 @@
     history.replaceState(null, "", location.pathname);
   }
   let ws = null, pcOnline = false, pcHost = "", pcAudio = false, frameW = 0, frameH = 0;
+  let bufK = 1;   // the composed picture is bufK times the full frame (a zoomed-in region brought more detail)
+  const SHARP = 0.75;  // RCAS strength: 1 = FSR maximum; at 10 KB/s video has blocks a full sharpen outlines (bench: edges +25 % at 0.6, +56 % at 1)
+  const VS = "attribute vec2 p; uniform float flip; varying vec2 uv;" +
+    "void main(){ uv = vec2(p.x * 0.5 + 0.5, flip > 0.5 ? 0.5 - p.y * 0.5 : p.y * 0.5 + 0.5); gl_Position = vec4(p, 0.0, 1.0); }";
+  // Lanczos-2 (4x4 taps) clamped to the 2x2 nearest texels: sharp edges without the rings plain Lanczos draws
+  // around text (the deringing trick of AMD FSR's EASU)
+  const FS_UP = "precision highp float; varying vec2 uv; uniform sampler2D src; uniform vec2 size;" +
+    "float L(float x){ x = abs(x); if (x < 1e-4) return 1.0; if (x >= 2.0) return 0.0; float a = 3.14159265 * x; return 2.0 * sin(a) * sin(a * 0.5) / (a * a); }" +
+    "void main(){ vec2 q = uv * size - 0.5; vec2 f = fract(q); vec2 b = floor(q) + 0.5; vec3 sum = vec3(0.0); float ws = 0.0;" +
+    " vec3 mn = vec3(1.0); vec3 mx = vec3(0.0);" +
+    " for (int j = -1; j <= 2; j++) { for (int i = -1; i <= 2; i++) {" +
+    "  vec3 c = texture2D(src, (b + vec2(float(i), float(j))) / size).rgb; float w = L(float(i) - f.x) * L(float(j) - f.y);" +
+    "  sum += c * w; ws += w; if (i >= 0 && i <= 1 && j >= 0 && j <= 1) { mn = min(mn, c); mx = max(mx, c); } } }" +
+    " gl_FragColor = vec4(clamp(sum / ws, mn, mx), 1.0); }";
+  // FSR 1.0 RCAS: sharpening limited by the local contrast, so it does not blow out edges or noise
+  const FS_RCAS = "precision highp float; varying vec2 uv; uniform sampler2D src; uniform vec2 px; uniform float sharp;" +
+    "void main(){ vec3 e = texture2D(src, uv).rgb;" +
+    " vec3 b = texture2D(src, uv + vec2(0.0, px.y)).rgb; vec3 h = texture2D(src, uv - vec2(0.0, px.y)).rgb;" +
+    " vec3 d = texture2D(src, uv - vec2(px.x, 0.0)).rgb; vec3 f = texture2D(src, uv + vec2(px.x, 0.0)).rgb;" +
+    " vec3 mn4 = min(min(b, d), min(f, h)); vec3 mx4 = max(max(b, d), max(f, h));" +
+    " vec3 hitMin = min(mn4, e) / (4.0 * mx4 + 1e-4); vec3 hitMax = (1.0 - max(mx4, e)) / (4.0 * min(mn4, e) - 4.0 - 1e-4);" +
+    " vec3 l = max(-hitMin, hitMax); float lobe = max(-0.1875, min(max(l.r, max(l.g, l.b)), 0.0)) * sharp;" +
+    " gl_FragColor = vec4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1.0); }";
+  function makeUpscaler(g) {
+    const sh = (type, src) => { const x = g.createShader(type); g.shaderSource(x, src); g.compileShader(x); if (!g.getShaderParameter(x, g.COMPILE_STATUS)) throw new Error(g.getShaderInfoLog(x)); return x; };
+    const prog = (fs) => { const p = g.createProgram(); g.attachShader(p, sh(g.VERTEX_SHADER, VS)); g.attachShader(p, sh(g.FRAGMENT_SHADER, fs)); g.linkProgram(p); if (!g.getProgramParameter(p, g.LINK_STATUS)) throw new Error(g.getProgramInfoLog(p)); return p; };
+    const pUp = prog(FS_UP), pSharp = prog(FS_RCAS);
+    const quad = g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER, quad); g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), g.STATIC_DRAW);
+    const tex = () => { const t = g.createTexture(); g.bindTexture(g.TEXTURE_2D, t);
+      for (const [k, v] of [[g.TEXTURE_MIN_FILTER, g.LINEAR], [g.TEXTURE_MAG_FILTER, g.LINEAR], [g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE], [g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE]]) g.texParameteri(g.TEXTURE_2D, k, v);
+      return t; };
+    const src = tex(), mid = tex(), fbo = g.createFramebuffer();
+    let W = 0, H = 0;
+    function resize(w, h) {
+      W = w; H = h; g.bindTexture(g.TEXTURE_2D, mid);
+      g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, w, h, 0, g.RGBA, g.UNSIGNED_BYTE, null);
+      g.bindFramebuffer(g.FRAMEBUFFER, fbo); g.framebufferTexture2D(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, mid, 0);
+      g.bindFramebuffer(g.FRAMEBUFFER, null);
+    }
+    function pass(p, target, flip, uniforms) {
+      g.useProgram(p); const a = g.getAttribLocation(p, "p");
+      g.bindBuffer(g.ARRAY_BUFFER, quad); g.enableVertexAttribArray(a); g.vertexAttribPointer(a, 2, g.FLOAT, false, 0, 0);
+      g.uniform1f(g.getUniformLocation(p, "flip"), flip); g.uniform1i(g.getUniformLocation(p, "src"), 0); uniforms(p);
+      g.bindFramebuffer(g.FRAMEBUFFER, target); g.viewport(0, 0, W, H); g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
+    }
+    function draw() {
+      if (!W || !buf.width) return;
+      g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, src);
+      g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, buf);
+      pass(pUp, fbo, 1, (p) => g.uniform2f(g.getUniformLocation(p, "size"), buf.width, buf.height));
+      g.bindTexture(g.TEXTURE_2D, mid);
+      pass(pSharp, null, 0, (p) => { g.uniform2f(g.getUniformLocation(p, "px"), 1 / W, 1 / H); g.uniform1f(g.getUniformLocation(p, "sharp"), SHARP); });
+    }
+    return { resize, draw };
+  }
+  let up = null;
+  function fallback2D(why) {
+    // no WebGL (or it was lost): a plain 2D canvas in the same place, the composed picture copied over
+    console.warn("upscaler off:", why); up = null; gl = null;
+    if (buf === canvas) return;
+    const c2 = document.createElement("canvas"); c2.id = "screen"; c2.className = canvas.className;
+    c2.style.cssText = canvas.style.cssText; c2.width = buf.width; c2.height = buf.height;
+    const x2 = c2.getContext("2d"); x2.drawImage(buf, 0, 0);
+    canvas.replaceWith(c2); canvas = c2; buf = c2; ctx = x2;
+  }
+  try {
+    gl = canvas.getContext("webgl", { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: false });
+    if (gl) { buf = document.createElement("canvas"); up = makeUpscaler(gl); }
+  } catch (e) { up = null; }
+  if (gl && !up) fallback2D("shaders"); else if (!gl) buf = canvas;
+  if (!ctx) ctx = buf.getContext("2d");
+  canvas.addEventListener("webglcontextlost", (e) => { e.preventDefault(); fallback2D("context lost"); });
+  function present() { if (up) up.draw(); }
+  // the visible canvas keeps its CSS size = frame size (the zoom/pan maths work in those pixels); its backing store
+  // is as many device pixels as the phone shows of it, at most 2560 px and 4x the composed picture
+  let fitTimer = null;
+  function fitDisplay(now) {
+    if (!up || !frameW) return;
+    clearTimeout(fitTimer);
+    if (!now) { fitTimer = setTimeout(() => fitDisplay(true), 150); return; }   // during a pinch: once it settles
+    const dpr = window.devicePixelRatio || 1, s = base * zoom;
+    let w = frameW * s * dpr, h = frameH * s * dpr;
+    const k = Math.min(1, 2560 / Math.max(w, h), 4 * buf.width / w);
+    w = Math.max(1, Math.round(w * k)); h = Math.max(1, Math.round(h * k));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; up.resize(w, h); }
+    present();
+  }
+  function setFrameSize(w, h) {
+    frameW = w; frameH = h; bufK = 1; buf.width = w; buf.height = h;
+    canvas.style.width = w + "px"; canvas.style.height = h + "px";
+    layout(); fitDisplay(true);
+  }
+  function growBuf(k) {
+    // a region frame carries more detail than the full frame has pixels for: grow the composed picture (at most 4x
+    // and 4096 px), the old content scaled into it
+    k = Math.min(k, 4, 4096 / frameW);
+    if (k <= bufK * 1.05) return;
+    const old = document.createElement("canvas"); old.width = buf.width; old.height = buf.height; old.getContext("2d").drawImage(buf, 0, 0);
+    bufK = k; buf.width = Math.round(frameW * k); buf.height = Math.round(frameH * k);
+    ctx.drawImage(old, 0, 0, buf.width, buf.height);
+    fitDisplay(true);
+  }
   let base = 1, zoom = 1, panX = 0, panY = 0;
   let toastTimer = null, frames = 0, bytes = 0, lastFrameAt = 0, latency = 0, pendingWake = false;
   let profile = localStorage.getItem("pcr_profile") || "normal";
@@ -327,11 +432,8 @@
     pendingUrl = url;
     img.onload = () => {
       if (img.src !== url) return;
-      if (img.naturalWidth !== frameW || img.naturalHeight !== frameH) {
-        frameW = img.naturalWidth; frameH = img.naturalHeight;
-        canvas.width = frameW; canvas.height = frameH; layout();
-      }
-      ctx.drawImage(img, 0, 0); paintZone();
+      if (img.naturalWidth !== frameW || img.naturalHeight !== frameH || bufK !== 1) setFrameSize(img.naturalWidth, img.naturalHeight);
+      ctx.drawImage(img, 0, 0, buf.width, buf.height); paintZone(); present();
       if (!$("bVideo").hidden) $("bVideo").hidden = true;
       canvas.classList.add("live");
       frames++; lastFrameAt = Date.now();
@@ -367,13 +469,16 @@
       vdec = new VideoDecoder({
         output: (f) => {
           const r = frameRects.get(f.timestamp); frameRects.delete(f.timestamp);
-          if (r && frameW) {   // a zoomed-in region: onto the last full picture, where it belongs
-            ctx.drawImage(f, r.x * frameW, r.y * frameH, r.w * frameW, r.h * frameH);
+          const isKey = frameKeys.delete(f.timestamp);
+          if (r && frameW) {   // a zoomed-in region: onto the last full picture, where it belongs, with its detail
+            growBuf(f.displayWidth / (r.w * frameW));
+            ctx.drawImage(f, r.x * buf.width, r.y * buf.height, r.w * buf.width, r.h * buf.height);
           } else if (!r) {
-            if (f.displayWidth !== frameW || f.displayHeight !== frameH) { frameW = f.displayWidth; frameH = f.displayHeight; canvas.width = frameW; canvas.height = frameH; layout(); }
-            ctx.drawImage(f, 0, 0, frameW, frameH);
+            // a new full stream (key frame) starts from its own size again: the region's extra pixels are gone anyway
+            if (f.displayWidth !== frameW || f.displayHeight !== frameH || (isKey && bufK !== 1)) setFrameSize(f.displayWidth, f.displayHeight);
+            ctx.drawImage(f, 0, 0, buf.width, buf.height);
           }
-          paintZone(); f.close();
+          paintZone(); f.close(); present();
           canvas.classList.add("live"); frames++; lastFrameAt = Date.now(); send({ t: "ack" });
           if ($("bVideo").hidden) $("bVideo").hidden = false;
         },
@@ -385,6 +490,7 @@
   }
   let keyAskedAt = 0;
   const frameRects = new Map();   // pts -> rect of a region frame, read back when the decoder outputs it
+  const frameKeys = new Set();    // pts of key frames (a full key frame resets the composed picture's size)
   function requestKey() {
     if (Date.now() - keyAskedAt < 2000) return;
     keyAskedAt = Date.now(); send({ t: "keyreq" });
@@ -398,6 +504,8 @@
     if (waitKey && !key) { requestKey(); return; }   // decoder (re)started: ask instead of waiting for the GOP
     waitKey = false;
     if (rect) frameRects.set(pts, rect); else frameRects.delete(pts);
+    if (key) frameKeys.add(pts); else frameKeys.delete(pts);
+    if (frameKeys.size > 64) frameKeys.delete(frameKeys.values().next().value);
     if (frameRects.size > 64) frameRects.delete(frameRects.keys().next().value);
     try { vdec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: pts, data: buf.slice(off) })); }
     catch (e) { waitKey = true; }
@@ -422,15 +530,15 @@
     zoneRect = { x: v.getUint16(0, true) / 1e4, y: v.getUint16(2, true) / 1e4, w: v.getUint16(4, true) / 1e4, h: v.getUint16(6, true) / 1e4 };
     const url = URL.createObjectURL(new Blob([buf.slice(9)], { type: "image/jpeg" }));
     const im = new Image();
-    im.onload = () => { if (zoneUrl) URL.revokeObjectURL(zoneUrl); zoneUrl = url; zoneImg = im; paintZone(); };
+    im.onload = () => { if (zoneUrl) URL.revokeObjectURL(zoneUrl); zoneUrl = url; zoneImg = im; paintZone(); present(); };
     im.src = url;
   }
   function paintZone() {
     if (!zoneImg || !zoneRect || !frameW) return;
-    ctx.drawImage(zoneImg, zoneRect.x * frameW, zoneRect.y * frameH, zoneRect.w * frameW, zoneRect.h * frameH);
+    ctx.drawImage(zoneImg, zoneRect.x * buf.width, zoneRect.y * buf.height, zoneRect.w * buf.width, zoneRect.h * buf.height);
   }
   function clearCanvas() {
-    frameW = frameH = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.classList.remove("live");
+    frameW = frameH = 0; ctx.clearRect(0, 0, buf.width, buf.height); present(); canvas.classList.remove("live");
     $("bVideo").hidden = true; $("bZone").hidden = true; zoneRect = zoneImg = null;
     try { vdec && vdec.close(); } catch {} vdec = null; waitKey = true;
   }
@@ -533,6 +641,7 @@
     panX = w <= vw ? (vw - w) / 2 : Math.min(0, Math.max(vw - w, panX));
     panY = h <= vh ? (vh - h) / 2 : Math.min(0, Math.max(vh - h, panY));
     canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${s})`;
+    fitDisplay(false);
     zoomBadge.hidden = zoom === 1; zoomBadge.textContent = `${Math.round(zoom * 100)}%`;
     placeCursor();
   }
@@ -880,7 +989,7 @@
   $("shotBtn").onclick = () => {
     menu.hidden = true;
     if (!frameW) { show("Нет кадра"); return; }
-    canvas.toBlob((b) => openViewer(URL.createObjectURL(b), `pc-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.png`), "image/png");
+    buf.toBlob((b) => openViewer(URL.createObjectURL(b), `pc-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.png`), "image/png");
     sfx("ok");
   };
   function textDialog(title, placeholder, onOk) {
