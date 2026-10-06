@@ -61,10 +61,13 @@ final class AutoUpdate {
             cur = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
             String net = null;
             try { net = ctx.getPackageManager().getPackageInfo("ru.pcremote.net", 0).versionName; } catch (Exception notInstalled) {}
-            if (net != null && Updater.compare(net, Updater.CROSS_SINCE) >= 0 && !"open".equals(why)) {
+            if (net != null && Updater.compare(net, Updater.CROSS_SINCE) >= 0) {
+                // never ourselves while it is there: our own install needs a tap here, and two installers of one
+                // package at once broke each other (06.10.2026 07:45). On open/manual/partner we just ask it now.
                 PhoneLog.add("update(" + why + "): Мой ПК " + cur + " is updated by Интернет через ПК " + net);
+                if (!"timer".equals(why) && !"partner".equals(why)) PartnerUpdate.askNet(ctx);
                 if (any) busyUntil = System.currentTimeMillis() + 3 * 60_000;
-                return any;   // it does it silently; ourselves only on "open" (the owner is there for the tap)
+                return any;
             }
             Updater.Info me = Updater.checkPc(cur, Updater.ASSET);
             if (me == null) PhoneLog.add("update(" + why + "): Мой ПК " + cur + " is current");

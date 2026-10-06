@@ -491,6 +491,14 @@ public class MainActivity extends Activity {
         /** Settings → «Проверить обновления приложения»: check now, say what happened, install if newer. */
         @JavascriptInterface public void checkUpdate() {
             runOnUiThread(() -> Toast.makeText(MainActivity.this, "Проверяю обновления…", Toast.LENGTH_SHORT).show());
+            syncUpdaterPc();
+            if (Updater.pc != null) {   // from our PC: the apps update each other (silent), no "Install?" for ourselves
+                new Thread(() -> {
+                    boolean any = AutoUpdate.fromPc(MainActivity.this, "manual");
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this, any ? "Обновляю с ПК…" : "Обновления с ПК проверены", Toast.LENGTH_LONG).show());
+                }).start();
+                return;
+            }
             new Thread(() -> {
                 try {
                     String cur = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;

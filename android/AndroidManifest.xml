@@ -6,6 +6,7 @@
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="33" />
     <!-- pair once for every app: «Мой ПК» shares its pairing with our other apps (same signing key only) -->
     <permission android:name="ru.pcremote.permission.PAIRING" android:protectionLevel="signature" />
+    <uses-permission android:name="ru.pcremote.permission.PAIRING" />
     <!-- Android 11+ hides other apps from getPackageInfo unless listed: AutoUpdate could not see our own two -->
     <queries>
         <package android:name="ru.pcremote.net" />
@@ -69,6 +70,12 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
         <receiver android:name=".InstallResult" android:exported="false" />
+        <!-- «Интернет через ПК» asks us to update it; only our own apps hold PAIRING -->
+        <receiver android:name=".PartnerUpdate" android:exported="true" android:permission="ru.pcremote.permission.PAIRING">
+            <intent-filter>
+                <action android:name="ru.pcremote.UPDATE_PARTNER" />
+            </intent-filter>
+        </receiver>
         <provider
             android:name=".PairingProvider"
             android:authorities="ru.pcremote.pairing"

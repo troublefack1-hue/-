@@ -67,7 +67,12 @@ public final class NetInstaller extends BroadcastReceiver {
                     install(ctx, Updater.downloadPcUnique("pcremote.apk", ctx.getCacheDir(), m.sha256), "Мой ПК " + m.version);
                 }
             } catch (Throwable e) { log("update(" + why + "): Мой ПК failed: " + e); }
-            if (Updater.compare(moy, Updater.CROSS_SINCE) >= 0 && !"open".equals(why)) return;   // it updates us silently
+            if (Updater.compare(moy, Updater.CROSS_SINCE) >= 0) {
+                // never ourselves while «Мой ПК» 1.147+ is there: it updates us without a tap, and two installers
+                // of one package at once broke each other (06.10.2026 07:45: ours aborted, "Permission denied")
+                if (!"timer".equals(why) && !"partner".equals(why)) NetPartnerUpdate.askMoy(ctx);
+                return;
+            }
         }
         checkSelf(ctx, why);
     }

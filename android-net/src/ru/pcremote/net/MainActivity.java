@@ -241,6 +241,13 @@ public class MainActivity extends Activity {
     /** At every launch, silently (one small request to GitHub); from the row, with a word back either way. */
     private void checkUpdate(boolean manual) {
         if (manual && updRow != null) ((TextView) updRow.getChildAt(1)).setText("проверяю…");
+        if (manual && prefs.contains("secret")) {   // from our PC: the apps update each other, silently
+            new Thread(() -> {
+                NetInstaller.check(this, "manual");
+                runOnUiThread(() -> { if (updRow != null) ((TextView) updRow.getChildAt(1)).setText("проверено: обновления с ПК ставятся сами"); });
+            }, "netupdate").start();
+            return;
+        }
         Updater.pc = prefs.contains("secret") ? new Updater.Pc(prefs.getString("host", ""), prefs.getInt("port", 8443), prefs.getString("pin", ""), prefs.getString("secret", ""), prefs.getString("lan", "")) : null;
         new Thread(() -> {
             try {

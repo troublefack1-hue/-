@@ -66,5 +66,11 @@
             </intent-filter>
         </receiver>
         <receiver android:name=".NetInstaller" android:exported="false" />
+        <!-- «Мой ПК» asks us to update it; only our own apps hold PAIRING -->
+        <receiver android:name=".NetPartnerUpdate" android:exported="true" android:permission="ru.pcremote.permission.PAIRING">
+            <intent-filter>
+                <action android:name="ru.pcremote.net.UPDATE_PARTNER" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
