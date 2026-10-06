@@ -86,12 +86,12 @@ public class MainActivity extends Activity {
         handleUpdateTap(i);
     }
 
-    /** The "new version on the PC" notification: the owner said yes — download and install now. */
+    /** The "update downloaded / on the PC" notification: install here, in front (InAppUpdate). */
     private void handleUpdateTap(Intent i) {
         if (i == null || !i.getBooleanExtra("update_now", false)) return;
         i.removeExtra("update_now");
-        Toast.makeText(this, "Скачиваю обновление с ПК…", Toast.LENGTH_SHORT).show();
-        new Thread(() -> { try { AutoUpdate.fromPc(this, "manual"); } catch (Throwable e) { PhoneLog.add("update tap: " + e); } }, "update-tap").start();
+        Toast.makeText(this, "Обновляю: подтвердите «Установить» в окне Android", Toast.LENGTH_LONG).show();
+        InAppUpdate.runAll(this);
     }
 
     /** pcremote://pair?host=IP:port&code=…&fp=…&lan=… from a scanned QR: pair without typing anything. */
@@ -185,8 +185,13 @@ public class MainActivity extends Activity {
                 if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
                 else found = Updater.check(cur);   // GitHub only without a PC: paired phones asked it on every open
                 final Updater.Info info = found;
-                if (AutoUpdate.fromPc(this, "open")) {   // from our own PC: just do it, no dialog
-                    runOnUiThread(() -> Toast.makeText(this, "Обновляю с ПК…", Toast.LENGTH_SHORT).show());
+                if (Updater.pc != null) {
+                    // from our own PC: download and install right here, in front — the only way that went through
+                    // on the owner's phone (one tap in Android's window); nothing to do when everything is current
+                    if (!InAppUpdate.pending(this).isEmpty()) {
+                        runOnUiThread(() -> Toast.makeText(this, "Обновляю с ПК: подтвердите «Установить»", Toast.LENGTH_LONG).show());
+                        InAppUpdate.runAll(this);
+                    }
                     return;
                 }
                 if (info == null || fromPc) return;
@@ -502,11 +507,8 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void checkUpdate() {
             runOnUiThread(() -> Toast.makeText(MainActivity.this, "Проверяю обновления…", Toast.LENGTH_SHORT).show());
             syncUpdaterPc();
-            if (Updater.pc != null) {   // from our PC: the apps update each other (silent), no "Install?" for ourselves
-                new Thread(() -> {
-                    boolean any = AutoUpdate.fromPc(MainActivity.this, "manual");
-                    runOnUiThread(() -> Toast.makeText(MainActivity.this, any ? "Обновляю с ПК…" : "Обновления с ПК проверены", Toast.LENGTH_LONG).show());
-                }).start();
+            if (Updater.pc != null) {   // from our PC: download with resume and install here, in front
+                InAppUpdate.runAll(MainActivity.this);
                 return;
             }
             new Thread(() -> {
@@ -523,6 +525,9 @@ public class MainActivity extends Activity {
                 } catch (Exception e) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Не удалось проверить: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
             }).start();
         }
+
+        /** The page's update card: what the in-app updater is doing (JSON). */
+        @JavascriptInterface public String updState() { return InAppUpdate.state(); }
 
         @JavascriptInterface public void installFromPc(String asset) { runOnUiThread(() -> MainActivity.this.installFromPc(asset, false)); }
 

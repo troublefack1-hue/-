@@ -56,6 +56,19 @@ public final class NetInstaller extends BroadcastReceiver {
      *  Updates «Мой ПК» (silent once we installed it: Android asks only for an app updating ITSELF), then ourselves,
      *  unless «Мой ПК» 1.147+ is there to do that silently. */
     static synchronized void check(Context ctx, String why) {
+        String moyInstalled = null;
+        try { moyInstalled = ctx.getPackageManager().getPackageInfo("ru.pcremote", 0).versionName; } catch (Exception ignored) {}
+        if (moyInstalled != null) {
+            // «Мой ПК» updates all three in front (the only way through on the owner's phone: background installs were
+            // refused every time) — the button opens it on its update, the background leaves it to «Мой ПК»
+            if ("manual".equals(why)) {
+                try {
+                    ctx.startActivity(new android.content.Intent().setClassName("ru.pcremote", "ru.pcremote.MainActivity")
+                            .putExtra("update_now", true).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (Exception e) { log("update: open «Мой ПК»: " + e); }
+            }
+            return;
+        }
         if (!"manual".equals(why) && Updater.metered(ctx)) {
             // mobile data: no downloads the owner did not ask for («Мой ПК» offers new builds by a notification;
             // its cross-install of «Мой ПК» never got through HyperOS anyway, 06.10.2026)

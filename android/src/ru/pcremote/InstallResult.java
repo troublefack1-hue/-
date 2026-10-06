@@ -19,6 +19,7 @@ public final class InstallResult extends BroadcastReceiver {
         String label = intent.getStringExtra("label");
         if (label == null) label = "приложение";
         PhoneLog.add("install " + label + ": status " + status + " " + intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE));
+        InAppUpdate.onResult(intent.getStringExtra("asset"), status);   // the open app's updater waits for this
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             // not silent this time (first install, or the app came from elsewhere): Android's own screen, once
             Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
@@ -37,7 +38,8 @@ public final class InstallResult extends BroadcastReceiver {
                 ctx.getSharedPreferences("pcremote", Context.MODE_PRIVATE).edit()
                         .putString("upd_fail_" + asset, version + "|" + System.currentTimeMillis()).apply();
             String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-            Toast.makeText(ctx, label + ": не установилось — " + (msg == null ? "код " + status : msg), Toast.LENGTH_LONG).show();
+            if (!InAppUpdate.running)   // the in-app updater goes on with Android's installer instead: no alarm
+                Toast.makeText(ctx, label + ": не установилось — " + (msg == null ? "код " + status : msg), Toast.LENGTH_LONG).show();
         }
     }
 

@@ -64,7 +64,11 @@ public final class Updater {
     public static Info checkPc(String current, String asset) throws IOException {
         String json = new String(pcGet("/api/apk", null, null), StandardCharsets.UTF_8);
         int i = json.indexOf("\"" + asset + "\""); if (i < 0) return null;
-        String version = Pairing.jsonString(json, "version"); String sha = Pairing.jsonString(json.substring(i), "sha256");
+        int end = json.indexOf('}', i);
+        String obj = json.substring(i, end < 0 ? json.length() : end);
+        // a version per app (the PC gives a new one only when that app's code changed), else the older one-for-all
+        String version = Pairing.jsonString(obj, "version"); if (version == null) version = Pairing.jsonString(json, "version");
+        String sha = Pairing.jsonString(obj, "sha256");
         if (version == null || compare(version, current) <= 0) return null;
         return new Info(version, "/api/apk?name=" + asset, sha);
     }

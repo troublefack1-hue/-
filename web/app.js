@@ -533,7 +533,27 @@
   });
   const sendCapture = () => { if (prefs.capture && prefs.capture !== "auto") send({ t: "capture", mode: prefs.capture }); };
   document.querySelectorAll("#installApps button").forEach((b) => { b.onclick = () => { if (window.PcRemoteApp && PcRemoteApp.installFromPc) { PcRemoteApp.installFromPc(b.dataset.apk); buzz(8); } else show("Только в приложении «Мой ПК»"); }; });
-  $("appUpdate").onclick = () => { if (window.PcRemoteApp && PcRemoteApp.checkUpdate) { PcRemoteApp.checkUpdate(); buzz(8); } else show("Обновления приложения — только в «Мой ПК» на Android; в браузере обновлять нечего"); };
+  $("appUpdate").onclick = () => {
+    if (window.PcRemoteApp && PcRemoteApp.checkUpdate) { PcRemoteApp.checkUpdate(); buzz(8); watchUpdate(); }
+    else show("Обновления приложения — только в «Мой ПК» на Android; в браузере обновлять нечего");
+  };
+  // the in-app updater's progress (Мой ПК 1.172+): download with resume, then Android's own "Установить"
+  let updTimer = null;
+  function watchUpdate() {
+    if (!(window.PcRemoteApp && PcRemoteApp.updState)) return;
+    clearInterval(updTimer);
+    const kb = (n) => Math.round(n / 1024) + " КБ";
+    updTimer = setInterval(() => {
+      let s; try { s = JSON.parse(PcRemoteApp.updState()); } catch { return; }
+      const el = $("updState"); if (!el) return;
+      const what = { check: "Проверяю версии на ПК…", download: `Качаю ${s.app} ${s.note}: ${kb(s.done)}${s.total > 0 ? " из " + kb(s.total) : ""}`,
+                     install: `${s.app} ${s.note}`, done: s.note === "всё свежее" ? "Все приложения свежие" : "Готово",
+                     error: "Не вышло: " + s.note + ". Повторное нажатие докачает с того же места." }[s.phase] || "";
+      el.textContent = what; el.hidden = !what;
+      if (!s.running && (s.phase === "done" || s.phase === "error" || s.phase === "idle")) { clearInterval(updTimer); updTimer = null; }
+    }, 600);
+  }
+  setTimeout(watchUpdate, 2500);   // an update started at launch shows its progress too
   $("adaptOn").checked = prefs.adapt !== false;
   const sendAdapt = () => send({ t: "adapt", on: prefs.adapt !== false });
   $("adaptOn").onchange = () => { prefs.adapt = $("adaptOn").checked; savePrefs(); sendAdapt(); show(prefs.adapt ? "Качество подстраивается под канал" : "Качество фиксировано: как выбрано в профиле"); };

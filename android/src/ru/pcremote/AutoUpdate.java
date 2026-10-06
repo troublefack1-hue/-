@@ -61,8 +61,15 @@ final class AutoUpdate {
         } catch (Exception e) { PhoneLog.add("offer: " + e); }
     }
 
-    /** Blocking; call off the main thread. Returns true when something was handed to the installer. */
+    /** Blocking; call off the main thread. The background (timer, push, partner) only downloads — an install from
+     *  there was refused every time on the owner's phone; the open app installs (InAppUpdate.runAll). */
     static synchronized boolean fromPc(Context ctx, String why) {
+        if (!"manual".equals(why) && !"open".equals(why)) return InAppUpdate.prefetch(ctx, why);
+        return fromPcOld(ctx, why);
+    }
+
+    /** The old way (kept for a phone without the open activity at hand): an install session per app. */
+    static synchronized boolean fromPcOld(Context ctx, String why) {
         if (System.currentTimeMillis() < busyUntil) { PhoneLog.add("update(" + why + "): previous install still running, skip"); return false; }
         SharedPreferences p = ctx.getSharedPreferences("pcremote", Context.MODE_PRIVATE);
         if (!p.contains("secret")) return false;

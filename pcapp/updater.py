@@ -132,6 +132,21 @@ def _short(path) -> str:
 APK_NAMES = ["pcremote.apk", "pcremote-net.apk", "pcremote-files.apk"]
 
 
+def apk_code_hash(path: Path) -> str:
+    """What makes an app this app: every entry but the signature (META-INF), the manifest (it carries the version
+    number) and the PC's pairing note — two releases with the same code hash are the same app for the phone."""
+    import hashlib
+    import zipfile
+    h = hashlib.sha256()
+    with zipfile.ZipFile(path) as z:
+        for info in sorted(z.infolist(), key=lambda i: i.filename):
+            n = info.filename
+            if n.startswith("META-INF/") or n in ("AndroidManifest.xml", "assets/pairing.json"):
+                continue
+            h.update(f"{n}:{info.CRC:08x}:{info.file_size};".encode())
+    return h.hexdigest()[:24]
+
+
 def refresh_apks(data: Path, status=None, pairing: dict | None = None) -> dict | None:
     """Fetch the release's phone apps, check their sums, re-sign them with this PC's key (apksign.py)
     and keep them in data/apk for the phones to update from. Returns the index, None if nothing to do."""
@@ -180,9 +195,17 @@ def refresh_apks(data: Path, status=None, pairing: dict | None = None) -> dict |
             status(f"приложения для телефона: {name} {version}…")
         try:
             raw = download(url, folder / (name + ".download"), expected_sha256(sums_url, name), exe=False)
+            code = apk_code_hash(raw)
+            old = index.get("files", {}).get(name, {})
+            if (old.get("code") == code and old.get("version") and index.get("cert") == fp
+                    and index.get("pairing", {}) == pairing and (folder / name).exists()):
+                # same code as the app the phones already have: it keeps its version, no install to confirm
+                raw.unlink(missing_ok=True)
+                files[name] = old
+                continue
             sha = apksign.sign(raw, folder / name, key, cert, extra if name != "pcremote-files.apk" else None)
             raw.unlink(missing_ok=True)
-            files[name] = {"sha256": sha, "size": (folder / name).stat().st_size}
+            files[name] = {"sha256": sha, "size": (folder / name).stat().st_size, "version": version, "code": code}
         except Exception as e:  # noqa: BLE001
             log.warning("apk %s: %s", name, e)
     if not files:
@@ -191,5 +214,5 @@ def refresh_apks(data: Path, status=None, pairing: dict | None = None) -> dict |
     index_path.write_text(json.dumps(index, ensure_ascii=False, indent=1), "utf-8")
     if status:
         status(f"приложения для телефона готовы: {version}, подпись этого ПК")
-    log.info("phone apps re-signed: %s (%s)", version, ", ".join(files))
+    log.info("phone apps re-signed: %s (%s)", version, ", ".join(f"{n} {e.get('version', version)}" for n, e in files.items()))
     return index
