@@ -493,7 +493,9 @@ class Hub:
 
     # --- /ws/phone ------------------------------------------------------
     async def phone_handler(self, request: web.Request):
-        ws = web.WebSocketResponse(heartbeat=8, max_msg_size=MAX_CAST)  # dead phones noticed in ~16 s
+        # aiohttp waits heartbeat/2 for the pong: with 8 s a phone on mobile data that also carries «Интернет через ПК»
+        # answered late and was cut every 10-20 s (06.10.2026). 20 s: 10 s for the pong, dead phones gone in ~30 s
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_CAST)
         await ws.prepare(request)
         ip = client_ip(request)
         if not await self.ws_auth(ws, ip):

@@ -77,7 +77,7 @@ public final class Pinned {
             } catch (Mismatch m) {
                 throw m;
             } catch (IOException e) {
-                last = e;
+                if (last == null) last = e;   // the spare road failing must not hide why the real ones did
             }
         }
         throw last != null ? last : new IOException("no address for the PC");

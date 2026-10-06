@@ -25,6 +25,12 @@ final class CellularLink implements Pinned.Cellular {
     }
 
     @Override public SocketFactory get(int waitMs) {
+        // under a VPN (AmneziaVPN, our «Интернет через ПК») Android forbids binding to the mobile network:
+        // "Binding socket to network 133 failed: EPERM" (06.10.2026) — no spare road then
+        try {
+            NetworkCapabilities nc = cm.getNetworkCapabilities(cm.getActiveNetwork());
+            if (nc != null && nc.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null;
+        } catch (RuntimeException ignored) {}
         boolean first;
         synchronized (this) {
             first = !requested;
