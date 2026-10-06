@@ -49,8 +49,10 @@ log = logging.getLogger("agent")
 
 # Quality profiles the phone can switch between. "idle" = app in background.
 PROFILES = {
-    "tiny":   {"fps": 4,  "max_width": 480,  "quality": 22},   # ~10 KB/s link: 48 kbit/s video, Opus 16 kbit/s
-    "eco":    {"fps": 2,  "max_width": 640,  "quality": 30},
+    # the page calls these traffic ceilings: tiny "до 15 КБ/с", eco "до 100 КБ/с", normal "до 1 МБ/с", hq "без
+    # ограничений" (CEILING). fps is only the most the grab loop tries: the network decides the real rate.
+    "tiny":   {"fps": 12, "max_width": 480,  "quality": 22},   # Opus 16 kbit/s
+    "eco":    {"fps": 12, "max_width": 960,  "quality": 30},
     "normal": {"fps": 12, "max_width": 1280, "quality": 55},
     "hq":     {"fps": 20, "max_width": 1920, "quality": 75},
     "idle":   {"fps": 0,  "max_width": 640,  "quality": 30},
@@ -71,6 +73,11 @@ LADDER = [
     (320, 4, "24k"),
 ]
 TINY_RUNG = 5                   # the "10 KB/s" profile never goes above this
+ECO_RUNG = 2                    # "до 100 КБ/с": 960 px at 600 kbit/s at most
+# bytes/s the owner allows per profile (the page's "Трафик" buttons); None = whatever the network gives
+CEILING = {"tiny": 15_000, "eco": 100_000, "normal": 1_000_000, "hq": None}
+# the page's "Кадр" buttons: how much better (+) or lighter (-) than the profile's quality, in crf/cq steps
+PQ_BOOST = {"smooth": -4, "normal": 0, "sharp": 3, "max": 6}
 
 
 def _kbit(br: str) -> int:
@@ -574,6 +581,7 @@ class Screen:
         self.mon_index = min(cfg["monitor"], len(self.sct.monitors) - 1)
         self.mon = self.sct.monitors[self.mon_index]
         self.view_w = 0   # reported by the phone page ({"t":"view"}); 0 = unknown, no cap. Before set_width runs.
+        self.uncapped = False   # Wi-Fi with room: the screen's own size, not the phone's width (see video_step)
         self.profile = dict(PROFILES["normal"], fps=cfg["fps"], max_width=cfg["max_width"], quality=cfg["quality"])
         self.quality = self.profile["quality"]
         self.set_width(self.profile["max_width"])
@@ -805,8 +813,9 @@ class Screen:
 
     def set_width(self, max_width: int):
         # no wider than the phone shows (view_w = device pixels of the picture's width on its screen): an upright
-        # phone shows ~1080 px of a 1920 desktop, the rest was encoded and sent for nothing; 480 px floor
-        if self.view_w:
+        # phone shows ~1080 px of a 1920 desktop, the rest was encoded and sent for nothing; 480 px floor.
+        # Not on Wi-Fi with room (uncapped): there the owner wants the screen's own pixels for zooming.
+        if self.view_w and not self.uncapped:
             max_width = min(max_width, max(480, self.view_w))
         w, h = self.mon["width"], self.mon["height"]
         scale = min(1.0, max_width / w)
@@ -976,6 +985,8 @@ class Agent:
         self.inflight = collections.deque()
         self._bw_low = 0                      # consecutive throughput samples under half the estimate
         self.link_kind = ""                   # "wifi" / "cellular" / "" — what the page says its network is
+        self.phone_maxw = 1920                # the widest H.264 picture the phone's decoder takes (the page probes it)
+        self.pq_boost = 0                     # the page's picture quality choice (PQ_BOOST)
         self.bw_mem: dict = {}                # link kind -> (bytes/s, monotonic time): the last measurement of each
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
         self.terms: dict[str, Term] = {}
@@ -1008,6 +1019,7 @@ class Agent:
         self.busy_at = 0.0           # last frame that carried real motion
         self.excess = 0.0            # lateness of acks beyond the transfer a frame needs: a queue is building
         self.excess_set = False
+        self.excess_ratio = 0.0      # that lateness as a share of the frame's expected transfer time
         self.rtt_min = 0.0           # the link's own latency (a VPN may add 300+ ms); the ladder reacts to time above it
         self.bw_at = 0.0             # when the last throughput sample came in
         self.sent_bytes = 0
@@ -1197,6 +1209,11 @@ class Agent:
             self.inflight.popleft()   # TCP loses no acks, only whole links (the relay drops those in ~30 s): a 60 s
                                       # safety net; 8 s was less than a 100 KB key frame needs on a 12 KB/s link
         oldest = self.inflight[0] if self.inflight else None
+        ceiling = CEILING.get(self.screen.profile_name)
+        if not oldest and ceiling and self.bw > ceiling and self.sent_at:
+            # the network is faster than the owner's traffic ceiling: the next frame waits until the last one, spread
+            # over the ceiling, would have finished (on a link slower than the ceiling the network paces by itself)
+            return now - self.sent_at < self.sent_bytes / ceiling
         if not oldest:
             return False
         expect = self.rtt_min + (oldest[1] / self.bw * 1.2 if self.bw else 1.2) + 0.2   # when its ack is due
@@ -1220,9 +1237,14 @@ class Agent:
         # how late beyond what a frame of this size needs on this link: THAT is a queue. rtt minus the base latency
         # was used before, and a key frame's honest 1.6 s transfer on a 12 KB/s link read as a queue (bench 06.10.2026)
         if self.bw:   # before the first measurement a frame's whole transfer would count as lateness
-            exc = max(0.0, sample - (self.rtt_min + size / self.bw))
+            due = self.rtt_min + size / self.bw
+            exc = max(0.0, sample - due)
             self.excess = exc if not self.excess_set else self.excess * 0.7 + exc * 0.3
             self.excess_set = True
+            # lateness measured against the frame's own transfer time: a heavy "Максимум" frame 1.3 s late after a
+            # 4.7 s transfer is a slightly optimistic estimate, not a queue (it dropped the picture to 320 px)
+            ratio = exc / max(0.3, due)
+            self.excess_ratio = ratio if not self.excess_ratio else self.excess_ratio * 0.7 + ratio * 0.3
         if size <= 3000:   # a small frame measures the link's latency, not its throughput
             if not self.rtt_min or sample < self.rtt_min:
                 self.rtt_min = sample
@@ -1300,10 +1322,12 @@ class Agent:
             rung -= 1   # no recent measurement, acks are quick: probe upward — on the wide rungs only. On a thin link
                         # every try is a key frame (41 KB = 3 s of a 12 KB/s link, 10:21 06.10.2026); there the
                         # measuring key frame of the quiet-time probe decides, and the picture stays put meanwhile
-        if self.excess > 0.5 and now - self.rung_at > 2:
+        if self.excess > 0.5 and self.excess_ratio > 1.0 and now - self.rung_at > 2:
             rung = min(len(LADDER) - 1, rung + 1)               # a queue builds up (acks late beyond the base latency): step down
         if self.screen.profile_name == "tiny":
             rung = max(rung, TINY_RUNG)
+        elif self.screen.profile_name == "eco":
+            rung = max(rung, ECO_RUNG)
         if rung != self.rung:
             log.info("adaptive: rung %d -> %d (bw %.0f KB/s, rtt %.0f ms)", self.rung, rung, self.bw / 1024, self.rtt * 1000)
             self.rung, self.rung_at = rung, now
@@ -1319,6 +1343,16 @@ class Agent:
         loop = asyncio.get_running_loop()
         lw = LADDER[self.pick_rung()][0]
         want_w = min(self.screen.profile["max_width"], lw) if lw else self.screen.profile["max_width"]
+        # Wi-Fi with room (owner, 06.10.2026: "на вайфай разрешал бы даже 4К, если тянет"): the screen's own size up to
+        # what the phone decodes (the page probes it), not capped by the phone's width — zooming then shows real pixels.
+        # 1 MB/s+ for more than 1920 px; the one-frame-in-flight pacing keeps the frame rate to what the network carries.
+        wide = (self.rung == 0 and self.link_kind == "wifi" and self.bw > 300 * 1024
+                and self.screen.profile_name in ("normal", "hq"))
+        if wide:
+            want_w = min(self.screen.mon["width"], self.phone_maxw if self.bw > 1024 * 1024 else min(1920, self.phone_maxw))
+        if wide != self.screen.uncapped:
+            self.screen.uncapped = wide
+            self._vid_w = None   # the phone-width cap comes or goes: apply it now even at the same want_w
         if want_w != self._vid_w:
             self._vid_w = want_w
             self.screen.set_width(want_w)
@@ -1351,6 +1385,7 @@ class Agent:
         if self.rtt and self.ack.is_set():
             self.rtt *= 0.98   # no ack pending: let a stale "slow" verdict fade so we can try the full tier again
             self.excess *= 0.98
+            self.excess_ratio *= 0.98
         if raw is None and self.enc and (self.enc.key[5] != self.video_gen or not self.enc.alive):
             # key[4] is the bitrate (None at full quality), not the generation: comparing it with video_gen closed
             # the encoder on every still frame — 1212 restarts in an evening, a fresh key frame each time
@@ -1388,6 +1423,12 @@ class Agent:
         prof_fps = self.screen.profile["fps"] or fps
         enc_fps = min(prof_fps, lfps) if lfps else prof_fps
         bitrate = lbr if lbr and _kbit(lbr) < _kbit(video.BITRATE.get(tier, "2500k")) else None
+        if self.screen.uncapped and size[0] * size[1] > 1280 * 720:
+            # the profile's ceiling is for ~1280x720: a bigger picture gets it in proportion, within 70 % of the link
+            # and 30 Mbit/s (constant quality underneath: a still screen still costs almost nothing)
+            per_px = _kbit(video.BITRATE.get(tier, "2500k")) * 1000 / (1280 * 720)
+            top = 30e6 if tier == "hq" else CEILING.get(tier, 1_000_000) * 8   # "до 1 МБ/с" keeps its word
+            bitrate = f"{int(min(per_px * size[0] * size[1], self.bw * 8 * 0.7, top) / 1000)}k"
         if self.refine:
             bitrate = None   # the profile's ceiling: a still frame may take its time
         # One frame in flight, on every rung: the next picture is grabbed only after the phone decoded the previous one
@@ -1401,13 +1442,14 @@ class Agent:
             # neither the rung's bitrate nor its frame rate matter to a constant-quality encoder (the byte budget
             # spaces the frames): a rung change at the same size is no restart, no key frame, no visible reload
             enc_fps = 6
-        key = (codec, size, enc_fps, tier, bitrate if thin and not final else None, self.video_gen, pix_fmt, self.refine, region, final)
+        key = (codec, size, enc_fps, tier, bitrate if thin and not final else None, self.video_gen, pix_fmt, self.refine, region, final,
+               self.pq_boost)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
             try:
                 # thin link: one frame may hold ~0.3 s of the rung's budget — the frame rate then follows the bytes
                 self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt, bitrate=bitrate,
-                                         cq_boost=3 * self.refine, epoch=self.epoch, final=final,
+                                         cq_boost=3 * self.refine + self.pq_boost, epoch=self.epoch, final=final,
                                          high="avc1h" in self.codecs)
                 self.enc.key = key
                 log.info("video: %s %dx%d @%d (%s, rung %d, %s%s)", codec, size[0], size[1], enc_fps, tier, rung, self.enc.bitrate,
@@ -1603,6 +1645,7 @@ class Agent:
                         self.acks_since_view = 0
                         # a new link: its latency is unknown, and frames sent to the previous one are nobody's
                         self.inflight.clear(); self.ack.set(); self.rtt = 0.0; self.rtt_min = 0.0; self.excess = 0.0
+                        self.excess_ratio = 0.0
                         self.enc_region = None
                         # its link is unknown until the page names it ("video" message): no other link's figure
                         self.bw, self.bw_at, self._bw_low = 0.0, 0.0, 0
@@ -1654,6 +1697,10 @@ class Agent:
                         self.codecs = [c for c in ev["codecs"] if c in ("avc1", "avc1h", "vp8", "hvc1", "av01", "vp09")][:8]
                         log.info("phone decodes: %s", ", ".join(self.codecs) or "nothing")
                         self.audio_opus = "opus" in ev["codecs"]
+                    try:
+                        self.phone_maxw = max(640, min(4096, int(ev.get("maxw") or 1920)))
+                    except (TypeError, ValueError):
+                        self.phone_maxw = 1920
                     kind = str(ev.get("link") or "")[:16]
                     self.link_kind = kind
                     if kind and kind in self.bw_mem and not self.acks_since_view:
@@ -1735,6 +1782,8 @@ class Agent:
                         self.screen.set_width(self.screen.profile["max_width"])   # JPEG path
                         self._vid_w = None                                        # video path: re-apply on the next frame
                     self.set_view_rect(ev.get("rect"))
+                elif t == "pq":
+                    self.pq_boost = PQ_BOOST.get(str(ev.get("level")), 0)
                 elif t == "profile":
                     was = self.screen.profile_name
                     self.screen.set_profile(str(ev.get("name", "normal")))

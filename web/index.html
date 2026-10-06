@@ -207,10 +207,13 @@
     <header class="tbar"><button class="icon back" data-close="settingsPage"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8 1.5-1.5L10 12l6.5-6.5z"/></svg></button><h2>Настройки</h2></header>
     <div class="pbody">
       <h3>Картинка</h3>
-      <div class="seg" id="profile"><span class="lbl">Качество</span><button data-profile="tiny">10 КБ/с</button><button data-profile="eco">Эконом</button><button data-profile="normal" class="on">Обычное</button><button data-profile="hq">Макс.</button></div>
-      <p class="muted small">«10 КБ/с» — для очень тонкого канала: 480p при 4 к/с, один кадр в полёте, звук Opus 16 кбит/с. ПК сам переходит на него, когда канал проседает.</p>
-      <label class="row switch"><span>По сети: Wi-Fi — обычное, мобильная — эконом</span><input type="checkbox" id="autoProfile"><i></i></label>
-      <label class="row switch"><span>Подстраиваться под канал: при просадке снижать картинку вплоть до 320 px и 2 к/с, но держать отклик</span><input type="checkbox" id="adaptOn"><i></i></label>
+      <div class="seg stack" id="profile"><span class="lbl">Сколько трафика можно тратить</span><button data-profile="tiny">до 15 КБ/с</button><button data-profile="eco">до 100 КБ/с</button><button data-profile="normal" class="on">до 1 МБ/с</button><button data-profile="hq">Без ограничений</button></div>
+      <p class="muted small" id="profileHint"></p>
+      <div class="seg stack" id="pq"><span class="lbl">Качество каждого кадра</span><button data-pq="smooth">Плавнее</button><button data-pq="normal" class="on">Обычный</button><button data-pq="sharp">Чётче</button><button data-pq="max">Максимум</button></div>
+      <p class="muted small" id="pqHint"></p>
+      <p class="muted small">Как это работает: в пути всегда один кадр. Следующий снимается, как только телефон показал предыдущий, — лишние не копятся, на экране всегда последний. Поэтому кадров в секунду столько, сколько успевает сеть: на Wi-Fi все, на слабом мобильном 2–6. Каждый кадр приходит сразу в окончательном виде, ничего не догружается.</p>
+      <label class="row switch"><span>Выбирать трафик по сети: Wi-Fi — без ограничений, мобильная — до 100 КБ/с</span><input type="checkbox" id="autoProfile"><i></i></label>
+      <label class="row switch"><span>Подстраиваться под канал: размер картинки по замеру скорости сети — от 320 px на слабом канале до родного разрешения ПК на Wi-Fi</span><input type="checkbox" id="adaptOn"><i></i></label>
       <label class="row switch"><span>Видео-поток H.264/VP8 вместо кадров JPEG (плавнее, меньше трафика)</span><input type="checkbox" id="videoOn"><i></i></label>
       <div class="seg" id="monitors" hidden><span class="lbl">Монитор</span></div>
       <div class="seg" id="capture"><span class="lbl">Захват</span><button data-capture="auto" class="on">Авто</button><button data-capture="dxgi">DXGI</button><button data-capture="gdi">GDI</button></div>

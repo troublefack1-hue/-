@@ -250,7 +250,7 @@
   let audioWanted = false;
   window.pcrVisible = (v) => {
     appHidden = !v;
-    send({ t: "profile", name: isHidden() ? "idle" : profile });
+    send({ t: "profile", name: isHidden() ? "idle" : profile }); send({ t: "pq", level: pq });
     if (isHidden() && audioOn) { audioWanted = true; audioOn = false; send({ t: "audio", on: false }); }
     else if (!isHidden() && audioWanted) { audioWanted = false; audioOn = true; send({ t: "audio", on: true }); }
     if (!isHidden() && ws && ws.readyState !== 1) { backoff = 1000; connect(); }
@@ -274,7 +274,7 @@
         localStorage.setItem("pcr_secret", secret);
         login.hidden = true; app.hidden = false; connecting.hidden = true;
         hideSplash();
-        send({ t: "profile", name: isHidden() ? "idle" : profile });
+        send({ t: "profile", name: isHidden() ? "idle" : profile }); send({ t: "pq", level: pq });
         if (audioOn) send({ t: "audio", on: true });
       }
       if (m.t === "status" && Array.isArray(m.ports)) pcPorts = m.ports;
@@ -384,7 +384,7 @@
   window.addEventListener("online", () => { backoff = 1000; if (!ws || ws.readyState !== 1) connect(); });
   document.addEventListener("visibilitychange", () => {
     // no video while the app is in the background: saves traffic and battery
-    send({ t: "profile", name: isHidden() ? "idle" : profile });
+    send({ t: "profile", name: isHidden() ? "idle" : profile }); send({ t: "pq", level: pq });
     if (!isHidden() && ws && ws.readyState !== 1) { backoff = 1000; connect(); }
   });
 
@@ -445,6 +445,7 @@
   }
   // ---- encoded video (H.264 / VP8 via WebCodecs): the PC asks what we can decode
   let codecList = null, vdec = null, vcodec = 0, waitKey = true;
+  let decodeMaxW = 3840;   // lowered by the probe below and by a decoder failure at a big size
   async function probeCodecs() {
     if (codecList) return codecList;
     codecList = [];
@@ -455,6 +456,10 @@
                                ["hvc1", { codec: "hvc1.1.6.L93.B0" }], ["av01", { codec: "av01.0.04M.08" }], ["vp09", { codec: "vp09.00.10.08" }]]) {
       try { const r = await VideoDecoder.isConfigSupported({ ...cfg, codedWidth: 1280, codedHeight: 720 }); if (r.supported) codecList.push(name); } catch {}
     }
+    // the widest H.264 picture this phone decodes: on Wi-Fi the PC sends its screen's own size up to this (4K if it can)
+    for (const [w, h, c] of [[3840, 2160, "avc1.640033"], [2560, 1440, "avc1.640032"], [1920, 1080, "avc1.640028"]]) {
+      try { const r = await VideoDecoder.isConfigSupported({ codec: c, codedWidth: w, codedHeight: h }); if (r.supported) { decodeMaxW = Math.min(decodeMaxW, w); break; } } catch {}
+    }
     // sound: Opus at 24 kbit/s instead of raw PCM at 256 kbit/s (the PC falls back to PCM if we can't)
     try { if ("AudioDecoder" in window && (await AudioDecoder.isConfigSupported({ codec: "opus", sampleRate: 48000, numberOfChannels: 1 })).supported) codecList.push("opus"); } catch {}
     return codecList;
@@ -464,7 +469,7 @@
     const list = prefs.video === false ? all.filter((c) => c === "opus") : all;
     // the kind of network: the PC remembers its speed per kind, so mobile data never starts at the Wi-Fi picture size
     const link = (navigator.connection && navigator.connection.type) || "";
-    send({ t: "video", codecs: list, link });
+    send({ t: "video", codecs: list, link, maxw: decodeMaxW });
   }
   function ensureDecoder(codec) {
     if (vdec && vcodec === codec && vdec.state !== "closed") return true;
@@ -486,7 +491,14 @@
           canvas.classList.add("live"); frames++; lastFrameAt = Date.now(); send({ t: "ack" });
           if ($("bVideo").hidden) $("bVideo").hidden = false;
         },
-        error: (e) => { console.warn("video decoder", e); window.pcrError && window.pcrError("Декодер: " + (e.message || e)); try { vdec.close(); } catch {} vdec = null; send({ t: "video", off: true }); show("Видео недоступно, перехожу на JPEG"); },
+        error: (e) => {
+          console.warn("video decoder", e); window.pcrError && window.pcrError("Декодер: " + (e.message || e));
+          try { vdec.close(); } catch {} vdec = null; waitKey = true;
+          if (frameW > 1920 && decodeMaxW > 1920) {   // too big for this phone: a smaller picture, not JPEG
+            decodeMaxW = frameW > 2560 ? 2560 : 1920; announceCodecs(); return;
+          }
+          send({ t: "video", off: true }); show("Видео недоступно, перехожу на JPEG");
+        },
       });
       vdec.configure({ codec: codec === 1 ? "avc1.42E01E" : codec === 3 ? "avc1.64001F" : "vp8", optimizeForLatency: true });
       vcodec = codec; waitKey = true; return true;
@@ -906,6 +918,8 @@
   document.addEventListener("click", async (e) => {
     const p = e.target.closest("#profile button[data-profile]");
     if (p) { setProfile(p.dataset.profile); return; }
+    const q = e.target.closest("#pq button[data-pq]");
+    if (q) { setPq(q.dataset.pq); return; }
     const b = e.target.closest("#powerSheet button[data-cmd]"); if (!b) return;
     const names = { reboot: "Перезагрузить ПК?", shutdown: "Выключить ПК?", sleep: "Перевести ПК в сон?",
                     lock: "Заблокировать ПК?", cancel: "Отменить выключение?" };
@@ -914,22 +928,45 @@
     if (b.dataset.cmd !== "cancel" && !(await ask(names[b.dataset.cmd]))) return;
     send({ t: "cmd", cmd: b.dataset.cmd }); buzz(20);
   });
+  // the traffic ceiling: what each choice gives and costs, in the owner's words (06.10.2026: "напиши понятные скорости")
+  const PROFILE_HINT = {
+    tiny: "Не больше 15 КБ/с — мобильный интернет на пределе. Картинка 480 px, кадров сколько успеет сеть (обычно 2–6 в секунду), звук 16 кбит/с. Час работы — не больше 54 МБ, неподвижный экран почти ничего не стоит.",
+    eco: "Не больше 100 КБ/с — нормальный мобильный интернет. Картинка до 960 px. Час работы — не больше 360 МБ; пока на экране ничего не меняется, трафика почти нет.",
+    normal: "Не больше 1 МБ/с — домашний Wi-Fi или хороший 4G. Картинка во весь экран ПК, на Wi-Fi в его родном разрешении. Тратит много только при постоянном движении (фильм, игра).",
+    hq: "Без потолка — сколько даст сеть. На Wi-Fi родное разрешение ПК вплоть до 4K, если телефон его декодирует, и до 20 кадров в секунду.",
+  };
+  const PQ_HINT = {
+    smooth: "Кадр примерно на четверть легче: кадров в секунду больше, картинка мягче. Для фильмов и игр на слабой сети.",
+    normal: "Баланс: текст читается, движение не рвётся.",
+    sharp: "Каждый кадр чётче и примерно на четверть тяжелее — кадров в секунду меньше. Для текста, таблиц, кода.",
+    max: "Самый чистый кадр, примерно в 1,6 раза тяжелее обычного: на слабом мобильном 1–2 кадра в секунду, зато каждый — как на ПК.",
+  };
   function setProfile(name, auto = false) {
     profile = name; localStorage.setItem("pcr_profile", name);
     if (!auto) localStorage.setItem("pcr_profile_manual", name);
     document.querySelectorAll("#profile button").forEach((b) => b.classList.toggle("on", b.dataset.profile === name));
+    $("profileHint").textContent = PROFILE_HINT[name] || "";
     $("ecoBadge").hidden = name !== "eco" && name !== "tiny";
-    $("ecoBadge").textContent = name === "tiny" ? "10 КБ/с" : "эконом";
+    $("ecoBadge").textContent = name === "tiny" ? "≤15 КБ/с" : "≤100 КБ/с";
     send({ t: "profile", name });
   }
   setProfile(profile);
+  // the picture quality, separately: how heavy (and so how sharp) each frame is
+  let pq = localStorage.getItem("pcr_pq") || "normal";
+  function setPq(level) {
+    pq = PQ_HINT[level] ? level : "normal"; localStorage.setItem("pcr_pq", pq);
+    document.querySelectorAll("#pq button").forEach((b) => b.classList.toggle("on", b.dataset.pq === pq));
+    $("pqHint").textContent = PQ_HINT[pq];
+    send({ t: "pq", level: pq });
+  }
+  setPq(pq);
   // auto profile: cellular -> eco, otherwise the chosen one
   const conn = navigator.connection;
   function autoProfile() {
     if (!$("autoProfile").checked || !conn) return;
     const cellular = conn.type === "cellular" || /2g|3g/.test(conn.effectiveType || "");
-    const want = cellular ? "eco" : (localStorage.getItem("pcr_profile_manual") || "normal");
-    if (want !== profile) { setProfile(want, true); show(cellular ? "Мобильная сеть: эконом" : "Wi-Fi: обычное качество"); }
+    const want = cellular ? "eco" : "hq";
+    if (want !== profile) { setProfile(want, true); show(cellular ? "Мобильная сеть: до 100 КБ/с" : "Wi-Fi: без ограничений"); }
   }
   $("autoProfile").checked = prefs.autoProfile === true;
   $("autoProfile").onchange = () => { prefs.autoProfile = $("autoProfile").checked; savePrefs(); autoProfile(); };

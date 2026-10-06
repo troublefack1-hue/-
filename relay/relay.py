@@ -1140,6 +1140,7 @@ def web_version() -> str:
 async def index(_request):
     ver = web_version()
     if _INDEX["ver"] != ver:
+        precompress(WEB_DIR)   # a page file changed: its .gz too, or aiohttp keeps serving the old compressed copy
         html = (WEB_DIR / "index.html").read_text("utf-8")
         html = re.sub(r'(/static/[A-Za-z0-9_./-]+)(?=["\'])', lambda m: f"{m.group(1)}?v={ver}", html)
         html = html.replace("<head>", f'<head><script>window.PCR_V="{ver}";</script>', 1)

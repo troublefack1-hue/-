@@ -154,8 +154,8 @@ class Encoder:
             self.encoder_name = "libx264"
             self.cid = 3 if high else 1   # 3 = H.264 High (CABAC, 8x8), when the phone said it decodes it
             venc = ["-c:v", "libx264", "-preset", "medium", "-tune", "zerolatency", "-profile:v", "high" if high else "baseline",
-                    "-bf", "0", "-crf", str(THIN_CRF), "-g", gop, "-x264-params", "repeat-headers=1:aud=1"]
-            self.bitrate = f"x264 crf {THIN_CRF}"
+                    "-bf", "0", "-crf", str(max(14, THIN_CRF - cq_boost)), "-g", gop, "-x264-params", "repeat-headers=1:aud=1"]
+            self.bitrate = f"x264 crf {max(14, THIN_CRF - cq_boost)}"
             fmt = ["-f", "h264"]
         elif codec == "h264":
             name, args = h264_encoder(ffmpeg) or H264_CHAIN[-1]

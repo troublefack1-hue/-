@@ -209,6 +209,10 @@ label.row span { flex: 1; }
 .seg .lbl { flex: 1; padding-left: 8px; }
 .seg button { padding: 8px 12px; border-radius: 10px; font-size: 13px; background: transparent; border-color: transparent; }
 .seg button.on { background: var(--accent); color: #fff; }
+/* a choice of four with a title above: an even 2x2 grid instead of buttons wrapping wherever they happen to */
+.seg.stack { display: grid; grid-template-columns: 1fr 1fr; }
+.seg.stack .lbl { grid-column: 1 / -1; padding: 4px 8px 2px; }
+.seg.stack button { padding: 10px 8px; }
 #accent button { width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--sw); border: 3px solid transparent; }
 #accent button.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--sw); }
 #theme button { font-size: 12px; padding: 7px 10px; }
