@@ -61,11 +61,12 @@ final class AutoUpdate {
             cur = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
             String net = null;
             try { net = ctx.getPackageManager().getPackageInfo("ru.pcremote.net", 0).versionName; } catch (Exception notInstalled) {}
-            if (net != null && Updater.compare(net, Updater.CROSS_SINCE) >= 0) {
-                // never ourselves while it is there: our own install needs a tap here, and two installers of one
-                // package at once broke each other (06.10.2026 07:45). On open/manual/partner we just ask it now.
-                PhoneLog.add("update(" + why + "): Мой ПК " + cur + " is updated by Интернет через ПК " + net);
-                if (!"timer".equals(why) && !"partner".equals(why)) PartnerUpdate.askNet(ctx);
+            boolean background = "timer".equals(why) || "partner".equals(why) || "push".equals(why);
+            if (net != null && Updater.compare(net, Updater.CROSS_SINCE) >= 0 && background) {
+                // in the background we leave ourselves to «Интернет через ПК» (a self-install needs a tap here);
+                // when the owner opens the app we install ourselves — HyperOS aborted every cross-install of this
+                // package ("Permission denied", 06.10.2026 10:25-11:03), the tap on open is the way that works
+                PhoneLog.add("update(" + why + "): Мой ПК " + cur + " is left to Интернет через ПК " + net);
                 if (any) busyUntil = System.currentTimeMillis() + 3 * 60_000;
                 return any;
             }
