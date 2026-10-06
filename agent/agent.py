@@ -1205,7 +1205,10 @@ class Agent:
         # sharpen it step by step (owner's wish, 06.10.2026) — two ladder rungs up and 3 cq better per step, at most
         # 3 steps (full width the phone shows, cq profile-9). One key frame per step, only after the previous frame
         # was decoded: on a slow link it simply takes longer. Real motion (send loop below) drops back at once.
+        # ...and only while the owner just looks (no touch for 3 s) and the link answers quickly: on mobile data a
+        # sharpened key frame stood in the queue for seconds and every tap came late (06.10.2026 08:33)
         if (self.enc and now - self.busy_at > 1.2 and self.refine < 3 and self.ack.is_set()
+                and now - self.last_input > 3 and (not self.rtt or self.rtt - self.rtt_min < 0.3)
                 and now - self.refine_at > 1.0 and self.screen.profile_name != "tiny"):
             self.refine += 1; self.refine_at = now
             lw2 = LADDER[max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0][0]
@@ -1518,6 +1521,8 @@ class Agent:
                     self.audio_on = bool(ev.get("on"))
                 if t in ("move", "btn", "click", "wheel", "key", "text", "combo", "clip"):
                     self.last_input = time.monotonic()
+                    if self.refine:   # the owner acts: quick frames again, no heavy sharpened ones in the queue
+                        self.refine = 0
                 if t == "diag_get":
                     await ws.send_str(json.dumps({"t": "diag", "ffmpeg": bool(self.ffmpeg), "codec": self.enc.codec if self.enc else None,
                                                   "encoder": getattr(self.enc, "encoder_name", None) if self.enc else None,
