@@ -240,7 +240,11 @@ public class RemoteService extends Service {
 
     private void onMessage(String s) {
         if (s.startsWith("{\"t\": \"apps\"") || s.startsWith("{\"t\":\"apps\"")) {   // new builds on the PC: fetch them now
-            new Thread(() -> { try { AutoUpdate.fromPc(this, "push"); } catch (Throwable e) { PhoneLog.add("push update: " + e); } }, "push-update").start();
+            new Thread(() -> {
+                // on mobile data a 330 KB download is half a minute of the link: not while the owner watches the screen
+                for (int i = 0; i < 240 && metered(this) && MainActivity.visible; i++) sleep(30_000);
+                try { AutoUpdate.fromPc(this, "push"); } catch (Throwable e) { PhoneLog.add("push update: " + e); }
+            }, "push-update").start();
             return;
         }
         if (s.startsWith("{\"t\": \"status\"") || s.startsWith("{\"t\":\"status\"")) {   // the PC's LAN address may change (Wi-Fi <-> cable)

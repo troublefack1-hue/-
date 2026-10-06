@@ -93,6 +93,23 @@ def load_config() -> dict:
 GUEST_ALLOW = {"ping", "ack", "profile", "cmd", "hello_phone", "monitor", "sys_get"}
 # agent -> phone message types a guest must NOT receive (terminal, clipboard, notifications,
 # window list, downloads). A guest sees the screen and power results, nothing private.
+def precompress(root) -> None:
+    """name.gz next to every text file: aiohttp serves it to a client that accepts gzip. The page was 470 KB on the
+    wire (xterm.js 289 KB, app.js 106 KB), ~40 s of a 12 KB/s link on every cold start; gzipped it is a quarter."""
+    import gzip
+    for p in list(root.glob("*")) + list((root / "vendor").glob("*")):
+        if p.suffix not in (".js", ".css", ".html", ".svg", ".json"):
+            continue
+        gz = p.with_name(p.name + ".gz")
+        try:
+            if gz.exists() and gz.stat().st_mtime >= p.stat().st_mtime:
+                continue
+            gz.write_bytes(gzip.compress(p.read_bytes(), 9, mtime=0))
+        except OSError as e:
+            log.info("precompress %s: %s", p.name, e)
+            return
+
+
 def ws_path(ws) -> str:
     try:
         return ws._req.path if getattr(ws, "_req", None) is not None else "?"
@@ -1133,6 +1150,7 @@ def make_app(cfg: dict) -> web.Application:
     app.router.add_get("/api/phone", hub.phone_files_handler)
     app.router.add_post("/api/phone", hub.phone_files_handler)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", hub.options_handler)
+    precompress(WEB_DIR)
     app.router.add_static("/static", WEB_DIR)
 
     @web.middleware

@@ -140,9 +140,12 @@
   // the Android activity tells us when it goes to the background (the WebView itself keeps running)
   let appHidden = false;
   const isHidden = () => document.hidden || appHidden;
+  let audioWanted = false;
   window.pcrVisible = (v) => {
     appHidden = !v;
     send({ t: "profile", name: isHidden() ? "idle" : profile });
+    if (isHidden() && audioOn) { audioWanted = true; audioOn = false; send({ t: "audio", on: false }); }
+    else if (!isHidden() && audioWanted) { audioWanted = false; audioOn = true; send({ t: "audio", on: true }); }
     if (!isHidden() && ws && ws.readyState !== 1) { backoff = 1000; connect(); }
   };
   function connect() {
@@ -625,9 +628,16 @@
       const d = document.createElement("div"); d.className = "trail"; const b = view.getBoundingClientRect();
       d.style.left = (t.clientX - b.left) + "px"; d.style.top = (t.clientY - b.top) + "px"; ripples.appendChild(d); setTimeout(() => d.remove(), 500);
     }
-    send({ t: "move", ...cur });
+    sendMove(cur);
     pts.set(t.identifier, { x: t.clientX, y: t.clientY });
   }, { passive: false });
+  let moveAt = 0, moveTimer = null, movePending = null;
+  function sendMove(p) {
+    const now = Date.now();
+    if (now - moveAt >= 40) { moveAt = now; movePending = null; send({ t: "move", x: p.x, y: p.y }); return; }
+    movePending = { x: p.x, y: p.y };   // the latest position wins; it goes out when the 40 ms are up
+    if (!moveTimer) moveTimer = setTimeout(() => { moveTimer = null; if (movePending) { moveAt = Date.now(); send({ t: "move", ...movePending }); movePending = null; } }, 40 - (now - moveAt));
+  }
 
   view.addEventListener("touchend", (e) => {
     if (!pcOnline) return;
@@ -977,7 +987,20 @@
     termHost.appendChild(d);
     renderTabs();
   }
+  // xterm (290 KB) only when a terminal is opened: not every session needs one, a thin link needs none
+  let xtermLoading = null;
+  function ensureXterm() {
+    if (window.Terminal && window.FitAddon) return Promise.resolve();
+    if (!xtermLoading) {
+      show("Загружаю терминал…");
+      const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "/static/vendor/xterm.css"; document.head.appendChild(css);
+      const load = (src) => new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = bad; document.head.appendChild(s); });
+      xtermLoading = load("/static/vendor/xterm.js").then(() => load("/static/vendor/addon-fit.js")).catch((e) => { xtermLoading = null; show("Терминал не загрузился", 4000); throw e; });
+    }
+    return xtermLoading;
+  }
   function newTerm(kind, cwd) {
+    if (!window.Terminal || !window.FitAddon) { ensureXterm().then(() => newTerm(kind, cwd)); return; }
     const id = "t" + (++termSeq);
     const term = new Terminal({ fontSize: 13, fontFamily: "ui-monospace, Consolas, monospace", cursorBlink: true, theme: termTheme(),
       scrollback: 3000, convertEol: false, allowProposedApi: true });

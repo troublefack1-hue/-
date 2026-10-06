@@ -20,3 +20,5 @@ components/
 /out/
 android-net/build/
 android-files/build/
+web/*.gz
+web/vendor/*.gz

@@ -982,6 +982,8 @@ class Agent:
         self.acks_since_view = 0     # acks since the last new viewer: the old link measurement is trusted until a few
         self.refine = 0              # 0 = live; 1..3 = sharpening a still picture step by step
         self.refine_at = 0.0
+        self.refine_rung = 0         # the rung a sharpened frame is encoded at (what the measured link affords)
+        self._probe_at = 0.0         # last probe key frame on an unmeasured link
         self.busy_at = 0.0           # last frame that carried real motion
         self.excess = 0.0            # lateness of acks beyond the transfer a frame needs: a queue is building
         self.excess_set = False
@@ -1209,7 +1211,7 @@ class Agent:
                 rung = afford                                   # a plainly fast link (Wi-Fi): straight up
             elif afford < rung and fresh and self.excess < 0.25 and now - self.rung_at > 15:
                 rung -= 1                                       # up: one rung per 15 s, only with headroom and quick acks
-        elif rung > 0 and self.excess < 0.15 and now - self.rung_at > (60 if rung >= 4 else 15):
+        elif rung > 0 and self.acks_since_view >= 1 and self.excess < 0.15 and now - self.rung_at > (60 if rung >= 4 else 15):
             rung -= 1                                           # no recent measurement, acks are quick: probe upward
         if self.excess > 0.5 and now - self.rung_at > 2:
             rung = min(len(LADDER) - 1, rung + 1)               # a queue builds up (acks late beyond the base latency): step down
@@ -1271,17 +1273,27 @@ class Agent:
         # the link for ~10 s (bench, 06.10.2026). And never on a slow link: there the owner wants the traffic low.
         # ...and on a slow link once a minute as a probe: small frames cannot measure the link, so this one bigger
         # key frame is what tells the agent that the link got faster (Wi-Fi again) — and sharpens the picture
-        probe = now - self.bw_at > 30 and now - self.refine_at > 60
-        if (self.enc and now - self.busy_at > 2.5 and self.refine < 3 and self.ack.is_set()
-                and now - self.last_input > 5 and self.excess < 0.3
-                and (not self.bw or self.bw > 60 * 1024 or probe)
-                and now - self.refine_at > 1.0 and self.screen.profile_name != "tiny"):
+        quiet = (self.enc and now - self.busy_at > 2.5 and self.ack.is_set() and now - self.last_input > 5
+                 and self.excess < 0.3 and self.screen.profile_name != "tiny")
+        measured = self.bw and now - self.bw_at < 120
+        if quiet and self.refine < 3 and measured and self.bw > 60 * 1024 and now - self.refine_at > 1.0:
+            # a MEASURED link with room: one sharpened key frame, sized for about two seconds of that link.
+            # Unmeasured used to mean "fast": a 300-400 KB frame went down a 12 KB/s link (09:41 06.10.2026)
             self.refine = 3; self.refine_at = now
-            lw2 = LADDER[max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0][0]
+            budget_bits = self.bw * 8 * 2.0
+            target = 0 if budget_bits >= 2500 * 1000 else next((i for i in range(1, len(LADDER)) if _kbit(LADDER[i][2]) * 1000 <= budget_bits), len(LADDER) - 1)
+            self.refine_rung = min(target, self.rung)
+            lw2 = LADDER[self.refine_rung][0]
             want2 = min(self.screen.profile["max_width"], lw2) if lw2 else self.screen.profile["max_width"]
             if want2 != self._vid_w:
                 self._vid_w = want2
                 self.screen.set_width(want2)
+            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True))
+        elif quiet and (not self.bw or now - self.bw_at > 60) and now - self._probe_at > 60:
+            # small frames cannot measure the link: once a minute, when nothing moves, one ordinary key frame at the
+            # CURRENT size (10-20 KB on a thin rung) measures it — and tells the agent when Wi-Fi is back
+            self._probe_at = now
+            self.video_gen += 1
             raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True))
         if raw is None:
             # ffmpeg hands a frame out a little after it got it; we used to read only right after writing the next one,
@@ -1293,7 +1305,7 @@ class Agent:
             return
         data, pix_fmt, size = raw
         # the ladder: resolution, frame rate and bitrate follow the link
-        rung = max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0
+        rung = self.refine_rung if self.refine else self.rung
         lw, lfps, lbr = LADDER[rung]
         tier = self.screen.profile_name
         # the encoder runs at the profile's rate; idle seconds simply feed it fewer frames. A rate change used to
@@ -1430,7 +1442,7 @@ class Agent:
             last_seq = seq
             text = await loop.run_in_executor(None, get_clipboard)
             if text and text.strip():
-                await ws.send_str(json.dumps({"t": "pc_clip", "s": text}))
+                await ws.send_str(json.dumps({"t": "pc_clip", "s": text[:2000]}))   # a 50 KB copy is 4 s of a thin link
 
     async def term_pump(self, ws, tid: str, term: Term):
         """Reads console output in a thread and ships it to the phone."""
