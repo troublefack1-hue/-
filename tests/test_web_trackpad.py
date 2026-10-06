@@ -60,7 +60,7 @@ async def main():
 
         n = len(got); await swipe(100, 25, 40)          # 100 points in 1 s: slow
         slow = moved_px(n)
-        n = len(got); await swipe(100, 5, 0)            # 100 points as fast as CDP delivers: fast
+        n = len(got); await swipe(100, 2, 0)            # 100 points in two jumps: fast however slowly CDP delivers
         fast = moved_px(n)
         report("slow swipe: about 1 PC pixel per point", 80 <= slow <= 160, f"{slow} px for 100 points")
         report("fast swipe goes much further", fast >= 2 * max(slow, 1), f"{fast} px for 100 points")
