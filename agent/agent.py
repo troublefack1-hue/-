@@ -114,6 +114,10 @@ SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 7
 ULONG_PTR = ctypes.c_size_t
 
 
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
 class MOUSEINPUT(ctypes.Structure):
     _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
                 ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR)]
@@ -970,6 +974,7 @@ class Agent:
         # to make a key frame's ack look like the next P-frame's, poisoning the latency and throughput (06.10.2026)
         self.inflight = collections.deque()
         self.sent_log = collections.deque()   # (sent_at, bytes) of the last seconds: the rung's byte budget
+        self._bw_low = 0                      # consecutive throughput samples under half the estimate
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
         self.terms: dict[str, Term] = {}
         self.volume = Volume()
@@ -1038,6 +1043,7 @@ class Agent:
                         delay = 2
                         await ws.send_str(json.dumps(self.hello_msg()))
                         tasks = [asyncio.create_task(self.stream(ws)), asyncio.create_task(self.stream_audio(ws)),
+                                 asyncio.create_task(self.watch_cursor(ws)),
                                  asyncio.create_task(self.watch_clipboard(ws)), asyncio.create_task(self.stream_zone(ws)),
                                  asyncio.create_task(self.watch_notifications(ws))]
                         try:
@@ -1127,12 +1133,9 @@ class Agent:
                 except Exception:  # noqa: BLE001
                     pass
                 continue
-            if jpeg is None and time.monotonic() - last_sent < 2.0:
+            if jpeg is None:   # nothing changed: nothing to send (the page keeps the last picture)
                 await asyncio.sleep(interval)
                 continue
-            if jpeg is None:  # keep-alive frame every 2 s even if static
-                self.screen._last_hash = b""
-                jpeg = await loop.run_in_executor(None, self.screen.grab)
             self.mark_sent(len(jpeg))
             await ws.send_bytes(FRAME_VIDEO + jpeg)
             last_sent = self.sent_at
@@ -1219,8 +1222,13 @@ class Agent:
         if size >= (4000 if self.rung >= 4 else 16000) and transfer > 0.015:
             bw = size / transfer
             # down at once, up smoothly: after Wi-Fi -> mobile data the old 400 KB/s took a dozen samples to fade,
-            # and every frame until then was sized for Wi-Fi (bench 06.10.2026)
-            self.bw = bw if (not self.bw or bw < self.bw * 0.5) else self.bw * 0.7 + bw * 0.3
+            # and every frame until then was sized for Wi-Fi (bench 06.10.2026). But one low sample is mobile
+            # jitter (a 7 KB/s reading on a 16 KB/s link cost a rung and a key frame): two in a row mean it
+            if self.bw and bw < self.bw * 0.5:
+                self._bw_low += 1
+            else:
+                self._bw_low = 0
+            self.bw = bw if (not self.bw or self._bw_low >= 2) else self.bw * 0.7 + bw * 0.3
             self.bw_at = time.monotonic()
 
     def pick_rung(self) -> int:
@@ -1256,8 +1264,10 @@ class Agent:
             elif afford < rung and fresh and self.excess < 0.25 and (now - self.rung_at > 15 or self.acks_since_view <= 3):
                 rung = afford                                   # up to what the fresh measurement affords (30 % headroom
                                                                 # is in `afford`): at once after the tiny start, else per 15 s
-        elif rung > 0 and self.acks_since_view >= 1 and self.excess < 0.15 and now - self.rung_at > (60 if rung >= 4 else 15):
-            rung -= 1                                           # no recent measurement, acks are quick: probe upward
+        elif 0 < rung < 4 and self.acks_since_view >= 1 and self.excess < 0.15 and now - self.rung_at > 15:
+            rung -= 1   # no recent measurement, acks are quick: probe upward — on the wide rungs only. On a thin link
+                        # every try is a key frame (41 KB = 3 s of a 12 KB/s link, 10:21 06.10.2026); there the
+                        # measuring key frame of the quiet-time probe decides, and the picture stays put meanwhile
         if self.excess > 0.5 and now - self.rung_at > 2:
             rung = min(len(LADDER) - 1, rung + 1)               # a queue builds up (acks late beyond the base latency): step down
         if self.screen.profile_name == "tiny":
@@ -1334,12 +1344,6 @@ class Agent:
             if want2 != self._vid_w:
                 self._vid_w = want2
                 self.screen.set_width(want2)
-            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True, region=region))
-        elif quiet and (not self.bw or now - self.bw_at > 60) and now - self._probe_at > 60:
-            # small frames cannot measure the link: once a minute, when nothing moves, one ordinary key frame at the
-            # CURRENT size (10-20 KB on a thin rung) measures it — and tells the agent when Wi-Fi is back
-            self._probe_at = now
-            self.video_gen += 1
             raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True, region=region))
         if raw is None:
             # ffmpeg hands a frame out a little after it got it; we used to read only right after writing the next one,
@@ -1489,6 +1493,29 @@ class Agent:
                 continue
             for n in items:
                 await ws.send_str(json.dumps({"t": "pc_notify", **n}))
+
+    async def watch_cursor(self, ws):
+        """The PC cursor as its own tiny channel: {"t":"cur","x","y"} (fractions of the monitor) up to 20 times a
+        second while it moves, nothing while it stands — the picture does not have to carry it (the captures do
+        not include it anyway), and the page draws it the moment the message lands."""
+        last = None
+        while True:
+            await asyncio.sleep(0.05)
+            if not self.viewers or self.screen.profile["fps"] == 0:
+                continue
+            pt = POINT()
+            if not user32.GetCursorPos(ctypes.byref(pt)):
+                continue
+            mon = self.screen.mon
+            x = (pt.x - mon["left"]) / max(1, mon["width"]); y = (pt.y - mon["top"]) / max(1, mon["height"])
+            cur = (round(min(1.0, max(0.0, x)), 4), round(min(1.0, max(0.0, y)), 4))
+            if cur == last:
+                continue
+            last = cur
+            try:
+                await ws.send_str(json.dumps({"t": "cur", "x": cur[0], "y": cur[1]}))
+            except Exception:  # noqa: BLE001
+                return
 
     async def watch_clipboard(self, ws):
         """PC clipboard -> phone, whenever it changes while someone is watching."""

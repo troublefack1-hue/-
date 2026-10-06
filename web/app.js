@@ -228,6 +228,10 @@
         pill(m.vpn ? "VPN на ПК включён" : "VPN на ПК выключен", m.vpn);
         pingSentAt = Date.now(); send({ t: "ping" });
         setTimeout(() => { if (Date.now() - lastMsgAt > 1400 && ws && ws.readyState === 1) { backoff = 300; ws.close(); } }, 1500);
+      } else if (m.t === "cur") {   // the PC cursor moved: draw it now, the picture need not carry it
+        pcCur = { x: m.x, y: m.y };
+        if (trackpad.checked && t0 === null && !dragging) cur = pcCur;   // the pad resyncs while no finger is down
+        placeCursor();
       } else if (m.t === "term_out") { termOut(m.id, m.data);
       } else if (m.t === "pc_notify") {
         if (!isHidden()) { pill(`${m.app}: ${m.title || m.text}`.slice(0, 80), false, 4000); buzz(15); }
@@ -537,11 +541,12 @@
     return { x: Math.min(1, Math.max(0, x / frameW)), y: Math.min(1, Math.max(0, y / frameH)) };
   }
   function placeCursor() {
-    if (!trackpad.checked || !pcOnline || !frameW) { cursorEl.hidden = true; return; }
+    const p = trackpad.checked ? cur : pcCur;   // the trackpad shows where it is sending the cursor, else the PC's own
+    if (!p || !pcOnline || !frameW) { cursorEl.hidden = true; return; }
     const m = new DOMMatrix(getComputedStyle(canvas).transform);
     cursorEl.hidden = false;
-    cursorEl.style.left = (m.e + cur.x * frameW * m.a) + "px";
-    cursorEl.style.top = (m.f + cur.y * frameH * m.d) + "px";
+    cursorEl.style.left = (m.e + p.x * frameW * m.a) + "px";
+    cursorEl.style.top = (m.f + p.y * frameH * m.d) + "px";
   }
 
   // -------------------------------------------------------------- touch
@@ -571,6 +576,7 @@
   document.querySelectorAll("#mouseMode button").forEach((b) => (b.onclick = () => { setMouseMode(b.dataset.mouse); buzz(8); }));
   setTimeout(() => setMouseMode(mouseMode), 0);
 
+  let pcCur = null;   // where the PC says its cursor is (its own channel)
   let pts = new Map(), t0 = null, longTimer = null, dragging = false, moved = false;
   let cur = { x: 0.5, y: 0.5 }, lastTap = 0, scrollAcc = 0, pinch = null;
   // trackpad: tap-then-touch-and-move drags (button held), two-finger tap = right click, speed-dependent gain
