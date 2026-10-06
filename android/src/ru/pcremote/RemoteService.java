@@ -76,7 +76,9 @@ public class RemoteService extends Service {
         Thread up = new Thread(() -> {   // fixes made on the PC reach the phone by themselves, every 15 minutes
             sleep(60_000);
             // Throwable, not Exception: an Error used to end this thread silently, and with it every later check
-            while (running) { try { AutoUpdate.fromPc(this, "timer"); } catch (Throwable e) { PhoneLog.add("autoupdate thread: " + e); } sleep(15 * 60_000); }
+            // the PC pushes {"t":"apps"} when it has new builds; this timer is only a fallback, and on mobile data
+            // (every check = a TLS connection, ~5 KB) a rare one
+            while (running) { try { AutoUpdate.fromPc(this, "timer"); } catch (Throwable e) { PhoneLog.add("autoupdate thread: " + e); } sleep(metered(this) ? 3 * 3600_000L : 15 * 60_000); }
         }, "autoupdate");
         up.setDaemon(true); up.start();
         keeper.setDaemon(true); keeper.start();
@@ -230,7 +232,17 @@ public class RemoteService extends Service {
         } catch (Exception e) { return false; }
     }
 
+    /** Mobile data or a metered hotspot: nothing optional goes over it. */
+    static boolean metered(Context ctx) {
+        try { return ((android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE)).isActiveNetworkMetered(); }
+        catch (Exception e) { return true; }
+    }
+
     private void onMessage(String s) {
+        if (s.startsWith("{\"t\": \"apps\"") || s.startsWith("{\"t\":\"apps\"")) {   // new builds on the PC: fetch them now
+            new Thread(() -> { try { AutoUpdate.fromPc(this, "push"); } catch (Throwable e) { PhoneLog.add("push update: " + e); } }, "push-update").start();
+            return;
+        }
         if (s.startsWith("{\"t\": \"status\"") || s.startsWith("{\"t\":\"status\"")) {   // the PC's LAN address may change (Wi-Fi <-> cable)
             String lan = Pairing.jsonString(s, "lan");
             if (lan != null && !lan.isEmpty() && !lan.equals(prefs.getString("lan", ""))) prefs.edit().putString("lan", lan).apply();

@@ -40,7 +40,19 @@ async def main():
         pc = await ws_auth(s, "/ws/pc"); json.loads((await pc.receive()).data); await phone.receive()  # viewers / status online
         await pc.send_bytes(b"\x01JPEG"); m = await phone.receive(); report("video frame forwarded with type byte", m.data == b"\x01JPEG")
         await pc.send_bytes(b"\x02\x80\x3ePCM"); m = await phone.receive(); report("audio frame forwarded", m.data[:1] == b"\x02")
-        report("only video is cached for newcomers", hub.last_frame == b"\x01JPEG")
+        # a newcomer gets NO stale frame (80-150 KB that blocked a thin link for seconds on every reconnect):
+        # the agent sends it a fresh one on the "viewers" message anyway
+        late = await ws_auth(s, "/ws/phone"); await late.receive()   # status
+        try:
+            m = await asyncio.wait_for(late.receive(), 0.6); stale = m.type == aiohttp.WSMsgType.BINARY
+        except asyncio.TimeoutError:
+            stale = False
+        report("no stale frame to a newcomer", not stale); await late.close()
+        while True:   # the "viewers" messages that newcomer caused, before the next check reads from the PC
+            try:
+                await asyncio.wait_for(pc.receive(), 0.3)
+            except asyncio.TimeoutError:
+                break
         t0 = time.time(); await phone.send_str('{"t":"ping"}'); m = json.loads((await phone.receive()).data)
         report("ping -> pong with pc_online", m["t"] == "pong" and m["pc_online"] is True)
         await phone.send_str(json.dumps({"t": "profile", "name": "eco"})); m = json.loads((await pc.receive()).data); report("profile forwarded to agent", m == {"t": "profile", "name": "eco"})

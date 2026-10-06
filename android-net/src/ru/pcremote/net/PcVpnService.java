@@ -63,7 +63,13 @@ public class PcVpnService extends VpnService {
         if (updater == null || !updater.isAlive()) {   // our own updates while the tunnel runs, every 15 minutes
             updater = new Thread(() -> {
                 try { Thread.sleep(90_000); } catch (InterruptedException e) { return; }
-                while (true) { NetInstaller.check(this, "timer"); try { Thread.sleep(15 * 60_000); } catch (InterruptedException e) { return; } }
+                // «Мой ПК» updates us on the PC's push; this is the fallback, rare on mobile data (a TLS connection each)
+                while (true) {
+                    NetInstaller.check(this, "timer");
+                    boolean metered = true;
+                    try { metered = ((android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE)).isActiveNetworkMetered(); } catch (Exception ignored) {}
+                    try { Thread.sleep(metered ? 3 * 3600_000L : 15 * 60_000); } catch (InterruptedException e) { return; }
+                }
             }, "netupdate");
             updater.setDaemon(true); updater.start();
         }

@@ -636,7 +636,8 @@ class App(tk.Tk):
         def deps_worker():
             deps.ensure(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}), want_video=self.cfg.get("video", True))
             try:   # the phone apps, re-signed with this PC's key, so the phones update from here
-                updater.refresh_apks(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}), self.apk_pairing())
+                idx = updater.refresh_apks(DATA, lambda m: self.after(0, self.deps_msg.configure, {"text": m}), self.apk_pairing())
+                self.announce_apps(idx)
             except Exception:  # noqa: BLE001
                 log.exception("apk refresh")
             try:
@@ -714,8 +715,9 @@ class App(tk.Tk):
                     self.after(0, lambda: self.upd_btn.configure(text="скачано (не exe)", state="normal"))
             except Exception as e:  # noqa: BLE001
                 log.exception("update failed")
+                msg = str(e)   # `e` is gone once the except block ends; the lambda below ran later and raised NameError
                 self.after(0, lambda: self.upd_btn.configure(text=f"ошибка обновления", state="normal"))
-                self.after(0, lambda: self.code_hint.configure(text=f"Обновление: {e}"))
+                self.after(0, lambda: self.code_hint.configure(text=f"Обновление: {msg}"))
         threading.Thread(target=worker, daemon=True).start()
 
     def animate_beam(self):
@@ -733,6 +735,11 @@ class App(tk.Tk):
             self.hdr.itemconfigure(d, state="normal")
         self.beam_t += 1
         self.after(60, self.animate_beam)
+
+    def announce_apps(self, index):
+        """Phones learn about new apps from this push over their existing link, not by polling every 15 minutes."""
+        if index and self.backend.hub is not None and self.backend.loop is not None:
+            asyncio.run_coroutine_threadsafe(self.backend.hub.announce_apps(str(index.get("version", ""))), self.backend.loop)
 
     def apk_pairing(self) -> dict:
         """What the phone apps carry inside (assets/pairing.json) to pair by themselves after a fresh install."""
@@ -833,7 +840,7 @@ class App(tk.Tk):
                         asyncio.run_coroutine_threadsafe(self.backend.hub.nudge_phones(f"ip={ip}"), self.backend.loop)
                     self.tray.notify(f"Внешний адрес ПК изменился: {ip}. Телефон получит его сам.")
                     # the address inside the phone apps (assets/pairing.json) must follow: re-sign them
-                    threading.Thread(target=lambda: updater.refresh_apks(DATA, None, self.apk_pairing()), daemon=True).start()
+                    threading.Thread(target=lambda: self.announce_apps(updater.refresh_apks(DATA, None, self.apk_pairing())), daemon=True).start()
             except Exception:  # noqa: BLE001
                 log.exception("public ip watch")
             # no address yet (first start without internet): try every minute until we have one

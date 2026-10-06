@@ -34,10 +34,12 @@ import ru.pcremote.Updater;
 public final class NetInstaller extends BroadcastReceiver {
     private static final String ASSET = "pcremote-net.apk", ACTION = "ru.pcremote.net.INSTALL_RESULT";
 
-    static void log(String msg) {
-        // to the PC first: this app has no "all files" access, the file below usually cannot be written
+    static void log(String msg) { log(msg, true); }
+
+    /** toPc=false: file only — a line to the PC is a TLS connection (~5 KB), not for "nothing new" on a timer. */
+    static void log(String msg, boolean toPc) {
         final String line = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date()) + " " + msg;
-        Thread t = new Thread(() -> Updater.pcLog("net", line), "netlog"); t.setDaemon(true); t.start();
+        if (toPc) { Thread t = new Thread(() -> Updater.pcLog("net", line), "netlog"); t.setDaemon(true); t.start(); }
         try {
             File dir = new File(Environment.getExternalStorageDirectory(), "Download/PCRemote");
             if (dir.isDirectory() || dir.mkdirs()) {
@@ -61,7 +63,7 @@ public final class NetInstaller extends BroadcastReceiver {
             try {
                 Updater.pc = new Updater.Pc(p0.getString("host", ""), p0.getInt("port", 8443), p0.getString("pin", ""), p0.getString("secret", ""), p0.getString("lan", ""));
                 Updater.Info m = Updater.checkPc(moy, "pcremote.apk");
-                if (m == null) log("update(" + why + "): Мой ПК " + moy + " is current");
+                if (m == null) log("update(" + why + "): Мой ПК " + moy + " is current", !"timer".equals(why));
                 else if (!backoff(p0, "upd_try_moy", m.version, why)) {
                     log("update(" + why + "): Мой ПК " + moy + " -> " + m.version + ", downloading");
                     install(ctx, Updater.downloadPcUnique("pcremote.apk", ctx.getCacheDir(), m.sha256), "Мой ПК " + m.version);
@@ -96,7 +98,7 @@ public final class NetInstaller extends BroadcastReceiver {
             Updater.pc = new Updater.Pc(p.getString("host", ""), p.getInt("port", 8443), p.getString("pin", ""), p.getString("secret", ""), p.getString("lan", ""));
             cur = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
             Updater.Info i = Updater.checkPc(cur, ASSET);
-            if (i == null) { log("update(" + why + "): " + cur + " is current"); return; }
+            if (i == null) { log("update(" + why + "): " + cur + " is current", !"timer".equals(why)); return; }
             if (backoff(p, "upd_try", i.version, why)) return;
             log("update(" + why + "): " + cur + " -> " + i.version + ", downloading");
             install(ctx, Updater.downloadPcUnique(ASSET, ctx.getCacheDir(), i.sha256), "Интернет через ПК " + i.version);

@@ -15,6 +15,7 @@ Config: config.json next to this file (see config.example.json).
 """
 import array
 import asyncio
+import collections
 import ctypes
 import hashlib
 import io
@@ -778,6 +779,8 @@ class Screen:
         self.profile_name = name
         if name == "normal":
             p = dict(p, fps=self.cfg["fps"], max_width=self.cfg["max_width"], quality=self.cfg["quality"])
+        elif name == "idle":   # keep the frame size: coming back to the foreground then costs a P-frame, not a key frame
+            p = dict(p, max_width=self.profile["max_width"])
         self.profile = dict(p)
         self.quality = p["quality"]
         self.set_width(p["max_width"])
@@ -948,9 +951,12 @@ class Agent:
         self.audio = Audio()
         self.audio_on = False
         self.viewers = 0
-        self.ack = asyncio.Event()
+        self.ack = asyncio.Event()       # set = nothing in flight
         self.ack.set()
         self.sent_at = 0.0
+        # frames in flight, oldest first: (sent_at, size, alone). One ack settles one frame. A single timestamp used
+        # to make a key frame's ack look like the next P-frame's, poisoning the latency and throughput (06.10.2026)
+        self.inflight = collections.deque()
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
         self.terms: dict[str, Term] = {}
         self.volume = Volume()
@@ -971,9 +977,14 @@ class Agent:
         self.audio_only = False      # sound on the phone only: the room stays quiet while it listens
         self.audio_opus = False      # phone announced an Opus decoder
         self.bw = 0.0                # measured link throughput, bytes/s (from acks of big frames)
+        self.epoch = time.monotonic()   # frame timestamps count from here, not from each encoder's start
+        self._keyreq_at = 0.0        # last key frame the page asked for
+        self.acks_since_view = 0     # acks since the last new viewer: the old link measurement is trusted until a few
         self.refine = 0              # 0 = live; 1..3 = sharpening a still picture step by step
         self.refine_at = 0.0
         self.busy_at = 0.0           # last frame that carried real motion
+        self.excess = 0.0            # lateness of acks beyond the transfer a frame needs: a queue is building
+        self.excess_set = False
         self.rtt_min = 0.0           # the link's own latency (a VPN may add 300+ ms); the ladder reacts to time above it
         self.bw_at = 0.0             # when the last throughput sample came in
         self.sent_bytes = 0
@@ -1043,6 +1054,11 @@ class Agent:
             # nobody touched the phone for 10 s: 5 fps is plenty (a video in the HD zone keeps its own rate)
             if fps > 5 and time.monotonic() - self.last_input > 10 and not self.screen.zone:
                 fps = 5
+            # the link's rung caps the grab rate too: it used to cap only the encoder's declared rate, so a 12 KB/s
+            # link got 10+ tiny frames a second, each with its own ack round trip and ~60 B of framing
+            lfps = LADDER[self.rung][1] if self.ffmpeg and self.codecs else None
+            if lfps:
+                fps = min(fps, lfps)
             if self.viewers and time.monotonic() - last_probe > 5:
                 last_probe = time.monotonic()
                 try:
@@ -1053,8 +1069,11 @@ class Agent:
                         await ws.send_str(json.dumps(self.hello_msg()))   # new size for the phone
                 except Exception as e:  # noqa: BLE001
                     log.info("display probe: %s", e)
-            if self.viewers == 0 or fps == 0:
+            if self.viewers == 0:
                 self.video_close()   # no viewers: don't keep ffmpeg running
+                await asyncio.sleep(0.5)
+                continue
+            if fps == 0:             # the app is in the background: nothing to send, but the encoder stays warm
                 await asyncio.sleep(0.5)
                 continue
             interval = 1 / fps
@@ -1097,9 +1116,7 @@ class Agent:
             if jpeg is None:  # keep-alive frame every 2 s even if static
                 self.screen._last_hash = b""
                 jpeg = await loop.run_in_executor(None, self.screen.grab)
-            self.ack.clear()
-            self.sent_at = time.monotonic()
-            self.sent_bytes = len(jpeg)
+            self.mark_sent(len(jpeg))
             await ws.send_bytes(FRAME_VIDEO + jpeg)
             last_sent = self.sent_at
             if int(last_sent) % 3 == 0:
@@ -1123,21 +1140,43 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
 
-    def on_ack(self, sample: float, size: int):
+    def mark_sent(self, size: int):
+        now = time.monotonic()
+        self.inflight.append((now, size, not self.inflight))
+        self.sent_at, self.sent_bytes = now, size
+        self.ack.clear()
+
+    def on_ack(self, sample: float, size: int, alone: bool = True):
         """The phone decoded a frame of `size` bytes `sample` seconds after we sent it.
 
         Throughput is size / (time above the link's base latency), from big frames only. Since the video went
         to constant quality (05.10.2026) a still screen sends 1-3 KB frames; over a VPN with 400 ms of latency
         size/sample read as 5-10 KB/s and the ladder dropped a 300 KB/s link to 320x180 within ten seconds."""
         self.rtt = sample if not self.rtt else self.rtt * 0.7 + sample * 0.3
-        if not self.rtt_min or sample < self.rtt_min:
-            self.rtt_min = sample
-        else:
-            self.rtt_min += (sample - self.rtt_min) * 0.01   # creep up slowly if the route really got longer
+        if not alone:
+            return   # it waited behind another frame: says nothing about the link itself
+        # how late beyond what a frame of this size needs on this link: THAT is a queue. rtt minus the base latency
+        # was used before, and a key frame's honest 1.6 s transfer on a 12 KB/s link read as a queue (bench 06.10.2026)
+        if self.bw:   # before the first measurement a frame's whole transfer would count as lateness
+            exc = max(0.0, sample - (self.rtt_min + size / self.bw))
+            self.excess = exc if not self.excess_set else self.excess * 0.7 + exc * 0.3
+            self.excess_set = True
+        if size <= 3000:   # a small frame measures the link's latency, not its throughput
+            if not self.rtt_min or sample < self.rtt_min:
+                self.rtt_min = sample
+            else:
+                self.rtt_min += (sample - self.rtt_min) * 0.01   # creep up slowly if the route really got longer
+        elif not self.rtt_min:
+            # the first frame is a big key frame: most of its time is transfer, not latency. Taking it all as
+            # latency left nothing to measure the throughput with (bw stayed 0 on Wi-Fi, bench 06.10.2026)
+            self.rtt_min = min(sample / 4, 0.3)
         transfer = sample - self.rtt_min
-        if size >= 16000 and transfer > 0.015:
+        self.acks_since_view += 1
+        if size >= (6000 if self.rung >= 4 else 16000) and transfer > 0.015:
             bw = size / transfer
-            self.bw = bw if not self.bw else self.bw * 0.7 + bw * 0.3
+            # down at once, up smoothly: after Wi-Fi -> mobile data the old 400 KB/s took a dozen samples to fade,
+            # and every frame until then was sized for Wi-Fi (bench 06.10.2026)
+            self.bw = bw if (not self.bw or bw < self.bw * 0.5) else self.bw * 0.7 + bw * 0.3
             self.bw_at = time.monotonic()
 
     def pick_rung(self) -> int:
@@ -1147,8 +1186,16 @@ class Agent:
             return self.rung
         now = time.monotonic()
         rung = self.rung
+        if self.acks_since_view < 1 and rung < 3 and self.screen.profile_name != "tiny":
+            rung = 3   # a new viewer, nothing measured on ITS link yet: a 1024-px key frame (~100 KB) would cost a
+                       # 12 KB/s link 8 s; a 720-px one (~40 KB) tells us the speed in 3 s, Wi-Fi then jumps up
         # what the measured throughput affords: the highest rung whose bitrate fits in 70 % of it
-        if self.bw and now - self.bw_at < 8:
+        # the last measurement is trusted for a long time until a few acks of this viewer came in: a reconnect on a
+        # 12 KB/s link used to start at full quality (a 100 KB key frame = 8 s) before measuring again
+        # a remembered measurement (up to 2 min, from a previous link) may only lower the rung; climbing needs a
+        # fresh one from THIS link — the old Wi-Fi figure once sent a 100 KB key frame down a 12 KB/s link
+        fresh = now - self.bw_at < 8 and self.acks_since_view >= 1
+        if self.bw and (fresh or (self.acks_since_view < 3 and now - self.bw_at < 120)):
             afford = len(LADDER) - 1
             for i in range(1, len(LADDER)):
                 if _kbit(LADDER[i][2]) * 1000 <= self.bw * 8 * 0.7:
@@ -1158,11 +1205,13 @@ class Agent:
                 afford = 0
             if afford > rung:
                 rung = afford                                   # down: at once
-            elif afford < rung and self.rtt - self.rtt_min < 0.25 and now - self.rung_at > 15:
-                rung -= 1                                       # up: one rung per 4 s, only with headroom and quick acks
-        elif rung > 0 and self.rtt - self.rtt_min < 0.15 and now - self.rung_at > 15:
+            elif afford < rung and fresh and self.bw > 150 * 1024 and self.excess < 0.1:
+                rung = afford                                   # a plainly fast link (Wi-Fi): straight up
+            elif afford < rung and fresh and self.excess < 0.25 and now - self.rung_at > 15:
+                rung -= 1                                       # up: one rung per 15 s, only with headroom and quick acks
+        elif rung > 0 and self.excess < 0.15 and now - self.rung_at > (60 if rung >= 4 else 15):
             rung -= 1                                           # no recent measurement, acks are quick: probe upward
-        if self.rtt - self.rtt_min > 0.5 and now - self.rung_at > 2:
+        if self.excess > 0.5 and now - self.rung_at > 2:
             rung = min(len(LADDER) - 1, rung + 1)               # a queue builds up (acks late beyond the base latency): step down
         if self.screen.profile_name == "tiny":
             rung = max(rung, TINY_RUNG)
@@ -1203,6 +1252,7 @@ class Agent:
             return
         if self.rtt and self.ack.is_set():
             self.rtt *= 0.98   # no ack pending: let a stale "slow" verdict fade so we can try the full tier again
+            self.excess *= 0.98
         now = time.monotonic()
         if raw is None and self.enc and (self.enc.key[5] != self.video_gen or not self.enc.alive):
             # key[4] is the bitrate (None at full quality), not the generation: comparing it with video_gen closed
@@ -1219,9 +1269,12 @@ class Agent:
         # sharpened key frame stood in the queue for seconds and every tap came late (06.10.2026 08:33)
         # One sharpened key frame, not three: on a 40 KB/s link three of them cost 413 KB in a 12 s pause and held
         # the link for ~10 s (bench, 06.10.2026). And never on a slow link: there the owner wants the traffic low.
+        # ...and on a slow link once a minute as a probe: small frames cannot measure the link, so this one bigger
+        # key frame is what tells the agent that the link got faster (Wi-Fi again) — and sharpens the picture
+        probe = now - self.bw_at > 30 and now - self.refine_at > 60
         if (self.enc and now - self.busy_at > 2.5 and self.refine < 3 and self.ack.is_set()
-                and now - self.last_input > 5 and (not self.rtt or self.rtt - self.rtt_min < 0.3)
-                and (not self.bw or self.bw > 60 * 1024)
+                and now - self.last_input > 5 and self.excess < 0.3
+                and (not self.bw or self.bw > 60 * 1024 or probe)
                 and now - self.refine_at > 1.0 and self.screen.profile_name != "tiny"):
             self.refine = 3; self.refine_at = now
             lw2 = LADDER[max(0, self.rung - 2 * self.refine) if self.refine < 3 else 0][0]
@@ -1253,7 +1306,12 @@ class Agent:
         # One frame in flight, on every rung: the next picture is grabbed only after the phone decoded the previous one
         # (or after a link-sized wait if an ack got lost). A narrow link then gets fewer frames, each of them fresh,
         # instead of a queue of old ones seconds deep — and nothing is spent on frames nobody would see in time.
-        if not self.ack.is_set() and time.monotonic() - self.sent_at < min(1.5, max(0.25, 2 * self.rtt_min + 0.15)):
+        if len(self.inflight) >= 2 and time.monotonic() - self.inflight[0][0] > 60.0:
+            self.inflight.popleft()   # TCP loses no acks, only whole links (the relay drops those in ~30 s): a 60 s
+                                      # safety net; 8 s was less than a 100 KB key frame needs on a 12 KB/s link
+        oldest = self.inflight[0] if self.inflight else None
+        expect = (self.rtt_min + (oldest[1] / self.bw * 1.2 if self.bw else 1.2) + 0.2) if oldest else 0   # ack due
+        if oldest and (len(self.inflight) >= 2 or time.monotonic() - oldest[0] < min(8.0, max(0.25, expect))):
             if self.enc is not None and self.enc.alive:
                 await self._ship(ws, codec, 0.0)
             await asyncio.sleep(min(interval, 0.02))
@@ -1266,7 +1324,7 @@ class Agent:
             self.video_close()
             try:
                 self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt, bitrate=bitrate,
-                                         cq_boost=3 * self.refine)
+                                         cq_boost=3 * self.refine, epoch=self.epoch)
                 self.enc.key = key
                 log.info("video: %s %dx%d @%d (%s, rung %d, %s%s)", codec, size[0], size[1], enc_fps, tier, rung, self.enc.bitrate,
                          f", sharpening {self.refine}/3" if self.refine else "")
@@ -1294,9 +1352,7 @@ class Agent:
                 if self.refine and len(payload) > 40000:
                     log.info("video: motion, back to the link's settings")
                     self.refine = 0
-            self.sent_at = time.monotonic()   # the phone acks decoded frames: that gives us the RTT
-            self.sent_bytes = len(payload)
-            self.ack.clear()
+            self.mark_sent(len(payload))      # the phone acks decoded frames: that gives us the RTT
             await ws.send_bytes(video.FRAME_VIDEO_CODEC + bytes([1 if is_key else 0, cid]) + pts.to_bytes(8, "little") + payload)
             if not self.enc.out.qsize():
                 break
@@ -1418,15 +1474,21 @@ class Agent:
             t = ev.get("t")
             try:
                 if t == "ack":
-                    if self.sent_at:
-                        self.on_ack(time.monotonic() - self.sent_at, self.sent_bytes)
-                    self.ack.set()
+                    if self.inflight:
+                        sent_at, size, alone = self.inflight.popleft()
+                        self.on_ack(time.monotonic() - sent_at, size, alone)
+                    if not self.inflight:
+                        self.ack.set()
                 elif t == "viewers":
+                    was = self.viewers
                     self.viewers = int(ev.get("n", 0))
-                    if self.viewers:
+                    if self.viewers > was:
                         self.screen._last_hash = b""  # force a fresh frame
                         self.video_gen += 1           # and a key frame for the newcomer
-                    else:
+                        self.acks_since_view = 0
+                        # a new link: its latency is unknown, and frames sent to the previous one are nobody's
+                        self.inflight.clear(); self.ack.set(); self.rtt = 0.0; self.rtt_min = 0.0; self.excess = 0.0
+                    if not self.viewers:
                         self.codecs = []              # last viewer left: next one re-announces
                     # keep the PC awake while someone is connected (monitor may be off)
                     ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
@@ -1539,6 +1601,10 @@ class Agent:
                 elif t == "download_cancel":
                     self.downloads.cancel(str(ev.get("id", "")))
                     await ws.send_str(json.dumps({"t": "downloads", "items": self.downloads.list()}))
+                elif t == "keyreq":
+                    if time.monotonic() - self._keyreq_at > 2:
+                        self._keyreq_at = time.monotonic()
+                        self.video_gen += 1
                 elif t == "view":
                     vw = max(0, min(8192, int(ev.get("w") or 0)))   # 0 = unknown: no cap
                     if vw != self.screen.view_w:
@@ -1565,7 +1631,7 @@ class Agent:
                                                   "codecs": self.codecs, "reconnects": self.reconnects, "bw_kbs": round(self.bw / 1024, 1),
                                                   "rung": self.rung, "adaptive": self.adaptive,
                                                   "capture": self.screen.cap.name if self.screen.cap else None, "capture_mode": self.screen.capture_mode,
-                                                  "grab_ms": round(self.screen.grab_ms, 1), "capture_switches": self.screen.cap_switches, "bitrate": getattr(self.enc, "bitrate", None) if self.enc else None,
+                                                  "grab_ms": round(self.screen.grab_ms, 1), "enc_ms": round(getattr(self.enc, "enc_ms", 0.0), 1) if self.enc else None, "capture_switches": self.screen.cap_switches, "bitrate": getattr(self.enc, "bitrate", None) if self.enc else None,
                                                   "audio": self.audio.device_name if self.audio.stream else None,
                                                   "audio_codec": ("opus " + self.audio.enc.bitrate) if (self.audio.stream and self.audio.enc) else ("pcm" if self.audio.stream else None),
                                                   "idle_s": int(time.monotonic() - self.last_input)}))

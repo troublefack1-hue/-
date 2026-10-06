@@ -28,7 +28,7 @@ BITRATE = {"tiny": "48k", "low": "250k", "eco": "500k", "normal": "2500k", "hq":
 # needs up to the ceiling. Measured 05.10.2026 on a 1920x1080 desktop, 20 fps, GTX 1660 SUPER: NVENC CBR 6000k sent
 # 732 KB/s even on a still screen (SSIM 0.985); cq 24 sent 87 KB/s still / 359 KB/s scrolling at SSIM 0.984.
 # libx264 needs ~3 more crf for the same picture. Thin links (tiny, low rungs) stay on CBR: there the link is the limit.
-CQ = {"eco": 30, "normal": 26, "hq": 24}
+CQ = {"tiny": 32, "eco": 30, "normal": 26, "hq": 24}
 
 
 def find_ffmpeg() -> str | None:
@@ -124,7 +124,7 @@ class Encoder:
     """One ffmpeg process. write(bgra) feeds a frame; frames() yields (key, pts_us, bytes)."""
 
     def __init__(self, ffmpeg: str, codec: str, width: int, height: int, fps: int, profile: str = "normal", pix_fmt: str = "bgra",
-                 bitrate: str | None = None, cq_boost: int = 0):
+                 bitrate: str | None = None, cq_boost: int = 0, epoch: float | None = None):
         self.codec, self.width, self.height, self.fps = codec, width, height, max(1, fps)
         self.key = None
         have = _encoders(ffmpeg)
@@ -133,8 +133,12 @@ class Encoder:
         thin = profile == "tiny" or _kbit(br) <= 150
         # the link is TCP: nothing is lost, so key frames are only for a new viewer (the agent restarts the encoder
         # for one) and as a slow safety refresh; a 1920 key frame of a photo wallpaper is ~200 KB
-        gop = str(self.fps * (10 if thin else 30))
-        cq = None if thin else CQ.get(profile)
+        # minutes between key frames: the link is TCP and the page asks for one (keyreq) when its decoder needs it.
+        # On a 12 KB/s link a key frame is the single most expensive thing (1-2 s of the link each)
+        gop = str(self.fps * 300)
+        # thin rungs too: CBR made a STILL screen cost the full rate (NVENC fills the budget), constant quality under
+        # the rung's ceiling costs ~0 when nothing moves and the ceiling when something does
+        cq = CQ.get(profile, 28) + (4 if thin else 0)
         if cq is not None and cq_boost:
             cq = max(14, cq - cq_boost)   # a still screen being sharpened: better than the profile
         if codec == "h264":
@@ -164,7 +168,9 @@ class Encoder:
         self.out: queue.Queue = queue.Queue(maxsize=60)
         self.alive = True
         self.n_in = 0
-        self.t0 = time.monotonic()
+        self.wrote_at = 0.0      # when the last frame went in: _emit measures the encoder's own delay from it
+        self.enc_ms = 0.0        # that delay, smoothed (diagnostics)
+        self.t0 = epoch or time.monotonic()   # one clock across restarts: the decoder's timestamps stay monotonic
         threading.Thread(target=self._reader, daemon=True, name="ffmpeg-out").start()
         threading.Thread(target=self._stderr, daemon=True, name="ffmpeg-err").start()
 
@@ -172,6 +178,7 @@ class Encoder:
         try:
             self.proc.stdin.write(bgra)
             self.n_in += 1
+            self.wrote_at = time.monotonic()
             return True
         except (BrokenPipeError, OSError, ValueError):
             self.alive = False
@@ -198,6 +205,9 @@ class Encoder:
     # ---- output parsing --------------------------------------------------
     def _emit(self, key: bool, data: bytes):
         pts = int((time.monotonic() - self.t0) * 1e6)
+        if self.wrote_at:
+            lag = (time.monotonic() - self.wrote_at) * 1000
+            self.enc_ms = lag if not self.enc_ms else self.enc_ms * 0.8 + lag * 0.2
         try:
             self.out.put_nowait((key, pts, data))
         except queue.Full:

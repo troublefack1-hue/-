@@ -173,7 +173,7 @@ public class MainActivity extends Activity {
                 syncUpdaterPc();
                 Updater.Info found = null; boolean fromPc = false;
                 if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
-                if (found == null) found = Updater.check(cur);
+                else found = Updater.check(cur);   // GitHub only without a PC: paired phones asked it on every open
                 final Updater.Info info = found;
                 if (AutoUpdate.fromPc(this, "open")) {   // from our own PC: just do it, no dialog
                     runOnUiThread(() -> Toast.makeText(this, "Обновляю с ПК…", Toast.LENGTH_SHORT).show());

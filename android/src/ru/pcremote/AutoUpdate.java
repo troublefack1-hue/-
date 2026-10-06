@@ -24,7 +24,7 @@ final class AutoUpdate {
      *  downloading it again every 15 minutes cost ~0.8 MB each time, ~77 MB a day on mobile data. On "open" the
      *  owner is looking at the phone: try at once. */
     private static boolean recentlyTried(SharedPreferences p, String asset, String version, String why) {
-        if ("open".equals(why)) return false;
+        if ("open".equals(why) || "push".equals(why)) return false;
         String key = "upd_try_" + asset, was = p.getString(key, "");
         int bar = was.indexOf('|');
         if (bar > 0 && was.substring(0, bar).equals(version)) {

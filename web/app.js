@@ -263,10 +263,10 @@
   // 2 s pings while the app is on screen, 6 s of silence = reconnect (a VPN toggle on the PC costs seconds, not a minute)
   pingTimer = setInterval(() => {
     if (!ws || ws.readyState !== 1) return;
-    const limit = isHidden() ? 20000 : 6000;
+    const limit = isHidden() ? 40000 : 12000;
     if (Date.now() - lastMsgAt > limit) { show("Связь прервалась, переподключаюсь…"); backoff = 500; ws.close(); return; }
-    if (!isHidden() || Date.now() - pingSentAt > 8000) { pingSentAt = Date.now(); send({ t: "ping" }); }
-  }, 2000);
+    if (Date.now() - pingSentAt > (isHidden() ? 20000 : 5000)) { pingSentAt = Date.now(); send({ t: "ping" }); }
+  }, 1000);
   window.addEventListener("online", () => { backoff = 1000; if (!ws || ws.readyState !== 1) connect(); });
   document.addEventListener("visibilitychange", () => {
     // no video while the app is in the background: saves traffic and battery
@@ -367,11 +367,16 @@
       vcodec = codec; waitKey = true; return true;
     } catch (e) { vdec = null; send({ t: "video", off: true }); return false; }
   }
+  let keyAskedAt = 0;
+  function requestKey() {
+    if (Date.now() - keyAskedAt < 2000) return;
+    keyAskedAt = Date.now(); send({ t: "keyreq" });
+  }
   function decodeFrame(buf) {
     const u = new Uint8Array(buf); const key = !!(u[1] & 1), codec = u[2];
     const v = new DataView(buf); const pts = Number(v.getBigUint64(3, true));
     if (!ensureDecoder(codec)) return;
-    if (waitKey && !key) return;
+    if (waitKey && !key) { requestKey(); return; }   // decoder (re)started: ask instead of waiting for the GOP
     waitKey = false;
     try { vdec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: pts, data: buf.slice(11) })); }
     catch (e) { waitKey = true; }

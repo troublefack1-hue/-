@@ -107,6 +107,8 @@ def _event_type(data: str):
         return None
 
 
+# what the phone's background service (hello_phone{bg}) handles; everything else is for the open page only
+BG_ALLOW = {"status", "ring", "attention", "pc_notify", "pfs", "apps", "role", "net"}
 GUEST_RECV_BLOCK = {"term_out", "term_exit", "term_open", "pc_clip", "pc_notify", "attention", "diag",
                     "sys", "procs", "timers", "downloads", "dl", "powerplans", "windows"}
 
@@ -419,25 +421,31 @@ class Hub:
             self.phones.discard(ws)
 
     async def broadcast_agent_text(self, data: str):
-        """Like broadcast_phones for text, but keeps private message types away from guests."""
-        if self.guests:
+        """Like broadcast_phones for text, but keeps private types away from guests and everything the background
+        service does not handle away from it (its link is often the phone's mobile data)."""
+        if not self.guests and not self.bg:
+            await self.broadcast_phones(data)
+            return
+        t = _event_type(data)
+        dead = []
+        for ws in list(self.phones):
+            if ws in self.guests and t in GUEST_RECV_BLOCK:
+                continue
+            if ws in self.bg and t not in BG_ALLOW:
+                continue
             try:
-                t = json.loads(data).get("t")
-            except (ValueError, TypeError):
-                t = None
-            if t in GUEST_RECV_BLOCK:
-                dead = []
-                for ws in list(self.phones):
-                    if ws in self.guests:
-                        continue
-                    try:
-                        await ws.send_str(data)
-                    except Exception:  # noqa: BLE001
-                        dead.append(ws)
-                for ws in dead:
-                    self.phones.discard(ws)
-                return
-        await self.broadcast_phones(data)
+                await ws.send_str(data)
+            except Exception:  # noqa: BLE001
+                dead.append(ws)
+        for ws in dead:
+            self.phones.discard(ws)
+
+    async def announce_apps(self, version: str):
+        """New phone apps on this PC: tell the phones' background services, so they need not poll for them."""
+        if not version or version == getattr(self, "_apps_announced", ""):
+            return
+        self._apps_announced = version
+        await self.broadcast_phones(json.dumps({"t": "apps", "version": version}))
 
     async def send_pc(self, text: str):
         if self.pc is not None:
@@ -472,8 +480,6 @@ class Hub:
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.BINARY:
-                    if msg.data and msg.data[0] == FRAME_VIDEO:
-                        self.last_frame = msg.data
                     await self.broadcast_phones(msg.data, binary=True)
                 elif msg.type == WSMsgType.TEXT:
                     if msg.data.startswith('{"t": "hello",') or msg.data.startswith('{"t":"hello",'):
@@ -514,8 +520,6 @@ class Hub:
         if self.pc_hello and self.pc is not None:
             await ws.send_str(self.pc_hello)
         await self.tell_pc_viewers()
-        if self.last_frame:
-            await ws.send_bytes(self.last_frame)
         casting = False
         try:
             async for msg in ws:
