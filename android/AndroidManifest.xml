@@ -6,6 +6,11 @@
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="33" />
     <!-- pair once for every app: «Мой ПК» shares its pairing with our other apps (same signing key only) -->
     <permission android:name="ru.pcremote.permission.PAIRING" android:protectionLevel="signature" />
+    <!-- Android 11+ hides other apps from getPackageInfo unless listed: AutoUpdate could not see our own two -->
+    <queries>
+        <package android:name="ru.pcremote.net" />
+        <package android:name="ru.pcremote.files" />
+    </queries>
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
