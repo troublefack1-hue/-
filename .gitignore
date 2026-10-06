@@ -18,3 +18,5 @@ files.json
 phone/
 components/
 /out/
+android-net/build/
+android-files/build/
