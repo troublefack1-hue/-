@@ -93,7 +93,9 @@
     const x2 = c2.getContext("2d"); x2.drawImage(buf, 0, 0);
     canvas.replaceWith(c2); canvas = c2; buf = c2; ctx = x2;
   }
-  try {
+  // off unless switched on (localStorage pcr_sharpen=1): on a 480-px picture at 10 KB/s the sharpening outlined the
+  // compression blocks, and the owner judged the picture worse (06.10.2026)
+  if (localStorage.getItem("pcr_sharpen") === "1") try {
     gl = canvas.getContext("webgl", { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: false });
     if (gl) { buf = document.createElement("canvas"); up = makeUpscaler(gl); }
   } catch (e) { up = null; }
@@ -460,7 +462,9 @@
   async function announceCodecs() {
     const all = await probeCodecs();
     const list = prefs.video === false ? all.filter((c) => c === "opus") : all;
-    send({ t: "video", codecs: list });
+    // the kind of network: the PC remembers its speed per kind, so mobile data never starts at the Wi-Fi picture size
+    const link = (navigator.connection && navigator.connection.type) || "";
+    send({ t: "video", codecs: list, link });
   }
   function ensureDecoder(codec) {
     if (vdec && vcodec === codec && vdec.state !== "closed") return true;

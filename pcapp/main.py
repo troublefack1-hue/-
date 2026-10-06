@@ -18,6 +18,7 @@ import ctypes
 import io
 import json
 import logging
+import logging.handlers
 import os
 import queue
 import secrets
@@ -1041,7 +1042,9 @@ class App(tk.Tk):
 def main():
     DATA.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                        handlers=[logging.FileHandler(DATA / "pcapp.log", encoding="utf-8")])
+                        # 2 MB and one older copy: a plain FileHandler grew without end (~0.5 MB a day with phone traces)
+                        handlers=[logging.handlers.RotatingFileHandler(DATA / "pcapp.log", maxBytes=2 * 1024 * 1024,
+                                                                       backupCount=1, encoding="utf-8")])
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:  # noqa: BLE001

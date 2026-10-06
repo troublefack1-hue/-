@@ -29,6 +29,9 @@ BITRATE = {"tiny": "48k", "low": "250k", "eco": "500k", "normal": "2500k", "hq":
 # 732 KB/s even on a still screen (SSIM 0.985); cq 24 sent 87 KB/s still / 359 KB/s scrolling at SSIM 0.984.
 # libx264 needs ~3 more crf for the same picture. Thin links (tiny, low rungs) stay on CBR: there the link is the limit.
 CQ = {"tiny": 32, "eco": 30, "normal": 26, "hq": 24}
+# thin link (480 px and below): the one quality every frame arrives at. 26 = first picture ~50 KB (~4 s at 12 KB/s),
+# a scroll ~4 KB (0.3 s), a film ~2 frames/s at ~44 dB (bench 06.10.2026)
+THIN_CRF = 26
 
 
 def find_ffmpeg() -> str | None:
@@ -124,7 +127,7 @@ class Encoder:
     """One ffmpeg process. write(bgra) feeds a frame; frames() yields (key, pts_us, bytes)."""
 
     def __init__(self, ffmpeg: str, codec: str, width: int, height: int, fps: int, profile: str = "normal", pix_fmt: str = "bgra",
-                 bitrate: str | None = None, cq_boost: int = 0, epoch: float | None = None, frame_cap: int = 0,
+                 bitrate: str | None = None, cq_boost: int = 0, epoch: float | None = None, final: bool = False,
                  high: bool = False):
         self.codec, self.width, self.height, self.fps = codec, width, height, max(1, fps)
         self.key = None
@@ -142,21 +145,17 @@ class Encoder:
         cq = CQ.get(profile, 28) + (4 if thin else 0)
         if cq is not None and cq_boost:
             cq = max(14, cq - cq_boost)   # a still screen being sharpened: better than the profile
-        self.frame_cap = 0
         self.cid = 1 if codec == "h264" else 2
-        if codec == "h264" and frame_cap and "libx264" in have:
-            # Thin link (bench 06.10.2026, films at 10 KB/s): x264 keeps the budget (NVENC went to 12.8 KB/s with a
-            # 10 KB/s ceiling), gives ~10 % more picture per byte, and refines a still frame fed again (NVENC skips it).
-            # The frame cap (~0.3 s of the link) lets the frame rate follow the bytes: a click is a small frame sent at
-            # once, a film settles at ~4 frames/s of 2.5 KB each (Sintel 35.0 -> 39.9 dB, 12 -> 4 frames/s).
+        if codec == "h264" and final and "libx264" in have:
+            # Thin link: every frame final and beautiful, the frame rate pays (owner, 06.10.2026: "стабильный красивый
+            # кадр ценой количества кадров", no gradual loading). Constant quality, NO per-frame ceiling — the ceiling
+            # squeezed a scroll to 23.5 dB and a big change arrived as mush; the agent's byte budget spaces the frames.
+            # x264 over NVENC at 480 px (bench): scroll 4.3 KB at 38.0 dB vs NVENC 12.8 KB at 36.0, film 44.7 vs 40.8 dB.
             self.encoder_name = "libx264"
-            self.frame_cap = frame_cap
-            self.cid = 3 if high else 1   # 3 = H.264 High (CABAC, 8x8: ~10 % less), if the phone said it decodes it
-            crf = CQ.get(profile, 26)
+            self.cid = 3 if high else 1   # 3 = H.264 High (CABAC, 8x8), when the phone said it decodes it
             venc = ["-c:v", "libx264", "-preset", "medium", "-tune", "zerolatency", "-profile:v", "high" if high else "baseline",
-                    "-bf", "0", "-crf", str(crf), "-maxrate", f"{max(8, frame_cap * 8 * self.fps // 1000)}k",
-                    "-bufsize", f"{max(8, frame_cap * 12 // 1000)}k", "-g", gop, "-x264-params", "repeat-headers=1:aud=1"]
-            self.bitrate = f"x264 cap {frame_cap} B"
+                    "-bf", "0", "-crf", str(THIN_CRF), "-g", gop, "-x264-params", "repeat-headers=1:aud=1"]
+            self.bitrate = f"x264 crf {THIN_CRF}"
             fmt = ["-f", "h264"]
         elif codec == "h264":
             name, args = h264_encoder(ffmpeg) or H264_CHAIN[-1]

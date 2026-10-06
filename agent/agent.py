@@ -22,6 +22,7 @@ import hashlib
 import io
 import json
 import logging
+import logging.handlers
 import os
 import subprocess
 import threading
@@ -973,12 +974,9 @@ class Agent:
         # frames in flight, oldest first: (sent_at, size, alone). One ack settles one frame. A single timestamp used
         # to make a key frame's ack look like the next P-frame's, poisoning the latency and throughput (06.10.2026)
         self.inflight = collections.deque()
-        self.sent_log = collections.deque()   # (sent_at, bytes) of the last seconds: the rung's byte budget
-        self._changed_at = 0.0                # the screen last changed (a grab returned a new picture)
-        self._polish_left = 0                 # still-picture refinement steps left on a thin link
-        self._last_ship_size = 0              # bytes of the last frame shipped (tiny = nothing left to refine)
         self._bw_low = 0                      # consecutive throughput samples under half the estimate
-        self._fast_acks = 0                   # capped frames that crossed instantly (a fast link on a thin rung)
+        self.link_kind = ""                   # "wifi" / "cellular" / "" — what the page says its network is
+        self.bw_mem: dict = {}                # link kind -> (bytes/s, monotonic time): the last measurement of each
         self.rtt = 0.0  # smoothed send->ack time, drives quality adaptation
         self.terms: dict[str, Term] = {}
         self.volume = Volume()
@@ -1192,17 +1190,12 @@ class Agent:
 
     def _gate_closed(self, now: float) -> bool:
         """True while no frame may go out: the previous one is not decoded yet (one frame in flight, or a link-sized
-        wait if its ack is late), or the rung's byte budget for the last 2 s is spent."""
+        wait if its ack is late). The frame rate is whatever the network carries (owner, 06.10.2026): at 2 MB/s every
+        frame goes, at 10 KB/s what fits, and the frames in between are dropped — the next one grabbed is the newest.
+        (A byte budget per rung used to hold frames back on top of that: a 13.8 KB/s link got 8 KB/s.)"""
         if len(self.inflight) >= 2 and now - self.inflight[0][0] > 60.0:
             self.inflight.popleft()   # TCP loses no acks, only whole links (the relay drops those in ~30 s): a 60 s
                                       # safety net; 8 s was less than a 100 KB key frame needs on a 12 KB/s link
-        rung_now = self.refine_rung if self.refine else self.rung
-        rung_bps = _kbit(LADDER[rung_now][2]) * 1000 / 8 if LADDER[rung_now][2] else 0
-        if rung_bps:
-            while self.sent_log and self.sent_log[0][0] < now - 2.0:
-                self.sent_log.popleft()
-            if sum(n for _, n in self.sent_log) > 2 * rung_bps:
-                return True
         oldest = self.inflight[0] if self.inflight else None
         if not oldest:
             return False
@@ -1212,7 +1205,6 @@ class Agent:
     def mark_sent(self, size: int):
         now = time.monotonic()
         self.inflight.append((now, size, not self.inflight))
-        self.sent_log.append((now, size))
         self.sent_at, self.sent_bytes = now, size
         self.ack.clear()
 
@@ -1231,8 +1223,7 @@ class Agent:
             exc = max(0.0, sample - (self.rtt_min + size / self.bw))
             self.excess = exc if not self.excess_set else self.excess * 0.7 + exc * 0.3
             self.excess_set = True
-        if size <= 400:   # a small frame measures the link's latency, not its throughput (3000 B were 0.25 s of
-                          # transfer on a 12 KB/s link: the "latency" swallowed it and nothing was left to measure)
+        if size <= 3000:   # a small frame measures the link's latency, not its throughput
             if not self.rtt_min or sample < self.rtt_min:
                 self.rtt_min = sample
             else:
@@ -1243,11 +1234,12 @@ class Agent:
             self.rtt_min = min(sample / 4, 0.3)
         transfer = sample - self.rtt_min
         self.acks_since_view += 1
-        thin = self.rung >= 4
-        if thin and size >= 600 and transfer < 0.01:
-            self._fast_acks += 2 if size >= 1000 else 1   # crossed in under 10 ms: far faster than a thin rung
-        if size >= (600 if thin else 16000) and transfer > 0.02:   # x264 caps frames on thin rungs at 0.9-5.6 KB
-            bw = size / transfer
+        # throughput from frames big enough to time: 600-byte frames on a mobile link read anything from 2 to 12 KB/s
+        # and the ladder flapped (06.10.2026 16:36)
+        if size >= (4000 if self.rung >= 4 else 16000):
+            # a frame that crossed faster than we can time (15 ms) still proves a lower bound: without it a fast link
+            # after a slow one kept the slow link's 480 px (bench at 2 MB/s, 06.10.2026)
+            bw = size / max(transfer, 0.015)
             # down at once, up smoothly: after Wi-Fi -> mobile data the old 400 KB/s took a dozen samples to fade,
             # and every frame until then was sized for Wi-Fi (bench 06.10.2026). But one low sample is mobile
             # jitter (a 7 KB/s reading on a 16 KB/s link cost a rung and a key frame): two in a row mean it
@@ -1255,8 +1247,24 @@ class Agent:
                 self._bw_low += 1
             else:
                 self._bw_low = 0
-            self.bw = bw if (not self.bw or self._bw_low >= 2) else self.bw * 0.7 + bw * 0.3
+            # 5x below the estimate is no jitter but another link (Wi-Fi -> mobile data): taken at once
+            sudden = self.bw and bw < self.bw * 0.2
+            self.bw = bw if (not self.bw or self._bw_low >= 2 or sudden) else self.bw * 0.7 + bw * 0.3
             self.bw_at = time.monotonic()
+            if self.link_kind:
+                self.bw_mem[self.link_kind] = (self.bw, self.bw_at)
+
+    @staticmethod
+    def _afford(bw: float) -> int:
+        """The highest rung whose bitrate fits in 70 % of a throughput of bw bytes/s."""
+        afford = len(LADDER) - 1
+        for i in range(1, len(LADDER)):
+            if _kbit(LADDER[i][2]) * 1000 <= bw * 8 * 0.7:
+                afford = i
+                break
+        if afford == 1 and bw * 8 * 0.7 >= 2500 * 1000:
+            afford = 0
+        return afford
 
     def pick_rung(self) -> int:
         """Where on the LADDER the link puts us right now (see LADDER). Down fast, up slowly."""
@@ -1265,16 +1273,10 @@ class Agent:
             return self.rung
         now = time.monotonic()
         rung = self.rung
-        if rung >= 4 and self._fast_acks >= 2:
-            # capped frames are too small to time a fast link, but they crossed it instantly: go where frames are big
-            # enough to measure (720 px, NVENC), the ladder takes it from there
-            self._fast_acks = 0
-            rung = 3
-        if self.acks_since_view < 1 and rung < len(LADDER) - 1:
-            # a new viewer, nothing measured on ITS link yet: the smallest picture first (a ~6 KB key frame, half a
-            # second even on 12 KB/s), its ack measures the link, and the ladder jumps to what the link affords —
-            # on Wi-Fi within the next second. A 720-px start cost a thin link 3.4 s of nothing (bench 06.10.2026)
-            rung = len(LADDER) - 1
+        if self.acks_since_view < 1:
+            # a new viewer starts where the last measurement (this PC, the last 30 min) puts it, else at 480 px: a start
+            # at 320 px and a jump after the first ack was a visible reload of the whole picture (owner, 06.10.2026)
+            rung = self._afford(self.bw) if self.bw and now - self.bw_at < 1800 else max(TINY_RUNG, 1)
         # what the measured throughput affords: the highest rung whose bitrate fits in 70 % of it
         # the last measurement is trusted for a long time until a few acks of this viewer came in: a reconnect on a
         # 12 KB/s link used to start at full quality (a 100 KB key frame = 8 s) before measuring again
@@ -1282,14 +1284,12 @@ class Agent:
         # fresh one from THIS link — the old Wi-Fi figure once sent a 100 KB key frame down a 12 KB/s link
         fresh = now - self.bw_at < 8 and self.acks_since_view >= 1
         if self.bw and (fresh or (self.acks_since_view < 3 and now - self.bw_at < 120)):
-            afford = len(LADDER) - 1
-            for i in range(1, len(LADDER)):
-                if _kbit(LADDER[i][2]) * 1000 <= self.bw * 8 * 0.7:
-                    afford = i
-                    break
-            if afford == 1 and self.bw * 8 * 0.7 >= 2500 * 1000:
-                afford = 0
-            if afford > rung:
+            afford = self._afford(self.bw)
+            # down only when the current rung really does not fit (85 % of the link, not the 70 % used to go up): a
+            # mobile link reads 10-14 KB/s from one frame to the next, and every rung change is a new key frame —
+            # the picture "reloaded" every few seconds (06.10.2026 16:36)
+            fits = 0 < rung and _kbit(LADDER[rung][2]) * 1000 <= self.bw * 8 * 0.85
+            if afford > rung and not fits:
                 rung = afford                                   # down: at once
             elif afford < rung and fresh and self.bw > 150 * 1024 and self.excess < 0.1:
                 rung = afford                                   # a plainly fast link (Wi-Fi): straight up
@@ -1333,8 +1333,6 @@ class Agent:
         try:
             region = self.enc_region
             raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(region=region))
-            if raw is not None:
-                self._changed_at = time.monotonic(); self._polish_left = 30
             if not self.screen_ok:
                 self.screen_ok = True
                 await ws.send_str(json.dumps({"t": "screen", "ok": True}))
@@ -1353,7 +1351,6 @@ class Agent:
         if self.rtt and self.ack.is_set():
             self.rtt *= 0.98   # no ack pending: let a stale "slow" verdict fade so we can try the full tier again
             self.excess *= 0.98
-        now = time.monotonic()
         if raw is None and self.enc and (self.enc.key[5] != self.video_gen or not self.enc.alive):
             # key[4] is the bitrate (None at full quality), not the generation: comparing it with video_gen closed
             # the encoder on every still frame — 1212 restarts in an evening, a fresh key frame each time
@@ -1371,29 +1368,8 @@ class Agent:
         # the link for ~10 s (bench, 06.10.2026). And never on a slow link: there the owner wants the traffic low.
         # ...and on a slow link once a minute as a probe: small frames cannot measure the link, so this one bigger
         # key frame is what tells the agent that the link got faster (Wi-Fi again) — and sharpens the picture
-        quiet = (self.enc and now - self.busy_at > 2.5 and self.ack.is_set() and now - self.last_input > 5
-                 and self.excess < 0.3 and self.screen.profile_name != "tiny")
-        measured = self.bw and now - self.bw_at < 120
-        if quiet and self.refine < 3 and measured and self.bw > 60 * 1024 and now - self.refine_at > 1.0:
-            # a MEASURED link with room: one sharpened key frame, sized for about two seconds of that link.
-            # Unmeasured used to mean "fast": a 300-400 KB frame went down a 12 KB/s link (09:41 06.10.2026)
-            self.refine = 3; self.refine_at = now
-            budget_bits = self.bw * 8 * 2.0
-            target = 0 if budget_bits >= 2500 * 1000 else next((i for i in range(1, len(LADDER)) if _kbit(LADDER[i][2]) * 1000 <= budget_bits), len(LADDER) - 1)
-            self.refine_rung = min(target, self.rung)
-            lw2 = LADDER[self.refine_rung][0]
-            want2 = min(self.screen.profile["max_width"], lw2) if lw2 else self.screen.profile["max_width"]
-            if want2 != self._vid_w:
-                self._vid_w = want2
-                self.screen.set_width(want2)
-            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True, region=region))
-        if (raw is None and self.enc is not None and self.enc.alive and getattr(self.enc, "frame_cap", 0)
-                and self._polish_left > 0 and self._last_ship_size >= 300 and now - self._changed_at > 0.25):
-            # Thin link, the picture stands: feed the same frame again — x264 sends only what is still missing (each
-            # step under the frame cap), and stops by itself when there is nothing left (a frame under 300 B). Not a
-            # re-send of the picture: the missing detail, once. NVENC cannot do this (it skips an identical frame).
-            self._polish_left -= 1
-            raw = await loop.run_in_executor(None, lambda: self.screen.grab_raw(still=True, region=region))
+        # No sharpening of a still picture in steps (a better key frame after a pause): the owner wants every
+        # picture final when it arrives — "постепенная прогрузка это зло" (06.10.2026).
         if raw is None:
             # ffmpeg hands a frame out a little after it got it; we used to read only right after writing the next one,
             # so on a still screen the last change sat in the encoder until something else moved — the phone was one
@@ -1417,19 +1393,21 @@ class Agent:
         # One frame in flight, on every rung: the next picture is grabbed only after the phone decoded the previous one
         # (or after a link-sized wait if an ack got lost). A narrow link then gets fewer frames, each of them fresh,
         # instead of a queue of old ones seconds deep — and nothing is spent on frames nobody would see in time.
-        rung_now = self.refine_rung if self.refine else self.rung
-        rung_bps = _kbit(LADDER[rung_now][2]) * 1000 / 8 if LADDER[rung_now][2] else 0
         # every key change restarts ffmpeg = a full key frame (100-300 KB): the ladder flapping 0->2->1->0 cost one each
         # time. With constant quality and one frame in flight the bitrate ceiling matters on a thin link only.
         thin = rung >= TINY_RUNG - 1 and not self.refine
-        key = (codec, size, enc_fps, tier, bitrate if thin else None, self.video_gen, pix_fmt, self.refine, region)
+        final = thin and codec == "h264"   # x264, constant quality, no ceiling (video.Encoder)
+        if final:
+            # neither the rung's bitrate nor its frame rate matter to a constant-quality encoder (the byte budget
+            # spaces the frames): a rung change at the same size is no restart, no key frame, no visible reload
+            enc_fps = 6
+        key = (codec, size, enc_fps, tier, bitrate if thin and not final else None, self.video_gen, pix_fmt, self.refine, region, final)
         if self.enc is None or self.enc.key != key or not self.enc.alive:
             self.video_close()
             try:
                 # thin link: one frame may hold ~0.3 s of the rung's budget — the frame rate then follows the bytes
-                cap = int(rung_bps * 0.3) if thin and codec == "h264" and rung_bps else 0
                 self.enc = video.Encoder(self.ffmpeg, codec, size[0], size[1], enc_fps, tier, pix_fmt, bitrate=bitrate,
-                                         cq_boost=3 * self.refine, epoch=self.epoch, frame_cap=cap,
+                                         cq_boost=3 * self.refine, epoch=self.epoch, final=final,
                                          high="avc1h" in self.codecs)
                 self.enc.key = key
                 log.info("video: %s %dx%d @%d (%s, rung %d, %s%s)", codec, size[0], size[1], enc_fps, tier, rung, self.enc.bitrate,
@@ -1458,7 +1436,6 @@ class Agent:
             if item is None:
                 break
             is_key, pts, payload = item
-            self._last_ship_size = len(payload)
             if is_key:
                 log.info("video: key frame %d B%s", len(payload), " (region)" if region else "")
             if not is_key and len(payload) > 6000:      # real motion, not a cursor blink
@@ -1626,7 +1603,9 @@ class Agent:
                         self.acks_since_view = 0
                         # a new link: its latency is unknown, and frames sent to the previous one are nobody's
                         self.inflight.clear(); self.ack.set(); self.rtt = 0.0; self.rtt_min = 0.0; self.excess = 0.0
-                        self.enc_region = None; self._fast_acks = 0
+                        self.enc_region = None
+                        # its link is unknown until the page names it ("video" message): no other link's figure
+                        self.bw, self.bw_at, self._bw_low = 0.0, 0.0, 0
                     if not self.viewers:
                         self.codecs = []              # last viewer left: next one re-announces
                     # keep the PC awake while someone is connected (monitor may be off)
@@ -1675,6 +1654,10 @@ class Agent:
                         self.codecs = [c for c in ev["codecs"] if c in ("avc1", "avc1h", "vp8", "hvc1", "av01", "vp09")][:8]
                         log.info("phone decodes: %s", ", ".join(self.codecs) or "nothing")
                         self.audio_opus = "opus" in ev["codecs"]
+                    kind = str(ev.get("link") or "")[:16]
+                    self.link_kind = kind
+                    if kind and kind in self.bw_mem and not self.acks_since_view:
+                        self.bw, self.bw_at = self.bw_mem[kind]   # this kind of network's last figure (30 min, pick_rung)
                     self.video_gen += 1
                 elif t == "audio_source":
                     self.audio_source = "mic" if ev.get("src") == "mic" else "speakers"
@@ -1848,7 +1831,7 @@ class Agent:
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=[logging.StreamHandler(),
-                                  logging.FileHandler(HERE / "agent.log", encoding="utf-8")])
+                                  logging.handlers.RotatingFileHandler(HERE / "agent.log", maxBytes=2 * 1024 * 1024, backupCount=1, encoding="utf-8")])
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)  # real pixel coordinates
     except Exception:  # noqa: BLE001
