@@ -303,6 +303,34 @@ def dns_addresses(pkt: bytes) -> list:
     return out
 
 
+def first_name(data: bytes) -> str | None:
+    """The host a connection's first bytes name: TLS ClientHello server_name, or an HTTP request's Host header."""
+    try:
+        if len(data) > 43 and data[0] == 0x16 and data[5] == 0x01:            # TLS handshake record, ClientHello
+            i = 9 + 2 + 32                                                     # record+handshake headers, version, random
+            i += 1 + data[i]                                                   # session id
+            i += 2 + int.from_bytes(data[i:i + 2], "big")                      # cipher suites
+            i += 1 + data[i]                                                   # compression methods
+            end = i + 2 + int.from_bytes(data[i:i + 2], "big")
+            i += 2
+            while i + 4 <= min(end, len(data)):
+                etype, elen = int.from_bytes(data[i:i + 2], "big"), int.from_bytes(data[i + 2:i + 4], "big")
+                if etype == 0 and elen > 5:                                    # server_name: list(2) type(1) len(2) name
+                    n = int.from_bytes(data[i + 7:i + 9], "big")
+                    name = data[i + 9:i + 9 + n].decode("ascii")
+                    return name.lower() if name else None
+                i += 4 + elen
+            return None
+        head = data[:2048]
+        if head[:4] in (b"GET ", b"POST", b"PUT ", b"HEAD", b"OPTI", b"DELE", b"PATC", b"CONN"):
+            for line in head.split(b"\r\n")[1:]:
+                if line[:5].lower() == b"host:":
+                    return line[5:].strip().split(b":")[0].decode("ascii").lower() or None
+    except (IndexError, UnicodeDecodeError):
+        return None
+    return None
+
+
 STREAM_QUEUE = 256 * 1024       # read ahead per connection at the PC
 QUEUE_TOTAL = 16 * 1024 * 1024  # and for all of them together (memory)
 
@@ -380,6 +408,14 @@ class Traffic:
         for ip in dns_addresses(reply):
             self.names.pop(ip, None)
             self.names[ip] = name.lower().rstrip(".")
+            if len(self.names) > 8192:
+                self.names.popitem(last=False)
+
+    def remember(self, ip: str, name: str):
+        """A connection to ip said it is name: the next ones to ip (UDP/QUIC too) get the same label."""
+        if _is_ip(ip):
+            self.names.pop(ip, None)
+            self.names[ip] = name
             if len(self.names) > 8192:
                 self.names.popitem(last=False)
 
@@ -547,8 +583,15 @@ class Session:
                 try:
                     st[0].write(frame[5:])
                     self.tcp_bytes += len(frame) - 5
-                    if len(st) > 2:
-                        self.proxy.traffic.count(st[2], 0, len(frame) - 5)
+                    if len(st) > 4:
+                        tr = self.proxy.traffic
+                        if not st[3]:
+                            st[3] = True   # the first bytes name the site (TLS SNI / HTTP Host): believe them over DNS
+                            name = first_name(frame[5:])
+                            if name:
+                                st[2] = tr.label(name)
+                                tr.remember(st[4], name)
+                        tr.count(st[2], 0, len(frame) - 5)
                     await st[0].drain()
                 except (ConnectionError, OSError):
                     await self.close_stream(sid, tell=True)
@@ -578,9 +621,7 @@ class Session:
             return
         st[0] = writer
         tr = self.proxy.traffic
-        label = tr.label(host)
-        prio = label == "Claude"
-        st.append(label)
+        st.extend([tr.label(host), False, host])   # the label may be corrected by the first bytes (handle, DATA)
         await self.send(bytes([OPENED]) + struct.pack("!I", sid))
         # The server's bytes are read ahead into a queue here (the PC's own link is fast) and go to the phone in the
         # owner's order: Claude at once, the others from what is left. The queue shows what each app asks for (read
@@ -600,7 +641,7 @@ class Session:
                     if not data:
                         break
                     q.append(data); held[0] += len(data)
-                    tr.wants(label, len(data))
+                    tr.wants(st[2], len(data))
                     if held[0] >= STREAM_QUEUE:
                         room.clear()
                     have.set()
@@ -619,23 +660,24 @@ class Session:
                     await have.wait()
                     continue
                 data = q.popleft()
+                prio = st[2] == "Claude"
                 piece = len(data) if prio or tr.budget() is None else 4096   # fine-grained while others wait
                 if len(data) > piece:
                     q.appendleft(data[piece:])
                     data = data[:piece]
                 if not prio:
                     await tr.take(len(data))
-                held[0] -= len(data); tr.wants(label, -len(data), queued_only=True)
+                held[0] -= len(data); tr.wants(st[2], -len(data), queued_only=True)
                 if held[0] < STREAM_QUEUE:
                     room.set()
                 self.tcp_bytes += len(data)
-                tr.count(label, len(data), 0)
+                tr.count(st[2], len(data), 0)
                 await self.send(bytes([DATA]) + struct.pack("!I", sid) + data)
         except (ConnectionError, OSError, asyncio.CancelledError):
             pass
         finally:
             pumper.cancel()
-            tr.wants(label, -held[0], queued_only=True)
+            tr.wants(st[2], -held[0], queued_only=True)
             held[0] = 0
             if self.streams.pop(sid, None) is not None:
                 writer.close()

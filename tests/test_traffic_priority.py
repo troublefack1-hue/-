@@ -55,6 +55,20 @@ async def main():
     report("a Telegram address is Telegram without any name", tr.label("149.154.167.51") == "Telegram")
     report("a name is grouped by its site", tr.label("rr3---sn-abc.googlevideo.com") == "YouTube" and tr.label("cdn.example.co.uk") == "example.co.uk",
            tr.label("cdn.example.co.uk"))
+    # a connection names itself: TLS ClientHello's server name (made by Python's own TLS) and HTTP Host
+    import ssl
+    ctx = ssl.create_default_context(); inc, out = ssl.MemoryBIO(), ssl.MemoryBIO()
+    obj = ctx.wrap_bio(inc, out, server_hostname="claude.ai")
+    try:
+        obj.do_handshake()
+    except ssl.SSLWantReadError:
+        pass
+    hello = out.read()
+    report("TLS ClientHello names its site (SNI)", netproxy.first_name(hello) == "claude.ai", repr(netproxy.first_name(hello)))
+    crlf = bytes([13, 10])
+    report("HTTP request names its site (Host)",
+           netproxy.first_name(b"GET / HTTP/1.1" + crlf + b"Host: Example.org:80" + crlf + crlf) == "example.org")
+    report("other bytes name nothing", netproxy.first_name(bytes([0, 1]) + b"binary") is None)
     got = {7: 0, 8: 0}
     async with aiohttp.ClientSession() as s:
         ws = await s.ws_connect(U + "/ws/net", max_msg_size=0)
@@ -101,6 +115,16 @@ async def main():
         report("the table says what the others may take", table is not None and table.get("others") is not None and table.get("bw") == LINK,
                json.dumps({k: table.get(k) for k in ("bw", "others", "claude")}) if table else "no table")
         report("the queue at the PC stays within its bounds", tr.queued_total <= netproxy.QUEUE_TOTAL + netproxy.CHUNK * 4, str(tr.queued_total))
+
+        # a nameless connection says "claude.ai" in its first bytes: from then on it is Claude, first in the queue
+        await ws.send_bytes(bytes([OPEN]) + struct.pack("!IH", 9, 8781) + b"127.0.0.1")
+        await asyncio.sleep(0.3)
+        await ws.send_bytes(bytes([DATA]) + struct.pack("!I", 9) + hello)
+        await asyncio.sleep(0.3)
+        sess = list(hub.netproxy.sessions)[0]
+        report("a nameless connection becomes Claude by its SNI", sess.streams.get(9, [None, None, "?"])[2] == "Claude",
+               str(sess.streams.get(9, [None, None, "?"])[2]))
+        await ws.send_bytes(bytes([CLOSE]) + struct.pack("!I", 9))
 
         # Claude stops: the other app is free again
         await ws.send_bytes(bytes([CLOSE]) + struct.pack("!I", 8))
