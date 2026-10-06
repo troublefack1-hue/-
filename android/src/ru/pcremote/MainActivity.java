@@ -190,6 +190,16 @@ public class MainActivity extends Activity {
      *  Android shows its own one-tap question for the battery; MIUI's autostart has no API, so we open
      *  its screen once and the owner flips the switch for «Мой ПК». */
     private void askBackgroundRights() {
+        // "Install unknown apps" off (reset by a reinstall): Android aborts every update with "Permission denied" and
+        // shows nothing (06.10.2026, 07:01 and 07:05). Open that switch's screen first; the rest on the next launch.
+        if (!getPackageManager().canRequestPackageInstalls()) {
+            PhoneLog.add("install rights: off, opening the switch");
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+                Toast.makeText(this, "Разрешите установку — так «Мой ПК» и «Интернет через ПК» будут обновлять друг друга сами", Toast.LENGTH_LONG).show();
+            } catch (Exception ignored) {}
+            return;
+        }
         try {
             android.os.PowerManager pm = getSystemService(android.os.PowerManager.class);
             if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {

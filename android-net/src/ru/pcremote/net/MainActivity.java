@@ -58,6 +58,12 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
         if (prefs.contains("secret")) showMain(); else { showSetup(null); autoPairFromApk(); }
         if (ACTION_TOGGLE.equals(getIntent().getAction()) && prefs.contains("secret")) toggle();
+        if (!getPackageManager().canRequestPackageInstalls()) {   // without it every update is aborted silently
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+                Toast.makeText(this, "Разрешите установку — так приложения будут обновляться сами", Toast.LENGTH_LONG).show();
+            } catch (Exception ignored) {}
+        }
         checkUpdate();
     }
 
