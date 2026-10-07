@@ -101,7 +101,7 @@ public final class Updater {
      *  pressed the button) reuses it — 06.10.2026 the same 330 KB came down five times in a day over mobile data. */
     public static File downloadPcCached(String asset, File dir, String sha256) throws IOException {
         String tag = sha256 == null || sha256.length() < 16 ? "nosha" : sha256.substring(0, 16).toLowerCase();
-        String prefix = "apk-" + asset.replace(".apk", "") + "-";
+        String prefix = "apk-" + asset + "-";   // with ".apk": "apk-pcremote-" also matched the net and files builds
         File f = new File(dir, prefix + tag + ".apk");
         File[] all = dir.listFiles();
         if (all != null) for (File o : all) if (o.getName().startsWith(prefix) && !o.getName().equals(f.getName())) o.delete();

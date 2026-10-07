@@ -87,7 +87,9 @@ final class InAppUpdate {
 
     static File fileFor(Context ctx, Item it) {
         String tag = it.sha == null || it.sha.length() < 16 ? it.pc : it.sha.substring(0, 16).toLowerCase();
-        String prefix = "apk-" + it.asset.replace(".apk", "") + "-";
+        // the asset with its ".apk": "apk-pcremote-" was a prefix of "apk-pcremote-net-…" too, and cleaning up after
+        // «Мой ПК» deleted the downloaded «Интернет через ПК» — 330 KB again on every try (07.10.2026)
+        String prefix = "apk-" + it.asset + "-";
         File f = new File(ctx.getCacheDir(), prefix + tag + ".apk");
         File[] all = ctx.getCacheDir().listFiles();
         if (all != null) for (File o : all)   // older builds of this app: not needed any more

@@ -187,15 +187,7 @@ public class MainActivity extends Activity {
                 if (Updater.pc != null) { try { found = Updater.checkPc(cur, Updater.ASSET); fromPc = found != null; } catch (Exception ignored) {} }
                 else found = Updater.check(cur);   // GitHub only without a PC: paired phones asked it on every open
                 final Updater.Info info = found;
-                if (Updater.pc != null) {
-                    // from our own PC: download and install right here, in front — the only way that went through
-                    // on the owner's phone (one tap in Android's window); nothing to do when everything is current
-                    if (!InAppUpdate.pending(this).isEmpty()) {
-                        runOnUiThread(() -> Toast.makeText(this, "Обновляю с ПК: подтвердите «Установить»", Toast.LENGTH_LONG).show());
-                        InAppUpdate.runAll(this);
-                    }
-                    return;
-                }
+                if (Updater.pc != null) return;   // with a PC: updates by the button only (owner, 07.10.2026)
                 if (info == null || fromPc) return;
                 runOnUiThread(() -> offerUpdate(info, cur, false));
             } catch (Exception ignored) {

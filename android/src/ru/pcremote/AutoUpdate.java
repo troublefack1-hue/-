@@ -64,8 +64,9 @@ final class AutoUpdate {
     /** Blocking; call off the main thread. The background (timer, push, partner) only downloads — an install from
      *  there was refused every time on the owner's phone; the open app installs (InAppUpdate.runAll). */
     static synchronized boolean fromPc(Context ctx, String why) {
-        if (!"manual".equals(why) && !"open".equals(why)) return InAppUpdate.prefetch(ctx, why);
-        return fromPcOld(ctx, why);
+        // by the owner's button only (07.10.2026: «обновление по кнопке, чтоб не закачивал постоянно»): no check,
+        // no download from the background or at start — the button runs InAppUpdate.runAll
+        return false;
     }
 
     /** The old way (kept for a phone without the open activity at hand): an install session per app. */

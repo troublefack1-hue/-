@@ -197,15 +197,19 @@ def refresh_apks(data: Path, status=None, pairing: dict | None = None) -> dict |
             raw = download(url, folder / (name + ".download"), expected_sha256(sums_url, name), exe=False)
             code = apk_code_hash(raw)
             old = index.get("files", {}).get(name, {})
-            if (old.get("code") == code and old.get("version") and index.get("cert") == fp
-                    and index.get("pairing", {}) == pairing and (folder / name).exists()):
+            same_code = old.get("code") == code and old.get("version")
+            if same_code and index.get("cert") == fp and index.get("pairing", {}) == pairing and (folder / name).exists():
                 # same code as the app the phones already have: it keeps its version, no install to confirm
                 raw.unlink(missing_ok=True)
                 files[name] = old
                 continue
             sha = apksign.sign(raw, folder / name, key, cert, extra if name != "pcremote-files.apk" else None)
             raw.unlink(missing_ok=True)
-            files[name] = {"sha256": sha, "size": (folder / name).stat().st_size, "version": version, "code": code}
+            # a new pairing note (the PC's address) is for fresh installs only: the same code keeps its version, so
+            # the phones are not asked to install it (07.10.2026: an address change bumped all three to 1.174, the
+            # phone refused them and fetched them again and again)
+            files[name] = {"sha256": sha, "size": (folder / name).stat().st_size,
+                           "version": old["version"] if same_code else version, "code": code}
         except Exception as e:  # noqa: BLE001
             log.warning("apk %s: %s", name, e)
     if not files:

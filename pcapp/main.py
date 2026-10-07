@@ -86,11 +86,12 @@ def public_ip() -> str:
     try:
         lan = relay_mod.lan_interface_index()
         if lan and lan != relay_mod.internet_interface_index():
-            ip = _public_ip_via(lan)
-            if ip:
-                return ip
+            # 07.10.2026: right after boot the adapter query failed, the fallback below went through the VPN,
+            # and the VPN server's address was saved and pushed to the phones. With a VPN on: no answer, no change.
+            return _public_ip_via(lan)
     except Exception as e:  # noqa: BLE001
         log.info("public ip via lan adapter failed: %s", e)
+        return ""
     for url in ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"):
         try:
             with urllib.request.urlopen(url, timeout=6) as r:
@@ -1075,7 +1076,9 @@ def main():
             firewall_open(int(extra))
     except Exception:  # noqa: BLE001
         log.exception("firewall")
-    if cfg["_first_run"]:
+    # 07.10.2026: written only on the first run, the entry kept pointing at an old test build, and after a reboot
+    # that build came up instead of the current exe. Now the copy that runs is the one that starts with Windows.
+    if cfg["_first_run"] or (getattr(sys, "frozen", False) and autostart_enabled()):
         try:
             autostart(True)
         except Exception:  # noqa: BLE001
